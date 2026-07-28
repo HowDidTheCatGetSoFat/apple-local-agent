@@ -40,6 +40,38 @@ class TestModelField(unittest.TestCase):
         self.assertEqual(gw.model_field_for("gguf-model"), "gguf-model")
 
 
+class _FakeProc:
+    pid = os.getpid()
+
+    def terminate(self):
+        pass
+
+
+class TestEnsureColdLoad(unittest.TestCase):
+    """The loader path must return a real model_field, not the None sentinel,
+    on the very first request to a freshly-loaded model."""
+
+    def _ensure(self, alias):
+        m = gw.Manager()
+        saved = (gw.downloaded_models, gw.subprocess.Popen, gw.Manager._wait_ready)
+        try:
+            gw.downloaded_models = lambda: {alias: {"size_mb": 1}}
+            gw.subprocess.Popen = lambda *a, **k: _FakeProc()
+            gw.Manager._wait_ready = lambda self, port, timeout=180: True
+            return m.ensure(alias)
+        finally:
+            gw.downloaded_models, gw.subprocess.Popen, gw.Manager._wait_ready = saved
+
+    def test_gguf_first_load_returns_alias(self):
+        _port, model_field = self._ensure("gguf-model")
+        self.assertEqual(model_field, "gguf-model")
+
+    def test_mlx_first_load_returns_path(self):
+        _port, model_field = self._ensure("mlx-model")
+        self.assertEqual(model_field, os.path.join(_MODELS, "mlx-model"))
+        self.assertIsNotNone(model_field)
+
+
 class TestRss(unittest.TestCase):
     def test_own_process_has_rss(self):
         self.assertGreater(gw.rss_mb(os.getpid()), 0)

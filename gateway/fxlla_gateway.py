@@ -222,8 +222,9 @@ class Manager:
                 self.loading.pop(alias, None)
                 if ready:
                     engine = engine_for(alias)
+                    model_field = model_field_from(alias, engine)
                     self.backends[alias] = Backend(
-                        alias, port, proc, size_mb, model_field_from(alias, engine), engine)
+                        alias, port, proc, size_mb, model_field, engine)
                 ev.set()
         if not ready:
             if proc is not None:
