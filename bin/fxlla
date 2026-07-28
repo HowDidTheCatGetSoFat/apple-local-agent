@@ -34,7 +34,8 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla serve                 Multi-model gateway: one endpoint, load on demand
   fxlla unserve               Stop the gateway
   fxlla status                Server, model, and idle status
-  fxlla stats [--watch]       Live metrics: RAM, TTFT, tok/s (also --json)
+  fxlla stats [--watch]       Live metrics: RAM, TTFT, tok/s (also --json).
+                              Reads the gateway's passive samples when serving.
   fxlla logs                  Follow the server log
   fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
   fxlla kb add|search|ls|rm   Knowledge bases (RAG) over your files
@@ -532,6 +533,38 @@ _stats_once() {
   fi
 }
 
+# Format one stored JSONL sample for humans (or pass it through with --json).
+_stats_fmt() {
+  local line="$1" json="$2"
+  [ -n "$line" ] || return 0
+  if [ "$json" = 1 ]; then echo "$line"; return; fi
+  python3 - "$line" <<'PY'
+import json, sys
+try:
+    s = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(0)
+def g(k, d="-"):
+    v = s.get(k)
+    return d if v is None else v
+print("%-14s %-5s  RAM %5s MB  TTFT %5s ms  %6s tok/s  (%s)" % (
+    g("model"), g("engine"), g("ram_mb"), g("ttft_ms"), g("tps"), g("source", "probe")))
+PY
+}
+
+# Read the passive time-series the gateway writes as it proxies real traffic.
+_stats_passive() {
+  local json="$1" watch="$2"
+  [ -f "$STATS_FILE" ] || die "No samples yet. Send a request through the gateway on :$FXLLA_PORT."
+  if [ "$watch" = 1 ]; then
+    tail -n 1 -f "$STATS_FILE" | while IFS= read -r line; do _stats_fmt "$line" "$json"; done
+  else
+    local line; line="$(tail -n 1 "$STATS_FILE")"
+    [ -n "$line" ] || die "No samples yet. Send a request through the gateway on :$FXLLA_PORT."
+    _stats_fmt "$line" "$json"
+  fi
+}
+
 cmd_stats() {
   local json=0 watch=0 interval=5 probe=1
   while [ $# -gt 0 ]; do
@@ -543,11 +576,18 @@ cmd_stats() {
       -*)          die "unknown flag: $1" ;;
     esac; shift
   done
-  server_alive || die "No server running. Start one: fxlla on <model>"
-  if [ "$watch" = 1 ]; then
-    while true; do _stats_once "$json" "$probe"; server_alive || break; sleep "$interval"; done
+  if server_alive; then
+    # A single-model server: probe it directly for live tok/s and TTFT.
+    if [ "$watch" = 1 ]; then
+      while true; do _stats_once "$json" "$probe"; server_alive || break; sleep "$interval"; done
+    else
+      _stats_once "$json" "$probe"
+    fi
+  elif gateway_alive; then
+    # The gateway records real traffic passively; read that time-series.
+    _stats_passive "$json" "$watch"
   else
-    _stats_once "$json" "$probe"
+    die "No server running. Start one: fxlla on <model> (or fxlla serve)"
   fi
 }
 
