@@ -373,6 +373,8 @@ class Handler(BaseHTTPRequestHandler):
             if sm is not None:
                 ttft_ms, tps, tokens = sm.result(end)
             elif body_bytes is not None:
+                # Non-streamed: no first-token signal, so tps is over the whole
+                # wall time (includes prompt processing); an approximation.
                 tokens = metrics.usage_from_json(body_bytes)
                 ttft_ms = None
                 tps = round(tokens / (end - start), 1) if tokens and end > start else None

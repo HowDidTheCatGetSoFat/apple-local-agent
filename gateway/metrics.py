@@ -10,7 +10,13 @@ per completed request.
 """
 import json
 import os
+import threading
 import time
+
+# Appends come from many gateway handler threads in one process. Serializing
+# append-plus-trim here removes the window where a trim's os.replace could drop
+# a concurrent append.
+_APPEND_LOCK = threading.Lock()
 
 
 def stats_file():
@@ -153,6 +159,8 @@ def append_sample(path, sample, cap=5000):
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(sample) + "\n")
-    _maybe_trim(path, cap)
+    line = json.dumps(sample) + "\n"
+    with _APPEND_LOCK:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
+        _maybe_trim(path, cap)
