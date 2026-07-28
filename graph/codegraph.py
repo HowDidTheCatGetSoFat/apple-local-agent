@@ -115,6 +115,21 @@ def cmd_index(args):
     print(f"indexed {len(files)} files: {total_defs} defs, {total_refs} refs")
 
 
+def cmd_unused(args):
+    # Definitions never referenced by name: dead-code candidates. Approximate,
+    # so this excludes dunders and will still list entry points and test
+    # functions called reflectively.
+    con = _db()
+    rows = con.execute(
+        r"SELECT qualname, kind, file, line FROM defs d "
+        r"WHERE d.name NOT LIKE '\_\_%' ESCAPE '\' "
+        r"AND NOT EXISTS (SELECT 1 FROM refs r WHERE r.name = d.name) "
+        r"ORDER BY file, line").fetchall()
+    _emit(args,
+          [{"qualname": q, "kind": k, "file": f, "line": ln} for q, k, f, ln in rows],
+          lambda r: f"{r['kind']:8} {r['qualname']}  {r['file']}:{r['line']}")
+
+
 def cmd_ls(_args):
     con = _db()
     rows = con.execute("SELECT file, COUNT(*) FROM defs GROUP BY file ORDER BY file").fetchall()
@@ -213,13 +228,15 @@ def main():
     im.add_argument("name")
     im.add_argument("--depth", type=int, default=5)
     im.add_argument("-j", "--json", action="store_true")
+    un = sub.add_parser("unused")
+    un.add_argument("-j", "--json", action="store_true")
     sub.add_parser("ls")
     sub.add_parser("rm")
     args = p.parse_args()
     {
         "index": cmd_index, "ls": cmd_ls, "rm": cmd_rm,
         "def": cmd_def, "refs": cmd_refs, "callers": cmd_callers,
-        "impact": cmd_impact,
+        "impact": cmd_impact, "unused": cmd_unused,
     }[args.cmd](args)
 
 
