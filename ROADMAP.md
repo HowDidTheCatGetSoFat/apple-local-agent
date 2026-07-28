@@ -38,6 +38,8 @@ surprises the user with a large download.
   never silently pulls a large model; it fails fast with a structured
   not-cached signal, or downloads only under an explicit opt-in
   (`on --pull`). Downloads report size and estimated time at the current cap.
+  Delivered on the CLI: `fxlla ls --json`, `fxlla avail <alias>`, and the
+  opt-in `fxlla on <alias> --pull`.
 - Skill or agent: owns the offer and the consent flow. It checks availability,
   presents size and time (and any cheaper cached alternative), asks the user,
   then pulls with progress and serves. Only the agent has the conversation

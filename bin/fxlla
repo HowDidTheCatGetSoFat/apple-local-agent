@@ -28,8 +28,9 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla models                List the catalog
   fxlla pull <alias|org/repo> Download a model, capped at ${FXLLA_RATE_MBIT} Mbps
        [--gguf] [--quant Q4_K_M]
-  fxlla ls                    List downloaded models
-  fxlla on [alias]            Start a single-model server (default: $FXLLA_DEFAULT_MODEL)
+  fxlla ls [--json]           List downloaded models (--json for machine output)
+  fxlla avail <alias>         Availability as JSON: cached, size, engine, repo
+  fxlla on [alias] [--pull]   Start a single-model server (default: $FXLLA_DEFAULT_MODEL)
   fxlla off                   Stop the single-model server
   fxlla serve                 Multi-model gateway: one endpoint, load on demand
   fxlla unserve               Stop the gateway
@@ -45,6 +46,7 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla rm <alias>            Delete a downloaded model
   fxlla config                Show the effective configuration
   fxlla doctor                Diagnose the environment
+  fxlla completions bash|zsh  Print a shell completion script
 
 Store:     $FXLLA_STORE
 Endpoint:  $BASE_URL
@@ -194,6 +196,38 @@ cmd_pull() {
 
 cmd_ls() {
   require_store
+  if [ "${1:-}" = "--json" ]; then
+    # Machine-readable list of cached (complete) models: alias, size, engine, repo.
+    MODELS_DIR="$MODELS_DIR" python3 - <<'PY'
+import json, os, subprocess
+md = os.environ["MODELS_DIR"]
+out = []
+if os.path.isdir(md):
+    for n in sorted(os.listdir(md)):
+        d = os.path.join(md, n)
+        if not os.path.isdir(d) or not os.path.exists(os.path.join(d, ".source")):
+            continue
+        eng = "mlx"
+        try:
+            with open(os.path.join(d, ".engine")) as f:
+                eng = f.read().strip() or "mlx"
+        except OSError:
+            pass
+        try:
+            with open(os.path.join(d, ".source")) as f:
+                repo = f.read().strip()
+        except OSError:
+            repo = ""
+        try:
+            kb = int(subprocess.check_output(["du", "-sk", d]).split()[0])
+        except Exception:
+            kb = 0
+        out.append({"alias": n, "cached": True, "size_mb": kb // 1024,
+                    "engine": eng, "repo": repo})
+print(json.dumps(out))
+PY
+    return
+  fi
   local found=0 d n sz eng
   for d in "$MODELS_DIR"/*/; do
     [ -d "$d" ] || continue
@@ -203,6 +237,49 @@ cmd_ls() {
     printf "%-28s %-7s %-5s %s\n" "$n" "$sz" "$eng" "$([ -f "$d/.source" ] && cat "$d/.source")"
   done
   if [ "$found" = 0 ]; then warn "No models downloaded yet. Try: fxlla pull tiny"; fi
+}
+
+# Per-model availability as JSON: whether it is cached, its engine, repo, and
+# size. For a catalog model that is not cached, report the download size.
+cmd_avail() {
+  require_store
+  local q="${1:-}"; [ -n "$q" ] || die "usage: fxlla avail <alias>"
+  local name dest repo engine size
+  name="$(local_name "$q")"
+  dest="$MODELS_DIR/$name"
+  repo="$(resolve_repo "$q" 2>/dev/null || true)"
+  engine="$(resolve_engine "$q" 2>/dev/null || true)"
+  size="$(_catalog_field "$q" 3 2>/dev/null || true)"
+  DEST="$dest" ALIAS="$name" REPO="$repo" ENGINE="$engine" SIZE="$size" python3 - <<'PY'
+import json, os, subprocess
+dest = os.environ["DEST"]; alias = os.environ["ALIAS"]
+repo = os.environ["REPO"]; engine = os.environ["ENGINE"]; size = os.environ["SIZE"]
+cached = os.path.isdir(dest) and os.path.exists(os.path.join(dest, ".source"))
+# size_mb is always present and uniformly typed: the real disk size when
+# cached, else null (the exact size is unknown until downloaded). catalog_size
+# carries the human-readable estimate for a not-yet-cached model.
+info = {"alias": alias, "cached": cached, "known": bool(repo) or cached,
+        "engine": engine or "mlx", "repo": repo,
+        "size_mb": None, "catalog_size": size or None}
+if cached:
+    try:
+        with open(os.path.join(dest, ".engine")) as f:
+            info["engine"] = f.read().strip() or "mlx"
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(dest, ".source")) as f:
+            info["repo"] = f.read().strip() or repo
+    except OSError:
+        pass
+    try:
+        kb = int(subprocess.check_output(["du", "-sk", dest]).split()[0])
+    except Exception:
+        kb = 0
+    info["size_mb"] = kb // 1024
+    info["catalog_size"] = None
+print(json.dumps(info))
+PY
 }
 
 # --------------------------------------------------------------------------
@@ -359,11 +436,12 @@ cmd_backend() {
 # --------------------------------------------------------------------------
 cmd_on() {
   require_store
-  local q="" force_engine=""
+  local q="" force_engine="" do_pull=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --mlx) force_engine=mlx ;;
       --gguf) force_engine=gguf ;;
+      --pull) do_pull=1 ;;
       -*) die "unknown flag: $1" ;;
       *) q="$1" ;;
     esac; shift
@@ -371,7 +449,15 @@ cmd_on() {
   [ -z "$q" ] && q="$FXLLA_DEFAULT_MODEL"
   local name; name="$(local_name "$q")"
   local dest="$MODELS_DIR/$name"
-  [ -d "$dest" ] || die "'$name' is not downloaded. Run: fxlla pull $q"
+  if [ ! -f "$dest/.source" ]; then
+    # Fail fast by default; only download when the caller opts in with --pull.
+    if [ "$do_pull" = 1 ]; then
+      info "'$name' is not cached; pulling (opt-in via --pull)..."
+      cmd_pull "$q" || die "pull failed for '$q'"
+    else
+      die "'$name' is not downloaded. Run: fxlla pull $q   (or: fxlla on $q --pull)"
+    fi
+  fi
 
   local engine="$force_engine"
   [ -z "$engine" ] && [ -f "$dest/.engine" ] && engine="$(cat "$dest/.engine")"
@@ -775,6 +861,88 @@ cmd_watch() {
 }
 
 # --------------------------------------------------------------------------
+# Shell completion. The generated bash/zsh scripts stay thin and call back into
+# `fxlla __complete <what>` so the candidate lists live in one place here.
+_complete_catalog() {
+  grep -vE '^[[:space:]]*(#|$)' "$CATALOG" 2>/dev/null | cut -d'|' -f1 | awk 'NF{print $1}'
+}
+
+_complete_downloaded() {
+  [ -d "$MODELS_DIR" ] || return 0
+  local d
+  for d in "$MODELS_DIR"/*/; do
+    [ -f "$d/.source" ] || continue
+    basename "$d"
+  done
+}
+
+cmd_complete() {
+  case "${1:-}" in
+    commands)   printf '%s\n' setup models pull ls avail on off serve unserve \
+                  status stats doctor logs ram kb graph wire-opencode rm config \
+                  completions help ;;
+    catalog)    _complete_catalog ;;
+    downloaded) _complete_downloaded ;;
+    kb)         printf '%s\n' add search ls rm mcp wire-opencode ;;
+    graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
+                  mcp wire-opencode ;;
+  esac
+}
+
+cmd_completions() {
+  case "${1:-}" in
+    bash) cat <<'EOF'
+# fxlla bash completion. Load with:  source <(fxlla completions bash)
+# Candidates never contain spaces, and macOS ships bash 3.2 (no mapfile), so
+# the classic word-splitting COMPREPLY assignment is used deliberately.
+_fxlla_complete() {
+  local cur cmd words
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  cmd="${COMP_WORDS[1]:-}"
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    # shellcheck disable=SC2207
+    COMPREPLY=( $(compgen -W "$(fxlla __complete commands)" -- "$cur") )
+    return
+  fi
+  words=""
+  case "$cmd" in
+    pull|get|avail|check)         words="$(fxlla __complete catalog)" ;;
+    on|start|off|stop|rm|remove)  words="$(fxlla __complete downloaded)" ;;
+    kb)    [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete kb)" ;;
+    graph) [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete graph)" ;;
+    completions) words="bash zsh" ;;
+  esac
+  # shellcheck disable=SC2207
+  COMPREPLY=( $(compgen -W "$words" -- "$cur") )
+}
+complete -F _fxlla_complete fxlla
+EOF
+      ;;
+    zsh) cat <<'EOF'
+#compdef fxlla
+# fxlla zsh completion. Load with:  source <(fxlla completions zsh)
+_fxlla() {
+  local cmd="${words[2]}"
+  if (( CURRENT == 2 )); then
+    compadd -- ${(f)"$(fxlla __complete commands)"}
+    return
+  fi
+  case "$cmd" in
+    pull|get|avail|check)         compadd -- ${(f)"$(fxlla __complete catalog)"} ;;
+    on|start|off|stop|rm|remove)  compadd -- ${(f)"$(fxlla __complete downloaded)"} ;;
+    kb)    (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete kb)"} ;;
+    graph) (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete graph)"} ;;
+    completions) compadd -- bash zsh ;;
+  esac
+}
+compdef _fxlla fxlla
+EOF
+      ;;
+    *) die "usage: fxlla completions <bash|zsh>" ;;
+  esac
+}
+
+# --------------------------------------------------------------------------
 main() {
   local cmd="${1:-help}"; shift || true
   case "$cmd" in
@@ -782,6 +950,7 @@ main() {
     models|catalog)         cmd_models "$@" ;;
     pull|get)               cmd_pull "$@" ;;
     ls|list)                cmd_ls "$@" ;;
+    avail|check)            cmd_avail "$@" ;;
     on|start)               cmd_on "$@" ;;
     off|stop)               cmd_off "$@" ;;
     serve)                  cmd_serve "$@" ;;
@@ -797,6 +966,8 @@ main() {
     wire-opencode|opencode) cmd_wire_opencode "$@" ;;
     rm|remove)              cmd_rm "$@" ;;
     config)                 cmd_config "$@" ;;
+    completions)            cmd_completions "$@" ;;
+    __complete)             cmd_complete "$@" ;;
     __watch)                cmd_watch ;;
     help|-h|--help)         cmd_help ;;
     *)                      warn "Unknown command: $cmd"; cmd_help; exit 1 ;;

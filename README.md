@@ -80,6 +80,38 @@ Both are set in `~/.config/fxlla/config.env`, which is never committed:
   otherwise.
 
 Never put tokens anywhere else in the tree. `config/config.env` is git-ignored.
+An exported environment variable always wins over `config.env`, which in turn
+wins over the built-in defaults.
+
+## Shell completions
+
+Completion for commands, catalog aliases (`pull`), downloaded models
+(`on`/`off`/`rm`), and `kb`/`graph` subcommands:
+
+```sh
+# bash: add to ~/.bashrc
+source <(fxlla completions bash)
+
+# zsh: add to ~/.zshrc (after compinit)
+source <(fxlla completions zsh)
+```
+
+## Model availability
+
+Check what is cached before starting anything. `fxlla ls --json` lists cached
+models and `fxlla avail <alias>` reports availability for any model:
+
+```sh
+fxlla avail qwen3-coder
+# {"alias": "qwen3-coder", "cached": false, "known": true, "engine": "mlx",
+#  "repo": "...", "size_mb": null, "catalog_size": "17GB"}
+# size_mb is the real disk size when cached, else null; catalog_size is the
+# human-readable download estimate for a model that is not cached yet.
+```
+
+`fxlla on <alias>` fails fast when the model is not cached; pass `--pull` to
+download first. This is what lets an agent offer a download (with size and time)
+and only pull after you agree, instead of blocking on a silent large download.
 
 ## MLX vs GGUF
 
