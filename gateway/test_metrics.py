@@ -89,6 +89,26 @@ class TestStreamMetrics(unittest.TestCase):
         _ttft, _tps, tokens = m.result(end=1.0)
         self.assertEqual(tokens, 0)
 
+    def test_realistic_chat_stream(self):
+        # A response shaped like a real OpenAI-compatible chat stream: an opening
+        # role-only chunk, content deltas, a finish_reason chunk, then [DONE].
+        raw = (
+            b'data: {"choices":[{"index":0,"delta":{"role":"assistant"},'
+            b'"finish_reason":null}]}\n\n'
+            b'data: {"choices":[{"index":0,"delta":{"content":"Hello"},'
+            b'"finish_reason":null}]}\n\n'
+            b'data: {"choices":[{"index":0,"delta":{"content":" world"},'
+            b'"finish_reason":null}]}\n\n'
+            b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+            b'data: [DONE]\n\n'
+        )
+        m = metrics.StreamMetrics(start=0.0)
+        # deliver in odd-sized slices to exercise buffering across chunk edges
+        for i in range(0, len(raw), 13):
+            m.feed(raw[i:i + 13])
+        _ttft, _tps, tokens = m.result(end=m.first + 1.0)
+        self.assertEqual(tokens, 2)  # "Hello" and " world"; role/finish carry no text
+
 
 class TestUsageFromJson(unittest.TestCase):
     def test_reads_completion_tokens(self):
