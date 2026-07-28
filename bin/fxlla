@@ -176,6 +176,9 @@ cmd_pull() {
     --summary-interval=10 --console-log-level=warn ${auth[@]+"${auth[@]}"}
 
   rm -f "$input"
+  if find "$dest" -name '*.aria2' -print -quit | grep -q .; then
+    die "Download incomplete (pending .aria2 files). Re-run to resume: fxlla pull $q"
+  fi
   echo "$repo" > "$dest/.source"
   ok "Done: $dest"
   ok "Start it with: fxlla on $name"
