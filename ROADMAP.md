@@ -136,15 +136,16 @@ server. Remaining items are scale and language coverage.
 
 ## Phase 4: Media skills
 
-A text model cannot draw. It can, however, call a tool. So local image and
-video generation is exposed as an MCP server, and any model in opencode or
-Claude Code invokes it through tool calling.
+A text model cannot draw or speak. It can, however, call a tool. So local
+image, video, and speech generation is exposed as an MCP server, and any model
+in opencode or Claude Code invokes it through tool calling.
 
 - [x] A `media` MCP server wrapping the local toolchains: image via mflux-cv
-      (`mflux-generate` and its family: FLUX, Qwen-image, Z-image, boogu, ...)
-      and video via ltx-2-mlx (LTX-2.3). Tools: `generate_image`,
-      `generate_video`. `fxlla media image|video|models` on the CLI, with output
-      validation (a zero exit code is not proof of a real render).
+      (`mflux-generate` and its family: FLUX, Qwen-image, Z-image, boogu, ...),
+      video via ltx-2-mlx (LTX-2.3), and speech via mlx-audio (Chatterbox).
+      Tools: `generate_image`, `generate_video`, `generate_speech`.
+      `fxlla media image|video|voice|models` on the CLI, with output validation
+      (a zero exit code is not proof of a real render).
 - [ ] More image operations exposed as tools: `edit_image`, `upscale_image`
       (mflux-cv already ships the edit/upscale CLIs).
 - [ ] GPU and memory coordination through `fxlla`. Image and video generation

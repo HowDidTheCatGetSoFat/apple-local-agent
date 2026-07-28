@@ -6,11 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
-- Media generation (`fxlla media image|video`): local image generation through
-  the mflux-cv toolchain (z-image-turbo and friends) and short video through
-  ltx-2-mlx (LTX-2.3), with output validation. Exposed to opencode and Claude
-  Code as an MCP server (`generate_image`, `generate_video`) via
-  `fxlla media wire-opencode`.
+- Media generation (`fxlla media image|video|voice`): local image generation
+  through the mflux-cv toolchain (z-image-turbo and friends), short video through
+  ltx-2-mlx (LTX-2.3), and text-to-speech through mlx-audio (Chatterbox), with
+  output validation. Exposed to opencode and Claude Code as an MCP server
+  (`generate_image`, `generate_video`, `generate_speech`) via
+  `fxlla media wire-opencode`. Speech runs under a separate interpreter
+  (`FXLLA_VOICE_PYTHON`) so fxlla itself never depends on mlx-audio.
 - Machine-readable model availability: `fxlla ls --json` lists cached models
   (alias, size, engine, repo) and `fxlla avail <alias>` reports
   `{cached, known, engine, repo, size}` for any catalog or downloaded model, so

@@ -44,6 +44,7 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla graph index|def|refs  Code graph over Python (also callers|impact|unused)
   fxlla media image "<prompt>"  Generate an image locally (mflux-cv). Also 'models'
   fxlla media video "<prompt>"  Generate a short video locally (ltx-2-mlx)
+  fxlla media voice "<text>"    Synthesize speech locally (mlx-audio)
   fxlla wire-opencode         Register the local provider in opencode
   fxlla rm <alias>            Delete a downloaded model
   fxlla config                Show the effective configuration
@@ -833,32 +834,28 @@ PY
 }
 
 # --------------------------------------------------------------------------
-# Media: local image generation (delegates to media/mflux_cli.py; MCP server)
+# Media: local image, video, and speech (delegates to media/generate.py; MCP)
+# The FXLLA_* config the media toolchains read. Exported once so the direct
+# call, the MCP server, and the opencode registration all forward the same set.
+FXLLA_MEDIA_ENV="FXLLA_STORE FXLLA_MEDIA_HF_HOME FXLLA_MEDIA_MODEL FXLLA_MEDIA_OUT \
+FXLLA_VIDEO_BIN FXLLA_VOICE_PYTHON FXLLA_VOICE_MODEL FXLLA_VOICE_REF FXLLA_VOICE_LANG"
+
 cmd_media() {
   need python3; require_store
+  # shellcheck disable=SC2086,SC2163  # export the names in the list, split on spaces
+  export $FXLLA_MEDIA_ENV
   case "${1:-}" in
-    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" \
-                     FXLLA_MEDIA_HF_HOME="$FXLLA_MEDIA_HF_HOME" \
-                     FXLLA_MEDIA_MODEL="$FXLLA_MEDIA_MODEL" \
-                     FXLLA_VIDEO_BIN="$FXLLA_VIDEO_BIN" \
-                     python3 "$REPO_ROOT/media/media_mcp.py" ;;
+    mcp)           exec python3 "$REPO_ROOT/media/media_mcp.py" ;;
     wire-opencode) _wire_media_mcp; return ;;
   esac
-  FXLLA_STORE="$FXLLA_STORE" \
-    FXLLA_MEDIA_HF_HOME="$FXLLA_MEDIA_HF_HOME" \
-    FXLLA_MEDIA_MODEL="$FXLLA_MEDIA_MODEL" \
-    FXLLA_MEDIA_OUT="${FXLLA_MEDIA_OUT:-}" \
-    FXLLA_VIDEO_BIN="$FXLLA_VIDEO_BIN" \
-    python3 "$REPO_ROOT/media/generate.py" "$@"
+  python3 "$REPO_ROOT/media/generate.py" "$@"
 }
 
-# register the media MCP server in opencode's config
+# register the media MCP server in opencode's config, forwarding the media env
 _wire_media_mcp() {
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   mkdir -p "$(dirname "$cfg")"
-  CFG="$cfg" MCP="$REPO_ROOT/media/media_mcp.py" STORE="$FXLLA_STORE" \
-    HFHOME="$FXLLA_MEDIA_HF_HOME" MODEL="$FXLLA_MEDIA_MODEL" \
-    VIDEOBIN="$FXLLA_VIDEO_BIN" python3 - <<'PY'
+  CFG="$cfg" MCP="$REPO_ROOT/media/media_mcp.py" KEYS="$FXLLA_MEDIA_ENV" python3 - <<'PY'
 import os, json
 cfg = os.environ["CFG"]
 try:
@@ -866,11 +863,9 @@ try:
 except Exception:
     data = {}
 data.setdefault("$schema", "https://opencode.ai/config.json")
-env = {"FXLLA_STORE": os.environ["STORE"], "FXLLA_MEDIA_MODEL": os.environ["MODEL"]}
-if os.environ.get("HFHOME"):
-    env["FXLLA_MEDIA_HF_HOME"] = os.environ["HFHOME"]
-if os.environ.get("VIDEOBIN"):
-    env["FXLLA_VIDEO_BIN"] = os.environ["VIDEOBIN"]
+# Forward only the media vars that are actually set (drop FXLLA_MEDIA_OUT etc.
+# when empty so the opencode config stays clean).
+env = {k: os.environ[k] for k in os.environ["KEYS"].split() if os.environ.get(k)}
 mcp = data.setdefault("mcp", {})
 mcp["fxlla-media"] = {
     "type": "local",
@@ -881,7 +876,7 @@ mcp["fxlla-media"] = {
 with open(cfg, "w") as f: json.dump(data, f, indent=2)
 print(cfg)
 PY
-  ok "Media MCP registered in opencode. Use generate_image over the mflux-cv toolchain."
+  ok "Media MCP registered in opencode. Use generate_image/generate_video/generate_speech."
 }
 
 # --------------------------------------------------------------------------
@@ -940,7 +935,7 @@ cmd_complete() {
     kb)         printf '%s\n' add search ls rm mcp wire-opencode ;;
     graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
                   mcp wire-opencode ;;
-    media)      printf '%s\n' image video models mcp wire-opencode ;;
+    media)      printf '%s\n' image video voice models mcp wire-opencode ;;
   esac
 }
 

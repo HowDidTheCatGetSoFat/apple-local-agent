@@ -2,6 +2,31 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-28: Local text to speech (voice)
+
+Added `fxlla media voice` and the MCP `generate_speech` tool, completing the
+media trio (image, video, speech). Reversed the earlier "not wireable" verdict.
+
+- Earlier investigation concluded VOICE-1 had no callable text->speech path,
+  because the best engine (Chatterbox via mlx-audio) was only importable inside
+  a gitignored bot env. The unlock: mlx-audio is also installed in the VFX-1
+  venv (the same one that hosts ltx-2-mlx). So voice follows the video pattern:
+  a configurable interpreter path (`FXLLA_VOICE_PYTHON`) rather than a CLI.
+- `media/voice_backend.py` runs under that interpreter (imports mlx_audio,
+  loads Chatterbox, writes a 24 kHz mono WAV). fxlla's own python never imports
+  mlx_audio; `generate.py` shells out to it. The backend is not exercised in CI
+  (needs mlx-audio); the command-building and WAV validation are.
+- Chatterbox ships no `conds.safetensors`, so a reference voice wav is
+  mandatory; it sets the timbre. Discovered the `generate` signature by
+  introspection (`text`, `lang_code`, `ref_audio`, `speed`, `exaggeration`,
+  `cfg_weight`).
+- Validated end to end through `fxlla media voice`: a real ~3 s 24 kHz WAV,
+  peak ~73 percent full scale and ~69 percent voiced windows (a real utterance,
+  not silence). Verified the audio signal, not just the exit code.
+- `cmd_media` now exports the media env once (a single name list) so the direct
+  call, the MCP server, and the opencode registration forward the same set,
+  instead of repeating a growing var list three times.
+
 ## 2026-07-28: Signing and notarization hardening
 
 Shared `app/sign-lib.sh` (identity default, `require_identity`, `verify_signed`)
