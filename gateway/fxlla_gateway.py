@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = os.environ.get("FXLLA_HOST", "127.0.0.1")
 PORT = int(os.environ.get("FXLLA_PORT", "8080"))
-STORE = os.environ.get("FXLLA_STORE", "/Volumes/1TB-WD750-1/llm")
+STORE = os.environ.get("FXLLA_STORE", "")
 MODELS_DIR = os.path.join(STORE, "models")
 PORT_BASE = int(os.environ.get("FXLLA_BACKEND_PORT_BASE", "8100"))
 FXLLA_BIN = os.environ.get("FXLLA_BIN", "fxlla")
@@ -105,11 +105,12 @@ def model_field_for(alias):
 class Manager:
     def __init__(self):
         self.backends = {}          # alias -> Backend
-        self.lock = threading.RLock()
-        self.next_port = PORT_BASE
+        self.loading = {}           # alias -> (Event, port) for in-flight loads
+        self.lock = threading.Lock()
 
     def _alloc_port(self):
         used = {b.port for b in self.backends.values()}
+        used |= {p for (_ev, p) in self.loading.values()}
         p = PORT_BASE
         while p in used:
             p += 1
@@ -146,36 +147,67 @@ class Manager:
         del self.backends[victim.alias]
 
     def ensure(self, alias):
-        """Return (port, model_field) for alias, loading and evicting as needed."""
+        """Return (port, model_field) for alias, loading and evicting as needed.
+
+        The lock is held only for the fast registry operations. The slow model
+        load runs outside the lock, so requests to already-loaded models never
+        block behind another model's startup. Concurrent requests for the same
+        not-yet-loaded model wait on a per-model Event instead of the lock."""
         with self.lock:
             b = self.backends.get(alias)
             if b is not None:
                 b.last_used = time.monotonic()
                 return b.port, b.model_field
+            entry = self.loading.get(alias)
+            if entry is not None:
+                ev = entry[0]
+                loader = False
+            else:
+                models = downloaded_models()
+                if alias not in models:
+                    raise KeyError(alias)
+                size_mb = models[alias]["size_mb"]
+                while self.backends and self._resident_mb() + size_mb > BUDGET_MB:
+                    self._evict_one()
+                port = self._alloc_port()
+                ev = threading.Event()
+                self.loading[alias] = (ev, port)
+                loader = True
 
-            models = downloaded_models()
-            if alias not in models:
-                raise KeyError(alias)
-            size_mb = models[alias]["size_mb"]
+        if not loader:
+            # another thread is loading this model; wait for it, do not hold a lock
+            ev.wait(timeout=200)
+            with self.lock:
+                b = self.backends.get(alias)
+                if b is None:
+                    raise RuntimeError("model '%s' failed to load" % alias)
+                b.last_used = time.monotonic()
+                return b.port, b.model_field
 
-            # evict LRU until the new model fits the budget
-            while self.backends and self._resident_mb() + size_mb > BUDGET_MB:
-                self._evict_one()
-
-            port = self._alloc_port()
-            log("loading %s on :%d (%d MB, resident %d/%d MB)"
-                % (alias, port, size_mb, self._resident_mb(), BUDGET_MB))
+        # loader path: spawn and wait OUTSIDE the lock
+        proc = None
+        ready = False
+        model_field = None
+        try:
+            log("loading %s on :%d (%d MB)" % (alias, port, size_mb))
             proc = subprocess.Popen([FXLLA_BIN, "_backend", alias, str(port)],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if not self._wait_ready(port):
+            ready = self._wait_ready(port)
+        finally:
+            with self.lock:
+                self.loading.pop(alias, None)
+                if ready:
+                    model_field = model_field_for(alias)
+                    self.backends[alias] = Backend(alias, port, proc, size_mb, model_field)
+                ev.set()
+        if not ready:
+            if proc is not None:
                 try:
                     proc.terminate()
                 except Exception:
                     pass
-                raise RuntimeError("backend for %s did not become ready" % alias)
-            model_field = model_field_for(alias)
-            self.backends[alias] = Backend(alias, port, proc, size_mb, model_field)
-            return port, model_field
+            raise RuntimeError("backend for %s did not become ready" % alias)
+        return port, model_field
 
     def status(self):
         with self.lock:
@@ -291,6 +323,9 @@ def _term(signum, frame):
 
 def main():
     signal.signal(signal.SIGTERM, _term)
+    if not STORE or not os.path.isdir(MODELS_DIR):
+        log("FXLLA_STORE is unset or has no models dir: %r (start via 'fxlla serve')" % STORE)
+        sys.exit(1)
     log("store=%s budget=%d MB backends from :%d" % (STORE, BUDGET_MB, PORT_BASE))
     log("models: %s" % (", ".join(downloaded_models().keys()) or "(none)"))
     server = ThreadingHTTPServer((HOST, PORT), Handler)
