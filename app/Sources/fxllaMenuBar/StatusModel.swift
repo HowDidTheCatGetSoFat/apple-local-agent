@@ -27,6 +27,7 @@ final class StatusModel: ObservableObject {
     }
 
     @Published var busy = false
+    @Published var lastError: String?
 
     func refresh() {
         Task.detached {
@@ -74,8 +75,13 @@ final class StatusModel: ObservableObject {
     private func runThenRefresh(_ args: [String]) {
         busy = true
         Task.detached {
-            _ = CLI.run(args)
-            await MainActor.run { self.busy = false; self.refresh() }
+            let (out, code) = CLI.run(args)
+            await MainActor.run {
+                self.busy = false
+                self.lastError = code == 0 ? nil
+                    : out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines)
+                self.refresh()
+            }
         }
     }
 

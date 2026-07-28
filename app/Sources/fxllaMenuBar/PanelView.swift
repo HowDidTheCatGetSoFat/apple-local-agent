@@ -15,6 +15,14 @@ struct PanelView: View {
                 .lineLimit(5)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if let err = model.lastError, !err.isEmpty {
+                Text(err)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if !model.models.isEmpty {
                 Divider()
                 ForEach(model.models) { m in
