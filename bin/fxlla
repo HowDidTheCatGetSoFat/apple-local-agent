@@ -36,6 +36,7 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla status                Server, model, and idle status
   fxlla stats [--watch]       Live metrics: RAM, TTFT, tok/s (also --json).
                               Reads the gateway's passive samples when serving.
+                              --last N prints the newest N recorded samples.
   fxlla logs                  Follow the server log
   fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
   fxlla kb add|search|ls|rm   Knowledge bases (RAG) over your files
@@ -567,16 +568,24 @@ _stats_passive() {
 }
 
 cmd_stats() {
-  local json=0 watch=0 interval=5 probe=1
+  local json=0 watch=0 interval=5 probe=1 last=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --json)      json=1 ;;
       --watch)     watch=1 ;;
       --interval)  interval="$2"; shift ;;
       --no-probe)  probe=0 ;;
+      --last)      last="$2"; shift ;;
       -*)          die "unknown flag: $1" ;;
     esac; shift
   done
+  if [ "$last" != 0 ]; then
+    # Dump the newest N recorded samples (history; no live server needed).
+    case "$last" in ''|*[!0-9]*) die "--last needs a positive integer" ;; esac
+    [ -f "$STATS_FILE" ] || die "No samples recorded yet."
+    tail -n "$last" "$STATS_FILE" | while IFS= read -r line; do _stats_fmt "$line" "$json"; done
+    return 0
+  fi
   if server_alive; then
     # A single-model server: probe it directly for live tok/s and TTFT.
     if [ "$watch" = 1 ]; then
