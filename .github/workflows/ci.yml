@@ -44,6 +44,8 @@ jobs:
         with:
           scandir: "."
           additional_files: "fxlla"
+        env:
+          SHELLCHECK_OPTS: -e SC1090 -e SC1091
 
       - name: Config precedence tests
         run: bash tests/test_config.sh
@@ -53,8 +55,6 @@ jobs:
 
       - name: Availability tests
         run: bash tests/test_avail.sh
-        env:
-          SHELLCHECK_OPTS: -e SC1090 -e SC1091
 
   python:
     name: Python tests
