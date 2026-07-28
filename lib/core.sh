@@ -35,6 +35,8 @@ ACT_FILE="$STATE_DIR/activity"
 LOG_FILE="$STATE_DIR/server.log"
 CURRENT_FILE="$STATE_DIR/current"
 STATS_FILE="$STATE_DIR/stats.jsonl"
+GATEWAY_PID="$STATE_DIR/gateway.pid"
+GATEWAY_LOG="$STATE_DIR/gateway.log"
 CATALOG="$REPO_ROOT/config/models.conf"
 SELF="$REPO_ROOT/bin/fxlla"
 BASE_URL="http://$FXLLA_HOST:$FXLLA_PORT/v1"
@@ -108,3 +110,6 @@ PY
 
 server_pid()   { [ -f "$PID_FILE" ] && cat "$PID_FILE" 2>/dev/null || true; }
 server_alive() { local p; p="$(server_pid)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+
+gateway_pid()   { [ -f "$GATEWAY_PID" ] && cat "$GATEWAY_PID" 2>/dev/null || true; }
+gateway_alive() { local p; p="$(gateway_pid)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }

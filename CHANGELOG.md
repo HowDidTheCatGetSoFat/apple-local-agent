@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- Multi-model gateway (`fxlla serve` / `fxlla unserve`): one OpenAI-compatible
+  endpoint fronting every downloaded model, with on-demand loading and
+  least-recently-used eviction under a RAM budget. Aggregated `/v1/models`,
+  streaming passthrough, and opencode registration of all local models.
 - `fxlla stats [--watch] [--json]`: live RAM (server RSS), time to first token,
   and tokens per second via a small probe, appended to a rolling time-series
   (`stats.jsonl`) for the menu bar app.
