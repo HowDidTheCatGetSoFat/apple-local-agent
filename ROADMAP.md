@@ -45,6 +45,37 @@ surprises the user with a large download.
 - System prompt: sets the policy and thresholds (for example, auto-download
   under a small size, always confirm above a limit, prefer cached models).
 
+## Multi-model gateway (router)
+
+Serving evolves from one model at a time to a single endpoint that fronts
+many. This reconciles the two obvious designs into one: a single unified
+channel (one endpoint, one aggregated model list) and on-demand loading (the
+client picks any model, the gateway loads or reuses a backend). They are the
+same thing seen from two sides.
+
+- One stable OpenAI-compatible endpoint (default 127.0.0.1:8080). `/v1/models`
+  aggregates the catalog and downloaded models, keyed by alias. Clients select
+  a model by name in the request.
+- On a request for model X: proxy to X's backend if it is running; otherwise
+  load X (spawn mlx_lm.server or llama-server on an internal port), wait for
+  ready, then reverse-proxy with streaming passthrough for SSE.
+- RAM budget and eviction: keep several small models resident for instant
+  switching; evict the least-recently-used backend when a load would exceed
+  the budget or the GPU wired limit. A single large model (120B, 235B) evicts
+  the rest.
+- Per-backend keep-warm (idle unload), reusing the current watchdog.
+- fxlla stays the source of truth for load, download, and RAM; the gateway is
+  the router that orchestrates it.
+
+Notes:
+- Cold start: the first request to an unloaded model pays the load time.
+  Resident hot models avoid it.
+- Consumers: opencode consumes the endpoint and model list directly. Claude
+  Code needs an Anthropic-shaped shim; OpenRouter needs the endpoint reachable
+  (tunnel) with auth, so keep the default bind local.
+- Prior art: llama-swap does this for llama.cpp only; this needs multi-engine
+  with MLX first.
+
 ## Phase 0: Foundations (done, v0.1.0)
 
 - [x] `fxlla` CLI, dual MLX + GGUF engine, bandwidth-capped downloads.
