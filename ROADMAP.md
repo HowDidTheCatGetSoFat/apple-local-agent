@@ -116,13 +116,16 @@ Status: v0 delivered (`fxlla kb`). Remaining items are performance and options.
 
 ## Phase 3: Code graph
 
-- [ ] Parsing with tree-sitter or SCIP; symbol graph in KuzuDB (embedded graph
-      database, Cypher, well suited to local use).
-- [ ] Queries: definition, references, call graph, change impact.
-- [ ] MCP server `code-graph`. Combined with RAG this gives structural plus
-      semantic navigation of large repositories. This is the main
-      differentiator.
-- [ ] `fxlla graph index <repo>`.
+Status: v0 delivered (`fxlla graph`) for Python via `ast` + SQLite, with an MCP
+server. Remaining items are scale and language coverage.
+
+- [x] Symbol extraction (defs, refs, callers) into a local store.
+- [x] Queries: definition, references, callers.
+- [x] MCP server (`find_definition`, `find_references`, `find_callers`).
+- [x] `fxlla graph index <repo>`.
+- [ ] Multi-language parsing with tree-sitter or SCIP (Python only today).
+- [ ] KuzuDB (embedded graph DB, Cypher) instead of flat SQLite; change-impact
+      and call-graph traversal queries.
 
 ## Phase 4: Media skills (mflux)
 
