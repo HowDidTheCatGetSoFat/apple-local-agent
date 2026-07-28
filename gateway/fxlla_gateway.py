@@ -27,6 +27,9 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import metrics  # noqa: E402  (local module, added to sys.path above)
+
 HOST = os.environ.get("FXLLA_HOST", "127.0.0.1")
 PORT = int(os.environ.get("FXLLA_PORT", "8080"))
 STORE = os.environ.get("FXLLA_STORE", "")
@@ -89,17 +92,31 @@ class Backend:
         self.last_used = time.monotonic()
 
 
+def engine_for(alias):
+    """Engine marker for a model: 'gguf' or 'mlx' (the default)."""
+    try:
+        with open(os.path.join(MODELS_DIR, alias, ".engine")) as f:
+            return f.read().strip() or "mlx"
+    except Exception:
+        return "mlx"
+
+
 def model_field_for(alias):
     """The 'model' value each backend expects: the path for MLX, the alias for
     GGUF (llama-server --alias). Never trust the backend's enumerated id, since
     mlx_lm.server lists the whole HF cache in /v1/models."""
-    engine = "mlx"
-    try:
-        with open(os.path.join(MODELS_DIR, alias, ".engine")) as f:
-            engine = f.read().strip() or "mlx"
-    except Exception:
-        pass
+    engine = engine_for(alias)
     return alias if engine == "gguf" else os.path.join(MODELS_DIR, alias)
+
+
+def rss_mb(pid):
+    """Resident memory of a process in MB via ps, or 0 if unavailable."""
+    try:
+        out = subprocess.check_output(["ps", "-o", "rss=", "-p", str(pid)],
+                                      stderr=subprocess.DEVNULL)
+        return int(out.strip()) // 1024
+    except Exception:
+        return 0
 
 
 class Manager:
@@ -208,6 +225,11 @@ class Manager:
                     pass
             raise RuntimeError("backend for %s did not become ready" % alias)
         return port, model_field
+
+    def backend_pid(self, alias):
+        with self.lock:
+            b = self.backends.get(alias)
+            return b.proc.pid if b is not None and b.proc is not None else None
 
     def status(self):
         with self.lock:
