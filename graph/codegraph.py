@@ -174,6 +174,32 @@ def cmd_callers(args):
           lambda r: f"{r['caller']}  ({r['file']})")
 
 
+def cmd_impact(args):
+    # Transitive callers (breadth-first over the call graph): the blast radius
+    # of changing a symbol. Name-approximate, so cap the depth.
+    con = _db()
+    seen = {args.name}
+    result = []
+    frontier = [args.name]
+    depth = 0
+    max_depth = getattr(args, "depth", None) or 5
+    while frontier and depth < max_depth:
+        depth += 1
+        placeholders = ",".join("?" * len(frontier))
+        rows = con.execute(
+            f"SELECT DISTINCT caller FROM refs WHERE name IN ({placeholders}) AND caller<>''",
+            tuple(frontier)).fetchall()
+        nxt = []
+        for (caller,) in rows:
+            leaf = caller.split(".")[-1]
+            if leaf not in seen:
+                seen.add(leaf)
+                result.append({"depth": depth, "caller": caller})
+                nxt.append(leaf)
+        frontier = nxt
+    _emit(args, result, lambda r: f"{'  ' * r['depth']}{r['caller']} (depth {r['depth']})")
+
+
 def main():
     p = argparse.ArgumentParser(prog="fxlla-graph")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -183,12 +209,17 @@ def main():
         sp = sub.add_parser(name)
         sp.add_argument("name")
         sp.add_argument("-j", "--json", action="store_true")
+    im = sub.add_parser("impact")
+    im.add_argument("name")
+    im.add_argument("--depth", type=int, default=5)
+    im.add_argument("-j", "--json", action="store_true")
     sub.add_parser("ls")
     sub.add_parser("rm")
     args = p.parse_args()
     {
         "index": cmd_index, "ls": cmd_ls, "rm": cmd_rm,
         "def": cmd_def, "refs": cmd_refs, "callers": cmd_callers,
+        "impact": cmd_impact,
     }[args.cmd](args)
 
 
