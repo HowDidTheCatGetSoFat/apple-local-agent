@@ -25,14 +25,27 @@ TOOLS = [
      "description": "Find which functions call a Python symbol.",
      "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}},
                      "required": ["name"]}},
+    {"name": "find_impact",
+     "description": "Transitive callers (blast radius) of a Python symbol.",
+     "inputSchema": {"type": "object",
+                     "properties": {"name": {"type": "string"}, "depth": {"type": "integer"}},
+                     "required": ["name"]}},
+    {"name": "list_unused",
+     "description": "List definitions never referenced by name (dead-code candidates).",
+     "inputSchema": {"type": "object", "properties": {}}},
 ]
-SUBCOMMAND = {"find_definition": "def", "find_references": "refs", "find_callers": "callers"}
+SUBCOMMAND = {"find_definition": "def", "find_references": "refs",
+              "find_callers": "callers", "find_impact": "impact"}
 
 
-def run_query(tool, name):
-    proc = subprocess.run(
-        [sys.executable, GRAPH, SUBCOMMAND[tool], name, "--json"],
-        capture_output=True, text=True, env=os.environ)
+def run_query(tool, args):
+    if tool == "list_unused":
+        cmd = [sys.executable, GRAPH, "unused", "--json"]
+    else:
+        cmd = [sys.executable, GRAPH, SUBCOMMAND[tool], args.get("name", ""), "--json"]
+        if tool == "find_impact":
+            cmd += ["--depth", str(int(args.get("depth", 5) or 5))]
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
     if proc.returncode != 0:
         return "error: " + (proc.stderr.strip() or "query failed")
     return proc.stdout.strip() or "[]"
@@ -52,8 +65,8 @@ def handle(msg):
     if method == "tools/call":
         params = msg.get("params", {})
         tool = params.get("name")
-        if tool in SUBCOMMAND:
-            text = run_query(tool, params.get("arguments", {}).get("name", ""))
+        if tool in SUBCOMMAND or tool == "list_unused":
+            text = run_query(tool, params.get("arguments", {}))
             return _ok(mid, {"content": [{"type": "text", "text": text}]})
         return _err(mid, -32601, "unknown tool")
     if method and method.startswith("notifications/"):

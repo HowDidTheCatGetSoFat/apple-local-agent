@@ -53,7 +53,8 @@ class TestMCP(unittest.TestCase):
         r = mcp_server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         self.assertEqual(
             {t["name"] for t in r["result"]["tools"]},
-            {"find_definition", "find_references", "find_callers"})
+            {"find_definition", "find_references", "find_callers",
+             "find_impact", "list_unused"})
 
 
 if __name__ == "__main__":
