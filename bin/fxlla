@@ -38,7 +38,7 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla logs                  Follow the server log
   fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
   fxlla kb add|search|ls|rm   Knowledge bases (RAG) over your files
-  fxlla graph index|def|refs  Code graph: index and navigate Python symbols
+  fxlla graph index|def|refs  Code graph over Python (also callers|impact|unused)
   fxlla wire-opencode         Register the local provider in opencode
   fxlla rm <alias>            Delete a downloaded model
   fxlla config                Show the effective configuration
