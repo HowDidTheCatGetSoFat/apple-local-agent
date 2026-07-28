@@ -9,6 +9,8 @@ final class StatusModel: ObservableObject {
     @Published var samples: [StatsSample] = []
     @Published var resident: [ResidentModel] = []
     @Published var models: [CatalogModel] = []
+    @Published var downloadable: [CatalogEntry] = []
+    @Published var pulling: Set<String> = []
     @Published var budgetGB: Double = 0
 
     private var timer: Timer?
@@ -34,12 +36,15 @@ final class StatusModel: ObservableObject {
             let samples = Stats.recent()
             let health = Gateway.health()
             let models = Gateway.models()
+            let catalog = Catalog.all()
+            let have = Catalog.downloaded()
             await MainActor.run {
                 self.running = isRunning
                 self.summary = clean.isEmpty ? "fxlla not found or no output" : clean
                 self.samples = samples
                 self.resident = health?.resident ?? []
                 self.models = models
+                self.downloadable = catalog.filter { !have.contains($0.alias) }
                 self.budgetGB = (health?.budgetMB ?? 0) / 1024
             }
         }
@@ -53,6 +58,16 @@ final class StatusModel: ObservableObject {
         Task.detached {
             Gateway.warmup(alias)
             await MainActor.run { self.busy = false; self.refresh() }
+        }
+    }
+
+    // Download a model in the background (long-running); the panel shows a
+    // spinner until it appears as downloaded.
+    func pull(_ alias: String) {
+        pulling.insert(alias)
+        Task.detached {
+            _ = CLI.run(["pull", alias])
+            await MainActor.run { self.pulling.remove(alias); self.refresh() }
         }
     }
 

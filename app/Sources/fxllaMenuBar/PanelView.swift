@@ -39,6 +39,25 @@ struct PanelView: View {
                     .foregroundStyle(.tertiary)
             }
 
+            if !model.downloadable.isEmpty {
+                Divider()
+                Text("Download").font(.caption2).foregroundStyle(.tertiary)
+                ForEach(model.downloadable) { c in
+                    HStack {
+                        Text(c.alias).font(.caption)
+                        Text(c.size).font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        if model.pulling.contains(c.alias) {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Button("Pull") { model.pull(c.alias) }
+                                .font(.caption)
+                                .buttonStyle(.borderless)
+                        }
+                    }
+                }
+            }
+
             if !model.samples.isEmpty {
                 Divider()
                 ChartsView(samples: model.samples)
