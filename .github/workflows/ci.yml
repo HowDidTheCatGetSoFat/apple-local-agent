@@ -37,13 +37,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Syntax check
-        run: bash -n bin/fxlla lib/core.sh
+        run: bash -n bin/fxlla lib/core.sh tests/test_config.sh
 
       - name: ShellCheck
         uses: ludeeus/action-shellcheck@master
         with:
           scandir: "."
           additional_files: "fxlla"
+
+      - name: Config precedence tests
+        run: bash tests/test_config.sh
         env:
           SHELLCHECK_OPTS: -e SC1090 -e SC1091
 
