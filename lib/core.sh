@@ -38,7 +38,12 @@ fi
 : "${FXLLA_NGL:=999}"          # layers offloaded to GPU for llama-server (gguf)
 : "${FXLLA_MEDIA_MODEL:=z-image-turbo}"  # default image model (fxlla media models)
 : "${FXLLA_MEDIA_HF_HOME:=}"   # HF cache holding diffusion weights (empty = HF default)
+: "${FXLLA_MEDIA_OUT:=}"       # media output dir (empty = <FXLLA_STORE>/media)
 : "${FXLLA_VIDEO_BIN:=ltx-2-mlx}"  # path to the ltx-2-mlx binary (fxlla media video)
+: "${FXLLA_VOICE_PYTHON:=python3}"  # interpreter with mlx-audio (fxlla media voice)
+: "${FXLLA_VOICE_MODEL:=YUGOROU/Chatterbox-Multilingual-MLX-4bit}"  # TTS model
+: "${FXLLA_VOICE_REF:=}"       # reference voice wav (required for voice; sets timbre)
+: "${FXLLA_VOICE_LANG:=en}"    # default speech language code
 
 MODELS_DIR="$FXLLA_STORE/models"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/fxlla"
