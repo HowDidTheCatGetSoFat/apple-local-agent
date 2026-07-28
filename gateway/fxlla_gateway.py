@@ -85,12 +85,13 @@ def downloaded_models():
 
 
 class Backend:
-    def __init__(self, alias, port, proc, size_mb, model_field):
+    def __init__(self, alias, port, proc, size_mb, model_field, engine):
         self.alias = alias
         self.port = port
         self.proc = proc
         self.size_mb = size_mb
         self.model_field = model_field  # value to send in the proxied 'model' field
+        self.engine = engine            # 'mlx' or 'gguf', resolved once at load
         self.last_used = time.monotonic()
 
 
@@ -103,12 +104,16 @@ def engine_for(alias):
         return "mlx"
 
 
-def model_field_for(alias):
-    """The 'model' value each backend expects: the path for MLX, the alias for
-    GGUF (llama-server --alias). Never trust the backend's enumerated id, since
-    mlx_lm.server lists the whole HF cache in /v1/models."""
-    engine = engine_for(alias)
+def model_field_from(alias, engine):
+    """The 'model' value a backend expects given its engine: the path for MLX,
+    the alias for GGUF (llama-server --alias). Never trust the backend's
+    enumerated id, since mlx_lm.server lists the whole HF cache in /v1/models."""
     return alias if engine == "gguf" else os.path.join(MODELS_DIR, alias)
+
+
+def model_field_for(alias):
+    """model_field_from with the engine resolved from disk."""
+    return model_field_from(alias, engine_for(alias))
 
 
 def rss_mb(pid):
@@ -216,8 +221,9 @@ class Manager:
             with self.lock:
                 self.loading.pop(alias, None)
                 if ready:
-                    model_field = model_field_for(alias)
-                    self.backends[alias] = Backend(alias, port, proc, size_mb, model_field)
+                    engine = engine_for(alias)
+                    self.backends[alias] = Backend(
+                        alias, port, proc, size_mb, model_field_from(alias, engine), engine)
                 ev.set()
         if not ready:
             if proc is not None:
@@ -228,10 +234,13 @@ class Manager:
             raise RuntimeError("backend for %s did not become ready" % alias)
         return port, model_field
 
-    def backend_pid(self, alias):
+    def backend_meta(self, alias):
+        """(pid, engine) for a resident backend, or None if it is not loaded."""
         with self.lock:
             b = self.backends.get(alias)
-            return b.proc.pid if b is not None and b.proc is not None else None
+            if b is None or b.proc is None:
+                return None
+            return b.proc.pid, b.engine
 
     def status(self):
         with self.lock:
@@ -371,10 +380,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not tokens:
                 return  # nothing generated (e.g. an error body): do not record
-            pid = MANAGER.backend_pid(alias)
-            ram = rss_mb(pid) if pid else 0
+            meta = MANAGER.backend_meta(alias)
+            if meta is None:
+                return  # backend evicted between response and record
+            pid, engine = meta
             sample = metrics.build_sample(
-                time.time(), alias, engine_for(alias), ram, ttft_ms, tps)
+                time.time(), alias, engine, rss_mb(pid), ttft_ms, tps)
             metrics.append_sample(metrics.stats_file(), sample)
         except Exception as e:
             log("metrics: %s" % e)
