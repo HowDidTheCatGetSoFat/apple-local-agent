@@ -130,6 +130,27 @@ def cmd_unused(args):
           lambda r: f"{r['kind']:8} {r['qualname']}  {r['file']}:{r['line']}")
 
 
+def cmd_stats(args):
+    con = _db()
+    files = con.execute("SELECT COUNT(DISTINCT file) FROM defs").fetchone()[0]
+    defs = con.execute("SELECT COUNT(*) FROM defs").fetchone()[0]
+    refs = con.execute("SELECT COUNT(*) FROM refs").fetchone()[0]
+    by_kind = con.execute("SELECT kind, COUNT(*) FROM defs GROUP BY kind").fetchall()
+    top = con.execute(
+        "SELECT name, COUNT(*) c FROM refs GROUP BY name ORDER BY c DESC LIMIT 10").fetchall()
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "files": files, "defs": defs, "refs": refs,
+            "by_kind": dict(by_kind),
+            "top_referenced": [{"name": n, "count": c} for n, c in top]}))
+        return
+    print(f"files: {files}  defs: {defs}  refs: {refs}")
+    print("by kind: " + ", ".join(f"{k} {c}" for k, c in by_kind))
+    print("most referenced:")
+    for n, c in top:
+        print(f"  {c:4}  {n}")
+
+
 def cmd_ls(_args):
     con = _db()
     rows = con.execute("SELECT file, COUNT(*) FROM defs GROUP BY file ORDER BY file").fetchall()
@@ -230,13 +251,15 @@ def main():
     im.add_argument("-j", "--json", action="store_true")
     un = sub.add_parser("unused")
     un.add_argument("-j", "--json", action="store_true")
+    st = sub.add_parser("stats")
+    st.add_argument("-j", "--json", action="store_true")
     sub.add_parser("ls")
     sub.add_parser("rm")
     args = p.parse_args()
     {
         "index": cmd_index, "ls": cmd_ls, "rm": cmd_rm,
         "def": cmd_def, "refs": cmd_refs, "callers": cmd_callers,
-        "impact": cmd_impact, "unused": cmd_unused,
+        "impact": cmd_impact, "unused": cmd_unused, "stats": cmd_stats,
     }[args.cmd](args)
 
 
