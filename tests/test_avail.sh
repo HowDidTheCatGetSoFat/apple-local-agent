@@ -36,9 +36,15 @@ json_eq "ls --json marks cached"           "$(run ls --json)" "o[0]['cached']" "
 
 json_eq "avail cached -> cached true"  "$(run avail coder-3b)"    "o['cached']" "True"
 json_eq "avail cached -> engine mlx"   "$(run avail coder-3b)"    "o['engine']" "mlx"
-json_eq "avail catalog -> cached false" "$(run avail qwen3-coder)" "o['cached']" "False"
-json_eq "avail catalog -> known true"   "$(run avail qwen3-coder)" "o['known']" "True"
-json_eq "avail catalog -> reports size" "$(run avail qwen3-coder)" "o['catalog_size']" "17GB"
+json_eq "avail cached -> size_mb is int" "$(run avail coder-3b)"  "type(o['size_mb']).__name__" "int"
+json_eq "avail cached -> no catalog_size" "$(run avail coder-3b)" "o['catalog_size']" "None"
+
+# A catalog model that is not the cached fixture, derived from the live catalog.
+CAT="$(run __complete catalog | grep -vx coder-3b | head -1)"
+json_eq "avail catalog -> cached false" "$(run avail "$CAT")" "o['cached']" "False"
+json_eq "avail catalog -> known true"   "$(run avail "$CAT")" "o['known']" "True"
+json_eq "avail catalog -> size_mb null" "$(run avail "$CAT")" "o['size_mb']" "None"
+json_eq "avail catalog -> has catalog_size" "$(run avail "$CAT")" "bool(o['catalog_size'])" "True"
 json_eq "avail unknown -> known false"  "$(run avail totally-unknown)" "o['known']" "False"
 
 # on without --pull must fail fast on an uncached model.

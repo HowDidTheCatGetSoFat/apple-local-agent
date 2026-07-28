@@ -255,26 +255,29 @@ import json, os, subprocess
 dest = os.environ["DEST"]; alias = os.environ["ALIAS"]
 repo = os.environ["REPO"]; engine = os.environ["ENGINE"]; size = os.environ["SIZE"]
 cached = os.path.isdir(dest) and os.path.exists(os.path.join(dest, ".source"))
-info = {"alias": alias, "cached": cached, "known": bool(repo) or cached}
+# size_mb is always present and uniformly typed: the real disk size when
+# cached, else null (the exact size is unknown until downloaded). catalog_size
+# carries the human-readable estimate for a not-yet-cached model.
+info = {"alias": alias, "cached": cached, "known": bool(repo) or cached,
+        "engine": engine or "mlx", "repo": repo,
+        "size_mb": None, "catalog_size": size or None}
 if cached:
-    eng = "mlx"
     try:
         with open(os.path.join(dest, ".engine")) as f:
-            eng = f.read().strip() or "mlx"
+            info["engine"] = f.read().strip() or "mlx"
     except OSError:
         pass
     try:
         with open(os.path.join(dest, ".source")) as f:
-            repo = f.read().strip() or repo
+            info["repo"] = f.read().strip() or repo
     except OSError:
         pass
     try:
         kb = int(subprocess.check_output(["du", "-sk", dest]).split()[0])
     except Exception:
         kb = 0
-    info.update({"engine": eng, "repo": repo, "size_mb": kb // 1024})
-else:
-    info.update({"engine": engine or "mlx", "repo": repo, "catalog_size": size})
+    info["size_mb"] = kb // 1024
+    info["catalog_size"] = None
 print(json.dumps(info))
 PY
 }
