@@ -36,6 +36,9 @@ fi
 : "${FXLLA_KEEP_WARM:=10}"     # idle minutes before auto-stop (0 = never)
 : "${FXLLA_CTX:=8192}"         # context size for llama-server (gguf)
 : "${FXLLA_NGL:=999}"          # layers offloaded to GPU for llama-server (gguf)
+: "${FXLLA_MEDIA_MODEL:=z-image-turbo}"  # default image model (fxlla media models)
+: "${FXLLA_MEDIA_HF_HOME:=}"   # HF cache holding diffusion weights (empty = HF default)
+: "${FXLLA_VIDEO_BIN:=ltx-2-mlx}"  # path to the ltx-2-mlx binary (fxlla media video)
 
 MODELS_DIR="$FXLLA_STORE/models"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/fxlla"

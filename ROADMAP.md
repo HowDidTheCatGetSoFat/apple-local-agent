@@ -132,17 +132,19 @@ server. Remaining items are scale and language coverage.
 - [ ] KuzuDB (embedded graph DB, Cypher) instead of flat SQLite; change-impact
       and call-graph traversal queries.
 
-## Phase 4: Media skills (mflux)
+## Phase 4: Media skills
 
 A text model cannot draw. It can, however, call a tool. So local image and
 video generation is exposed as an MCP server, and any model in opencode or
 Claude Code invokes it through tool calling.
 
-- [ ] A `media` MCP server wrapping the local `mflux` toolchain
-      (`mflux-generate` and its variants: FLUX, Qwen-image, Z-image, controlnet,
-      depth, fill, kontext, redux, upscale). Tools: `generate_image`,
-      `edit_image`, `upscale_image`, and `generate_video` when a local video
-      backend is available.
+- [x] A `media` MCP server wrapping the local toolchains: image via mflux-cv
+      (`mflux-generate` and its family: FLUX, Qwen-image, Z-image, boogu, ...)
+      and video via ltx-2-mlx (LTX-2.3). Tools: `generate_image`,
+      `generate_video`. `fxlla media image|video|models` on the CLI, with output
+      validation (a zero exit code is not proof of a real render).
+- [ ] More image operations exposed as tools: `edit_image`, `upscale_image`
+      (mflux-cv already ships the edit/upscale CLIs).
 - [ ] GPU and memory coordination through `fxlla`. Image and video generation
       compete with the LLM server for unified memory, so the MCP asks `fxlla`
       to free the model before a heavy job and reload it after. This is why
