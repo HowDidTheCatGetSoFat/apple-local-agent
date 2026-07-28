@@ -42,6 +42,8 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
   fxlla kb add|search|ls|rm   Knowledge bases (RAG) over your files
   fxlla graph index|def|refs  Code graph over Python (also callers|impact|unused)
+  fxlla media image "<prompt>"  Generate an image locally (mflux-cv). Also 'models'
+  fxlla media video "<prompt>"  Generate a short video locally (ltx-2-mlx)
   fxlla wire-opencode         Register the local provider in opencode
   fxlla rm <alias>            Delete a downloaded model
   fxlla config                Show the effective configuration
@@ -831,6 +833,58 @@ PY
 }
 
 # --------------------------------------------------------------------------
+# Media: local image generation (delegates to media/mflux_cli.py; MCP server)
+cmd_media() {
+  need python3; require_store
+  case "${1:-}" in
+    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" \
+                     FXLLA_MEDIA_HF_HOME="$FXLLA_MEDIA_HF_HOME" \
+                     FXLLA_MEDIA_MODEL="$FXLLA_MEDIA_MODEL" \
+                     FXLLA_VIDEO_BIN="$FXLLA_VIDEO_BIN" \
+                     python3 "$REPO_ROOT/media/media_mcp.py" ;;
+    wire-opencode) _wire_media_mcp; return ;;
+  esac
+  FXLLA_STORE="$FXLLA_STORE" \
+    FXLLA_MEDIA_HF_HOME="$FXLLA_MEDIA_HF_HOME" \
+    FXLLA_MEDIA_MODEL="$FXLLA_MEDIA_MODEL" \
+    FXLLA_MEDIA_OUT="${FXLLA_MEDIA_OUT:-}" \
+    FXLLA_VIDEO_BIN="$FXLLA_VIDEO_BIN" \
+    python3 "$REPO_ROOT/media/generate.py" "$@"
+}
+
+# register the media MCP server in opencode's config
+_wire_media_mcp() {
+  local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+  mkdir -p "$(dirname "$cfg")"
+  CFG="$cfg" MCP="$REPO_ROOT/media/media_mcp.py" STORE="$FXLLA_STORE" \
+    HFHOME="$FXLLA_MEDIA_HF_HOME" MODEL="$FXLLA_MEDIA_MODEL" \
+    VIDEOBIN="$FXLLA_VIDEO_BIN" python3 - <<'PY'
+import os, json
+cfg = os.environ["CFG"]
+try:
+    with open(cfg) as f: data = json.load(f)
+except Exception:
+    data = {}
+data.setdefault("$schema", "https://opencode.ai/config.json")
+env = {"FXLLA_STORE": os.environ["STORE"], "FXLLA_MEDIA_MODEL": os.environ["MODEL"]}
+if os.environ.get("HFHOME"):
+    env["FXLLA_MEDIA_HF_HOME"] = os.environ["HFHOME"]
+if os.environ.get("VIDEOBIN"):
+    env["FXLLA_VIDEO_BIN"] = os.environ["VIDEOBIN"]
+mcp = data.setdefault("mcp", {})
+mcp["fxlla-media"] = {
+    "type": "local",
+    "command": ["python3", os.environ["MCP"]],
+    "environment": env,
+    "enabled": True,
+}
+with open(cfg, "w") as f: json.dump(data, f, indent=2)
+print(cfg)
+PY
+  ok "Media MCP registered in opencode. Use generate_image over the mflux-cv toolchain."
+}
+
+# --------------------------------------------------------------------------
 # keep-warm: watchdog that auto-stops after N idle minutes with no requests
 _start_watchdog() {
   [ "${FXLLA_KEEP_WARM:-0}" -gt 0 ] || return 0
@@ -879,13 +933,14 @@ _complete_downloaded() {
 cmd_complete() {
   case "${1:-}" in
     commands)   printf '%s\n' setup models pull ls avail on off serve unserve \
-                  status stats doctor logs ram kb graph wire-opencode rm config \
-                  completions help ;;
+                  status stats doctor logs ram kb graph media wire-opencode rm \
+                  config completions help ;;
     catalog)    _complete_catalog ;;
     downloaded) _complete_downloaded ;;
     kb)         printf '%s\n' add search ls rm mcp wire-opencode ;;
     graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
                   mcp wire-opencode ;;
+    media)      printf '%s\n' image video models mcp wire-opencode ;;
   esac
 }
 
@@ -963,6 +1018,7 @@ main() {
     ram)                    cmd_ram "$@" ;;
     kb)                     cmd_kb "$@" ;;
     graph)                  cmd_graph "$@" ;;
+    media)                  cmd_media "$@" ;;
     wire-opencode|opencode) cmd_wire_opencode "$@" ;;
     rm|remove)              cmd_rm "$@" ;;
     config)                 cmd_config "$@" ;;
