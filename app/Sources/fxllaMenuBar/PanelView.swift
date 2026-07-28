@@ -20,10 +20,17 @@ struct PanelView: View {
 
             Divider()
             HStack {
+                if model.running {
+                    Button("Stop gateway") { model.stopGateway() }
+                } else {
+                    Button("Start gateway") { model.startGateway() }
+                }
+                if model.busy { ProgressView().controlSize(.small) }
                 Button("Refresh") { model.refresh() }
                 Spacer()
                 Button("Quit") { NSApplication.shared.terminate(nil) }
             }
+            .disabled(model.busy)
         }
         .padding(12)
         .frame(width: 320)

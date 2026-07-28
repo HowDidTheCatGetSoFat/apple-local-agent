@@ -19,6 +19,8 @@ final class StatusModel: ObservableObject {
         }
     }
 
+    @Published var busy = false
+
     func refresh() {
         Task.detached {
             let (out, _) = CLI.run(["status"])
@@ -30,6 +32,17 @@ final class StatusModel: ObservableObject {
                 self.summary = clean.isEmpty ? "fxlla not found or no output" : clean
                 self.samples = samples
             }
+        }
+    }
+
+    func startGateway() { runThenRefresh(["serve"]) }
+    func stopGateway() { runThenRefresh(["unserve"]) }
+
+    private func runThenRefresh(_ args: [String]) {
+        busy = true
+        Task.detached {
+            _ = CLI.run(args)
+            await MainActor.run { self.busy = false; self.refresh() }
         }
     }
 }
