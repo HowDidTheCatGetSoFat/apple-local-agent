@@ -19,9 +19,15 @@ with `case`. The same shape was latent in `require_identity`. General rule for
 these scripts: do not pipe a long-running producer into `grep -q` under
 pipefail; capture first.
 
-Notarization itself needs the maintainer's Apple credentials (an active
-Developer Program membership plus either an app-specific password or an App
-Store Connect API key), so a real distribution run stays a maintainer step.
+Notarization needs the maintainer's Apple credentials (an active Developer
+Program membership plus either an app-specific password or an App Store Connect
+API key), stored once as a notarytool keychain profile.
+
+Verified end to end: with the profile in place, `app/package-dmg.sh --notarize`
+built, signed, submitted, and got `Accepted` from the notary service, then
+stapled and validated. The resulting `.dmg` passes `stapler validate` and a
+`spctl` Gatekeeper assessment offline (the ticket is embedded). Whole run ~34 s.
+Credentials live only in the keychain and in the git-ignored `config/config.env`.
 
 ## 2026-07-28: Media generation (image and video)
 

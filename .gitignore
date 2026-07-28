@@ -1,4 +1,4 @@
-# config local (tiene rutas/tokens de cada máquina)
+# machine-local config (paths and tokens per machine)
 config/config.env
 
 # estado en runtime
