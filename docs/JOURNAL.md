@@ -2,6 +2,24 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-28: Config precedence and shell completions
+
+Two CLI items batched into one review-sized change.
+
+- Config precedence (#15): `config.env` used plain assignments, so sourcing it
+  clobbered any `FXLLA_*` value exported in the shell, reversing the documented
+  order (environment > config.env > defaults). Fix in `lib/core.sh`: snapshot
+  the exported config vars (`export -p` filtered to `FXLLA_*`/`HF_TOKEN`, which
+  also sidesteps re-applying readonly system vars), source the file, then
+  re-apply the snapshot so the environment wins. A `tests/test_config.sh`
+  harness drives `fxlla config` across the three tiers and is run in CI.
+- Shell completions (#10): `fxlla completions <bash|zsh>` prints a script backed
+  by a hidden `fxlla __complete <what>` helper, keeping candidate lists in the
+  CLI (single source of truth). Gotcha: `mapfile` is bash 4+, and macOS ships
+  bash 3.2, so the bash script uses the classic word-splitting `COMPREPLY=(...)`
+  form (safe here since candidates never contain spaces). Verified against the
+  real `bash 3.2.57`. Tested in CI (`tests/test_completions.sh`).
+
 ## 2026-07-28: Passive gateway metrics
 
 Closed the passive side of the stats work flagged in the earlier entry. The

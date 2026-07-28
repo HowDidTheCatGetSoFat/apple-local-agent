@@ -80,6 +80,21 @@ Both are set in `~/.config/fxlla/config.env`, which is never committed:
   otherwise.
 
 Never put tokens anywhere else in the tree. `config/config.env` is git-ignored.
+An exported environment variable always wins over `config.env`, which in turn
+wins over the built-in defaults.
+
+## Shell completions
+
+Completion for commands, catalog aliases (`pull`), downloaded models
+(`on`/`off`/`rm`), and `kb`/`graph` subcommands:
+
+```sh
+# bash: add to ~/.bashrc
+source <(fxlla completions bash)
+
+# zsh: add to ~/.zshrc (after compinit)
+source <(fxlla completions zsh)
+```
 
 ## MLX vs GGUF
 
