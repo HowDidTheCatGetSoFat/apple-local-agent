@@ -1,7 +1,7 @@
 import SwiftUI
 
-// Holds the state shown in the menu bar, populated from `fxlla status` and the
-// stats time-series. Refreshes on a timer.
+// Holds the state shown in the menu bar, populated from `fxlla status`, the
+// gateway, and the stats time-series. All I/O is async so the UI stays live.
 @MainActor
 final class StatusModel: ObservableObject {
     @Published var running = false
@@ -12,12 +12,14 @@ final class StatusModel: ObservableObject {
     @Published var downloadable: [CatalogEntry] = []
     @Published var pulling: Set<String> = []
     @Published var budgetGB: Double = 0
+    @Published var busy = false
+    @Published var lastError: String?
 
     private var timer: Timer?
 
-    func residentFor(_ alias: String) -> ResidentModel? { resident.first { $0.alias == alias } }
-
     var iconName: String { running ? "cpu.fill" : "cpu" }
+
+    func residentFor(_ alias: String) -> ResidentModel? { resident.first { $0.alias == alias } }
 
     init() {
         refresh()
@@ -26,28 +28,22 @@ final class StatusModel: ObservableObject {
         }
     }
 
-    @Published var busy = false
-    @Published var lastError: String?
-
     func refresh() {
-        Task.detached {
-            let (out, _) = CLI.run(["status"])
+        Task {
+            let (out, _) = await CLI.run(["status"])
             let clean = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines)
-            let isRunning = clean.localizedCaseInsensitiveContains("running")
-            let samples = Stats.recent()
-            let health = Gateway.health()
-            let models = Gateway.models()
-            let catalog = Catalog.all()
-            let have = Catalog.downloaded()
-            await MainActor.run {
-                self.running = isRunning
-                self.summary = clean.isEmpty ? "fxlla not found or no output" : clean
-                self.samples = samples
-                self.resident = health?.resident ?? []
-                self.models = models
-                self.downloadable = catalog.filter { !have.contains($0.alias) }
-                self.budgetGB = (health?.budgetMB ?? 0) / 1024
-            }
+            let health = await Gateway.health()
+            let models = await Gateway.models()
+            let catalog = await Catalog.all()
+            let have = await Catalog.downloaded()
+
+            running = clean.localizedCaseInsensitiveContains("running")
+            summary = clean.isEmpty ? "fxlla not found or no output" : clean
+            samples = Stats.recent()
+            resident = health?.resident ?? []
+            self.models = models
+            downloadable = catalog.filter { !have.contains($0.alias) }
+            budgetGB = (health?.budgetMB ?? 0) / 1024
         }
     }
 
@@ -56,51 +52,47 @@ final class StatusModel: ObservableObject {
 
     func load(_ alias: String) {
         busy = true
-        Task.detached {
-            Gateway.warmup(alias)
-            await MainActor.run { self.busy = false; self.refresh() }
+        Task {
+            await Gateway.warmup(alias)
+            busy = false
+            refresh()
         }
     }
 
-    // Download a model in the background (long-running); the panel shows a
-    // spinner until it appears as downloaded.
+    // Download a model in the background; the panel shows a spinner until done.
     func pull(_ alias: String) {
         pulling.insert(alias)
-        Task.detached {
-            _ = CLI.run(["pull", alias])
-            await MainActor.run { self.pulling.remove(alias); self.refresh() }
-        }
-    }
-
-    private func runThenRefresh(_ args: [String]) {
-        busy = true
-        Task.detached {
-            let (out, code) = CLI.run(args)
-            await MainActor.run {
-                self.busy = false
-                self.lastError = code == 0 ? nil
-                    : out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines)
-                self.refresh()
-            }
+        Task {
+            let (out, code) = await CLI.run(["pull", alias])
+            pulling.remove(alias)
+            if code != 0 { lastError = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines) }
+            refresh()
         }
     }
 
     func ramAuto() { runPrivileged("ram auto") }
     func ramReset() { runPrivileged("ram reset") }
 
-    // Raising the GPU limit needs root. Run `fxlla ram ...` via a native admin
-    // prompt (as root, fxlla's internal sudo needs no password).
+    // Raising the GPU limit needs root: run `fxlla ram ...` via a native admin
+    // prompt. The binary path is shell-quoted so paths with spaces work.
     private func runPrivileged(_ args: String) {
         busy = true
-        let bin = CLI.path
-        Task.detached {
-            let script = "do shell script \"\(bin) \(args)\" with administrator privileges"
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            p.arguments = ["-e", script]
-            try? p.run()
-            p.waitUntilExit()
-            await MainActor.run { self.busy = false; self.refresh() }
+        let command = "\(CLI.path.shellQuoted()) \(args)"
+        Task {
+            await CLI.osascriptAdmin(command)
+            busy = false
+            refresh()
+        }
+    }
+
+    private func runThenRefresh(_ args: [String]) {
+        busy = true
+        Task {
+            let (out, code) = await CLI.run(args)
+            busy = false
+            lastError = code == 0 ? nil
+                : out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines)
+            refresh()
         }
     }
 }

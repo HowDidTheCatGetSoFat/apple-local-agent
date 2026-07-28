@@ -13,8 +13,8 @@ enum Catalog {
     }
 
     // Every catalog model (alias, size), from `fxlla models`.
-    static func all() -> [CatalogEntry] {
-        let (out, _) = CLI.run(["models"])
+    static func all() async -> [CatalogEntry] {
+        let (out, _) = await CLI.run(["models"])
         var entries: [CatalogEntry] = []
         for line in out.strippingANSI().split(separator: "\n") {
             let cols = columns(line)
@@ -25,8 +25,8 @@ enum Catalog {
     }
 
     // Aliases already downloaded, from `fxlla ls`.
-    static func downloaded() -> Set<String> {
-        let (out, _) = CLI.run(["ls"])
+    static func downloaded() async -> Set<String> {
+        let (out, _) = await CLI.run(["ls"])
         var s = Set<String>()
         for line in out.strippingANSI().split(separator: "\n") {
             if let first = columns(line).first { s.insert(first) }
