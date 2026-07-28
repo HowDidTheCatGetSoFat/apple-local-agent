@@ -559,7 +559,9 @@ _stats_passive() {
   local json="$1" watch="$2"
   [ -f "$STATS_FILE" ] || die "No samples yet. Send a request through the gateway on :$FXLLA_PORT."
   if [ "$watch" = 1 ]; then
-    tail -n 1 -f "$STATS_FILE" | while IFS= read -r line; do _stats_fmt "$line" "$json"; done
+    # -F (follow by name) reopens after _maybe_trim's atomic replace; -f would
+    # keep following the old inode and stall silently once the file rotates.
+    tail -n 1 -F "$STATS_FILE" | while IFS= read -r line; do _stats_fmt "$line" "$json"; done
   else
     local line; line="$(tail -n 1 "$STATS_FILE")"
     [ -n "$line" ] || die "No samples yet. Send a request through the gateway on :$FXLLA_PORT."
@@ -568,7 +570,7 @@ _stats_passive() {
 }
 
 cmd_stats() {
-  local json=0 watch=0 interval=5 probe=1 last=0
+  local json=0 watch=0 interval=5 probe=1 last=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --json)      json=1 ;;
@@ -579,9 +581,10 @@ cmd_stats() {
       -*)          die "unknown flag: $1" ;;
     esac; shift
   done
-  if [ "$last" != 0 ]; then
+  if [ -n "$last" ]; then
     # Dump the newest N recorded samples (history; no live server needed).
-    case "$last" in ''|*[!0-9]*) die "--last needs a positive integer" ;; esac
+    # An explicit sentinel (empty = unset) so '--last 0' is a real error.
+    case "$last" in 0|*[!0-9]*) die "--last needs a positive integer" ;; esac
     [ -f "$STATS_FILE" ] || die "No samples recorded yet."
     tail -n "$last" "$STATS_FILE" | while IFS= read -r line; do _stats_fmt "$line" "$json"; done
     return 0
