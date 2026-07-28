@@ -16,6 +16,7 @@ import glob
 import json
 import math
 import os
+import re
 import sqlite3
 import struct
 import subprocess
@@ -84,6 +85,12 @@ def _db():
     return con
 
 
+def _valid_kb(name):
+    if not re.match(r"^[A-Za-z0-9._-]+$", name or ""):
+        sys.exit("invalid knowledge base name (use letters, digits, . _ -)")
+    return name
+
+
 def chunk_text(text, size=800, overlap=120):
     text = text.strip()
     out = []
@@ -109,6 +116,7 @@ def cmd_ls(_args):
 
 
 def cmd_rm(args):
+    _valid_kb(args.name)
     con = _db()
     n = con.execute("DELETE FROM chunks WHERE kb=?", (args.name,)).rowcount
     con.commit()
@@ -142,6 +150,7 @@ def _gather(paths):
 
 
 def cmd_add(args):
+    _valid_kb(args.name)
     files = _gather(args.paths)
     if not files:
         sys.exit("no text files found in the given paths")
@@ -180,6 +189,7 @@ def _cosine(a, b):
 
 
 def cmd_search(args):
+    _valid_kb(args.name)
     con = _db()
     rows = con.execute(
         "SELECT source, idx, text, emb FROM chunks WHERE kb=?", (args.name,)
