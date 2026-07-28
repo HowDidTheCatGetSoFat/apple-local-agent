@@ -2,6 +2,30 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-28: Media generation (image and video)
+
+Phase 4 delivered on the CLI and MCP. `fxlla media image|video` plus an MCP
+server (`generate_image`, `generate_video`).
+
+- Images: mflux-cv (community build, `mflux-cv 0.18.29`), one CLI per model
+  family. The wrapper maps a friendly name (z-image-turbo default, boogu,
+  flux2-klein, qwen, krea2, schnell, dev) to the right binary. The earlier VAE
+  error that parked this work was a stale vanilla-mflux build, not a wrapper
+  bug; with mflux-cv it resolves cleanly. Validated with a real 512x512 render.
+- Video: ltx-2-mlx (LTX-2.3). Contract gotcha: `generate` requires exactly one
+  stage flag (`--distilled` is the fast default) and a mandatory `--frame-rate`
+  (trained at 24). The binary usually lives in a project venv, so the path is
+  configurable via `FXLLA_VIDEO_BIN`. Validated with a real 25-frame 512x320
+  clip in 27s; the MP4 even carries an AAC audio track.
+- Both validate the produced file (PNG magic / MP4 ftyp box plus a size floor),
+  because these tools can exit 0 while writing nothing useful ("verify the
+  pixels, not the exit code").
+- Module named `generate.py` (not `media.py`): a file sharing its parent
+  directory's name shadows it as a namespace package on import, the same
+  collision that forced the `<domain>_mcp.py` naming.
+- Voice/audio (a separate local toolchain) is out of scope here and tracked as
+  a follow-up.
+
 ## 2026-07-28: Config precedence, completions, and model availability
 
 Three CLI items batched into one review-sized change (all touch command
