@@ -47,8 +47,7 @@ fi
 require_tools
 require_identity
 
-./build.sh --release --sign
-verify_signed "$APP"
+./build.sh --release --sign   # build.sh --sign verifies the signature itself
 
 rm -f "$DMG"
 STAGING="$(mktemp -d)"

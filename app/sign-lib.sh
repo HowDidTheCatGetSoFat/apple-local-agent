@@ -20,12 +20,13 @@ require_identity() {
   case "$ids" in
     *"$SIGN_ID"*) return 0 ;;
   esac
-  printf 'error: signing identity not found in keychain: %s\n' "$SIGN_ID" >&2
-  printf '       available Developer ID Application identities:\n' >&2
-  printf '%s\n' "$ids" | grep -i 'Developer ID Application' >&2 \
-    || printf '       (none)\n' >&2
-  printf '       set FXLLA_SIGN_ID to one of the above, or import the certificate.\n' >&2
-  exit 1
+  local avail
+  avail="$(printf '%s\n' "$ids" | grep -i 'Developer ID Application' || true)"
+  [ -n "$avail" ] || avail="       (none)"
+  _sign_die "signing identity not found in keychain: $SIGN_ID
+       available Developer ID Application identities:
+$avail
+       set FXLLA_SIGN_ID to one of the above, or import the certificate."
 }
 
 # Fail unless the bundle is validly signed with the hardened runtime, which the
