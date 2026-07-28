@@ -104,12 +104,15 @@ Notes:
 
 ## Phase 2: RAG and knowledge bases
 
-- [ ] MLX embeddings (for example `bge-m3` or `nomic-embed`) with a local
-      vector store (`sqlite-vec` or LanceDB).
-- [ ] Per-project knowledge bases (not per model): index folders and docs,
-      attach to any session.
-- [ ] Expose as an MCP server `rag-search` for opencode and Claude Code.
-- [ ] `fxlla kb add|index|ls|rm`.
+Status: v0 delivered (`fxlla kb`). Remaining items are performance and options.
+
+- [x] Local embeddings (nomic-embed via llama.cpp) and a local store (SQLite).
+- [x] Per-project knowledge bases: index folders and docs, attach to any session.
+- [x] MCP server `rag_search` for opencode and Claude Code.
+- [x] `fxlla kb add|search|ls|rm`.
+- [ ] Vector index (`sqlite-vec` or LanceDB) instead of brute-force cosine, and
+      a persistent warm embedding server.
+- [ ] MLX embeddings as an option.
 
 ## Phase 3: Code graph
 
