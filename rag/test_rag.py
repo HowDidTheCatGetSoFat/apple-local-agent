@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 core = importlib.import_module("core")
-mcp_server = importlib.import_module("mcp_server")
+mcp_server = importlib.import_module("rag_mcp")
 
 
 class TestCore(unittest.TestCase):

@@ -38,6 +38,7 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla logs                  Follow the server log
   fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
   fxlla kb add|search|ls|rm   Knowledge bases (RAG) over your files
+  fxlla graph index|def|refs  Code graph over Python (also callers|impact|unused)
   fxlla wire-opencode         Register the local provider in opencode
   fxlla rm <alias>            Delete a downloaded model
   fxlla config                Show the effective configuration
@@ -623,7 +624,7 @@ cmd_rm() {
 cmd_kb() {
   need python3; require_store
   case "${1:-}" in
-    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/rag/mcp_server.py" ;;
+    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/rag/rag_mcp.py" ;;
     wire-opencode) _wire_rag_mcp; return ;;
   esac
   FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
@@ -634,7 +635,7 @@ cmd_kb() {
 _wire_rag_mcp() {
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   mkdir -p "$(dirname "$cfg")"
-  CFG="$cfg" MCP="$REPO_ROOT/rag/mcp_server.py" STORE="$FXLLA_STORE" python3 - <<'PY'
+  CFG="$cfg" MCP="$REPO_ROOT/rag/rag_mcp.py" STORE="$FXLLA_STORE" python3 - <<'PY'
 import os, json
 cfg = os.environ["CFG"]
 try:
@@ -653,6 +654,41 @@ with open(cfg, "w") as f: json.dump(data, f, indent=2)
 print(cfg)
 PY
   ok "RAG MCP registered in opencode. Use rag_search over your knowledge bases."
+}
+
+# --------------------------------------------------------------------------
+# Code graph (delegates to graph/codegraph.py; MCP server for opencode/Claude)
+cmd_graph() {
+  need python3; require_store
+  case "${1:-}" in
+    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/graph/graph_mcp.py" ;;
+    wire-opencode) _wire_graph_mcp; return ;;
+  esac
+  FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/graph/codegraph.py" "$@"
+}
+
+_wire_graph_mcp() {
+  local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+  mkdir -p "$(dirname "$cfg")"
+  CFG="$cfg" MCP="$REPO_ROOT/graph/graph_mcp.py" STORE="$FXLLA_STORE" python3 - <<'PY'
+import os, json
+cfg = os.environ["CFG"]
+try:
+    with open(cfg) as f: data = json.load(f)
+except Exception:
+    data = {}
+data.setdefault("$schema", "https://opencode.ai/config.json")
+mcp = data.setdefault("mcp", {})
+mcp["fxlla-graph"] = {
+    "type": "local",
+    "command": ["python3", os.environ["MCP"]],
+    "environment": {"FXLLA_STORE": os.environ["STORE"]},
+    "enabled": True,
+}
+with open(cfg, "w") as f: json.dump(data, f, indent=2)
+print(cfg)
+PY
+  ok "Code graph MCP registered in opencode. Use find_definition/find_references/find_callers."
 }
 
 # --------------------------------------------------------------------------
@@ -704,6 +740,7 @@ main() {
     logs|log)               cmd_logs "$@" ;;
     ram)                    cmd_ram "$@" ;;
     kb)                     cmd_kb "$@" ;;
+    graph)                  cmd_graph "$@" ;;
     wire-opencode|opencode) cmd_wire_opencode "$@" ;;
     rm|remove)              cmd_rm "$@" ;;
     config)                 cmd_config "$@" ;;

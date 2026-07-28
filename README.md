@@ -164,6 +164,26 @@ Expose it to your tools as an MCP server so any model can call `rag_search`:
 fxlla kb wire-opencode              # register the RAG MCP in opencode
 ```
 
+## Code graph
+
+Index a Python codebase and navigate it structurally: where a symbol is
+defined, where it is referenced, and which functions call it. Uses the standard
+library `ast` and a SQLite store; no dependencies.
+
+```sh
+fxlla graph index .                 # index Python files or directories
+fxlla graph def _db                 # where a symbol is defined
+fxlla graph callers _db             # which functions call it
+fxlla graph refs chunk_text         # where it is referenced
+```
+
+Expose it to your tools as an MCP server (`find_definition`, `find_references`,
+`find_callers`):
+
+```sh
+fxlla graph wire-opencode
+```
+
 ## How it fits together
 
 `fxlla` is the control plane. It serves an OpenAI-compatible endpoint that
