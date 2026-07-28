@@ -51,6 +51,15 @@ VIDEO_STAGES = ("distilled", "one-stage", "two-stage", "two-stages-hq")
 DEFAULT_STAGE = "distilled"
 DEFAULT_FRAME_RATE = 24
 
+# Voice runs through a separate interpreter (FXLLA_VOICE_PYTHON) that has
+# mlx-audio installed, so fxlla itself never imports it. Chatterbox ships no
+# speaker conditionals, so a reference voice wav is required.
+VOICE_PYTHON = os.environ.get("FXLLA_VOICE_PYTHON", "python3")
+VOICE_MODEL = os.environ.get("FXLLA_VOICE_MODEL", "YUGOROU/Chatterbox-Multilingual-MLX-4bit")
+VOICE_REF = os.environ.get("FXLLA_VOICE_REF", "")
+VOICE_LANG = os.environ.get("FXLLA_VOICE_LANG", "en")
+VOICE_BACKEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voice_backend.py")
+
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
@@ -182,6 +191,46 @@ def generate_video(prompt, stage=DEFAULT_STAGE, frames=None,
     return output
 
 
+def build_voice_command(text, output, ref, model=None, lang=None, speed=1.0,
+                        python=None, backend=None):
+    """Assemble the command that runs the voice backend under the mlx-audio
+    interpreter. A reference voice wav is required (the model has no built-in
+    speaker conditionals)."""
+    if not ref:
+        raise ValueError("a reference voice wav is required "
+                         "(set FXLLA_VOICE_REF or pass --ref)")
+    return [python or VOICE_PYTHON, backend or VOICE_BACKEND,
+            "--text", text, "--output", output, "--ref", ref,
+            "--model", model or VOICE_MODEL, "--lang", lang or VOICE_LANG,
+            "--speed", str(speed)]
+
+
+def validate_wav_output(path):
+    """Fail if the output is missing, not a WAV, or implausibly small."""
+    if not os.path.exists(path):
+        raise RuntimeError("no output produced at %s" % path)
+    if os.path.getsize(path) < 1024:
+        raise RuntimeError("output at %s is suspiciously small; likely a failed render" % path)
+    with open(path, "rb") as f:
+        head = f.read(12)
+    if head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+        raise RuntimeError("output at %s is not a WAV" % path)
+
+
+def generate_speech(text, ref=None, lang=None, model=None, speed=1.0, output=None):
+    if not text:
+        raise ValueError("text is required")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    output = output or os.path.join(OUT_DIR, "fxlla-voice-%d.wav" % int(time.time()))
+    cmd = build_voice_command(text, output, ref or VOICE_REF, model=model,
+                              lang=lang, speed=speed)
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr.strip() or "voice generation failed")[-800:])
+    validate_wav_output(output)
+    return output
+
+
 def cmd_image(args):
     path = generate_image(
         args.prompt, model=args.model, steps=args.steps, seed=args.seed,
@@ -196,6 +245,13 @@ def cmd_video(args):
         args.prompt, stage=args.stage, frames=args.frames, frame_rate=args.frame_rate,
         width=args.width, height=args.height, seed=args.seed, low_ram=args.low_ram,
         model=args.model, output=args.output)
+    print(path)
+
+
+def cmd_voice(args):
+    path = generate_speech(
+        args.text, ref=args.ref, lang=args.lang, model=args.model,
+        speed=args.speed, output=args.output)
     print(path)
 
 
@@ -234,9 +290,18 @@ def main():
     vi.add_argument("--low-ram", action="store_true")
     vi.add_argument("--output", "-o")
 
+    vo = sub.add_parser("voice")
+    vo.add_argument("text")
+    vo.add_argument("--ref")
+    vo.add_argument("--lang")
+    vo.add_argument("--model", "-m")
+    vo.add_argument("--speed", type=float, default=1.0)
+    vo.add_argument("--output", "-o")
+
     sub.add_parser("models")
     args = p.parse_args()
-    {"image": cmd_image, "video": cmd_video, "models": cmd_models}[args.cmd](args)
+    {"image": cmd_image, "video": cmd_video, "voice": cmd_voice,
+     "models": cmd_models}[args.cmd](args)
 
 
 if __name__ == "__main__":

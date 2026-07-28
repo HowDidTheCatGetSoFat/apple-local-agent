@@ -44,6 +44,15 @@ TOOLS = [
          "height": {"type": "integer"},
          "seed": {"type": "integer"},
      }, "required": ["prompt"]}},
+    {"name": "generate_speech",
+     "description": "Synthesize speech from text using the local mlx-audio "
+                    "(Chatterbox) toolchain. Returns the path to the WAV.",
+     "inputSchema": {"type": "object", "properties": {
+         "text": {"type": "string"},
+         "ref": {"type": "string", "description": "Reference voice wav (timbre)."},
+         "lang": {"type": "string", "description": "Language code, e.g. en, es, pt."},
+         "speed": {"type": "number"},
+     }, "required": ["text"]}},
 ]
 
 _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
@@ -52,13 +61,15 @@ _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
 _VIDEO_FLAGS = [("stage", "--stage"), ("frames", "--frames"),
                 ("frame_rate", "--frame-rate"), ("width", "--width"),
                 ("height", "--height"), ("seed", "--seed"), ("model", "--model")]
+_VOICE_FLAGS = [("ref", "--ref"), ("lang", "--lang"), ("speed", "--speed"),
+                ("model", "--model")]
 
 
-def _run(subcmd, flags, args):
-    prompt = args.get("prompt")
-    if not prompt:
-        return "error: prompt is required"
-    cmd = [sys.executable, MEDIA, subcmd, str(prompt)]
+def _run(subcmd, positional, flags, args):
+    value = args.get(positional)
+    if not value:
+        return "error: %s is required" % positional
+    cmd = [sys.executable, MEDIA, subcmd, str(value)]
     for key, flag in flags:
         val = args.get(key)
         if val is not None:
@@ -70,11 +81,15 @@ def _run(subcmd, flags, args):
 
 
 def run_generate(args):
-    return _run("image", _IMAGE_FLAGS, args)
+    return _run("image", "prompt", _IMAGE_FLAGS, args)
 
 
 def run_generate_video(args):
-    return _run("video", _VIDEO_FLAGS, args)
+    return _run("video", "prompt", _VIDEO_FLAGS, args)
+
+
+def run_generate_speech(args):
+    return _run("voice", "text", _VOICE_FLAGS, args)
 
 
 def handle(msg):
@@ -92,7 +107,8 @@ def handle(msg):
         params = msg.get("params", {})
         tool = params.get("name")
         runner = {"generate_image": run_generate,
-                  "generate_video": run_generate_video}.get(tool)
+                  "generate_video": run_generate_video,
+                  "generate_speech": run_generate_speech}.get(tool)
         if runner:
             text = runner(params.get("arguments", {}))
             return _ok(mid, {"content": [{"type": "text", "text": text}]})

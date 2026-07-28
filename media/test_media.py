@@ -175,7 +175,7 @@ class TestMCP(unittest.TestCase):
     def test_tools_list(self):
         r = media_mcp.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         self.assertEqual({t["name"] for t in r["result"]["tools"]},
-                         {"generate_image", "generate_video"})
+                         {"generate_image", "generate_video", "generate_speech"})
 
     def test_unknown_tool(self):
         r = media_mcp.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -187,6 +187,58 @@ class TestMCP(unittest.TestCase):
 
     def test_generate_video_requires_prompt(self):
         self.assertTrue(media_mcp.run_generate_video({}).startswith("error"))
+
+    def test_generate_speech_requires_text(self):
+        self.assertTrue(media_mcp.run_generate_speech({}).startswith("error"))
+
+
+class TestBuildVoiceCommand(unittest.TestCase):
+    def test_requires_reference(self):
+        with self.assertRaises(ValueError):
+            media.build_voice_command("hola", "/o.wav", ref="")
+
+    def test_builds_backend_invocation(self):
+        cmd = media.build_voice_command("hola", "/o.wav", ref="/r.wav",
+                                        model="repo/x", lang="es", speed=1.1,
+                                        python="/venv/bin/python", backend="/b.py")
+        self.assertEqual(cmd[0], "/venv/bin/python")
+        self.assertEqual(cmd[1], "/b.py")
+        self.assertEqual(cmd[cmd.index("--text") + 1], "hola")
+        self.assertEqual(cmd[cmd.index("--ref") + 1], "/r.wav")
+        self.assertEqual(cmd[cmd.index("--lang") + 1], "es")
+        self.assertEqual(cmd[cmd.index("--model") + 1], "repo/x")
+        self.assertEqual(cmd[cmd.index("--speed") + 1], "1.1")
+
+    def test_empty_text_raises(self):
+        with self.assertRaises(ValueError):
+            media.generate_speech("", ref="/r.wav")
+
+
+class TestValidateWavOutput(unittest.TestCase):
+    def test_missing(self):
+        with self.assertRaises(RuntimeError):
+            media.validate_wav_output("/no/such.wav")
+
+    def test_not_wav(self):
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(b"\x00" * 4096)
+            path = f.name
+        try:
+            with self.assertRaises(RuntimeError):
+                media.validate_wav_output(path)
+        finally:
+            os.unlink(path)
+
+    def test_valid_wav_passes(self):
+        import wave
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "ok.wav")
+            with wave.open(path, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(24000)
+                w.writeframes(b"\x00\x01" * 2048)
+            media.validate_wav_output(path)  # must not raise
 
 
 if __name__ == "__main__":
