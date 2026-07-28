@@ -5,6 +5,7 @@ struct PanelView: View {
     @ObservedObject var model: StatusModel
 
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 10) {
             Text("fxlla").font(.headline)
             Text(model.summary)
@@ -87,6 +88,8 @@ struct PanelView: View {
             .disabled(model.busy)
         }
         .padding(12)
+        }
         .frame(width: 320)
+        .frame(maxHeight: 520)
     }
 }
