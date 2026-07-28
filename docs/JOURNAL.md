@@ -2,6 +2,16 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-28: Model availability and consent
+
+Decided the responsibility split for downloading a model that is not cached.
+The tool exposes availability in machine-readable form and makes downloads
+explicit (no silent large pulls; `on` fails fast or opts in with `--pull`).
+The skill or agent owns the offer and consent flow, since only it has the
+conversation context to ask. The system prompt sets the thresholds. See
+ROADMAP "Design principle: model availability and consent". Tracked as an
+issue for the machine-readable status and the offer flow.
+
 ## 2026-07-28: Project start
 
 Goal: run the best open-weights models locally on a MacBook Pro M5 Max

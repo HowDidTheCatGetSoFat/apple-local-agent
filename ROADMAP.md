@@ -27,6 +27,24 @@ The CLI is the single source of truth. The app and the MCP servers are thin
 facades that call the CLI and read its state. All the heavy logic (download,
 serve, limits) lives and is tested in one place.
 
+## Design principle: model availability and consent
+
+A requested model may be cached or may need downloading. Whose job it is to
+offer the download is split across layers, and the rule is that the tool never
+surprises the user with a large download.
+
+- Tool (`fxlla` and the MCP servers): expose availability in a machine-readable
+  form (cached, size, engine) and make downloading an explicit action. `on`
+  never silently pulls a large model; it fails fast with a structured
+  not-cached signal, or downloads only under an explicit opt-in
+  (`on --pull`). Downloads report size and estimated time at the current cap.
+- Skill or agent: owns the offer and the consent flow. It checks availability,
+  presents size and time (and any cheaper cached alternative), asks the user,
+  then pulls with progress and serves. Only the agent has the conversation
+  context to ask.
+- System prompt: sets the policy and thresholds (for example, auto-download
+  under a small size, always confirm above a limit, prefer cached models).
+
 ## Phase 0: Foundations (done, v0.1.0)
 
 - [x] `fxlla` CLI, dual MLX + GGUF engine, bandwidth-capped downloads.
