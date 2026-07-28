@@ -13,6 +13,22 @@ struct PanelView: View {
                 .lineLimit(5)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if !model.resident.isEmpty {
+                Divider()
+                ForEach(model.resident) { m in
+                    HStack {
+                        Text(m.alias).font(.caption.bold())
+                        Spacer()
+                        Text(String(format: "%.1f GB", m.sizeMB / 1024))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(String(format: "budget %.0f GB", model.budgetGB))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
             if !model.samples.isEmpty {
                 Divider()
                 ChartsView(samples: model.samples)

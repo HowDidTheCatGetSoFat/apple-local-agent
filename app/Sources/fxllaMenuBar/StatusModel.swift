@@ -7,6 +7,8 @@ final class StatusModel: ObservableObject {
     @Published var running = false
     @Published var summary = "Loading..."
     @Published var samples: [StatsSample] = []
+    @Published var resident: [ResidentModel] = []
+    @Published var budgetGB: Double = 0
 
     private var timer: Timer?
 
@@ -27,10 +29,13 @@ final class StatusModel: ObservableObject {
             let clean = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines)
             let isRunning = clean.localizedCaseInsensitiveContains("running")
             let samples = Stats.recent()
+            let health = Gateway.health()
             await MainActor.run {
                 self.running = isRunning
                 self.summary = clean.isEmpty ? "fxlla not found or no output" : clean
                 self.samples = samples
+                self.resident = health?.resident ?? []
+                self.budgetGB = (health?.budgetMB ?? 0) / 1024
             }
         }
     }
