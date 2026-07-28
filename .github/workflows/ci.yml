@@ -7,12 +7,14 @@ on:
       - "bin/**"
       - "lib/**"
       - "**/*.sh"
+      - "rag/**"
       - ".github/workflows/ci.yml"
   pull_request:
     paths:
       - "bin/**"
       - "lib/**"
       - "**/*.sh"
+      - "rag/**"
       - ".github/workflows/ci.yml"
 
 concurrency:
@@ -40,3 +42,13 @@ jobs:
           additional_files: "fxlla"
         env:
           SHELLCHECK_OPTS: -e SC1090 -e SC1091
+
+  rag:
+    name: RAG tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests
+        run: FXLLA_STORE=/tmp python3 -m unittest rag.test_rag -v
