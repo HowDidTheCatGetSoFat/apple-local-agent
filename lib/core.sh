@@ -14,8 +14,18 @@ need() { command -v "$1" >/dev/null 2>&1 || die "Missing '$1'. Run: fxlla setup"
 
 # --- configuration --------------------------------------------------------
 # Precedence: already-exported vars > ~/.config/fxlla/config.env > defaults.
+# config.env uses plain assignments, which would otherwise clobber a value the
+# user exported in the shell. To honour the precedence, snapshot the config
+# vars already exported, source the file, then re-apply the snapshot so the
+# environment wins. (This runs under bash: bin/fxlla re-execs if not.)
 _user_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/fxlla/config.env"
-[ -f "$_user_cfg" ] && . "$_user_cfg"
+if [ -f "$_user_cfg" ]; then
+  _saved_env="$(export -p | grep -E '^declare -x (FXLLA_[A-Za-z0-9_]*|HF_TOKEN)=' || true)"
+  # shellcheck source=/dev/null
+  . "$_user_cfg"
+  [ -n "$_saved_env" ] && eval "$_saved_env"
+  unset _saved_env
+fi
 
 : "${FXLLA_STORE:=/Volumes/1TB-WD750-1/llm}"
 : "${FXLLA_RATE_MBIT:=25}"
