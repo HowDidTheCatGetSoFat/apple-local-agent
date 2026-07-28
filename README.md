@@ -231,19 +231,21 @@ fxlla graph wire-opencode
 
 ## Media generation
 
-Generate images and short videos locally. Images use the mflux-cv toolchain,
-video uses `ltx-2-mlx` (LTX-2.3):
+Generate images, short videos, and speech locally. Images use the mflux-cv
+toolchain, video uses `ltx-2-mlx` (LTX-2.3), speech uses mlx-audio (Chatterbox):
 
 ```sh
 fxlla media models                                  # supported image models
 fxlla media image "a red sailboat at sunset" --seed 42
 fxlla media video "a sailboat at sunset, gentle waves" \
     --frames 49 --width 768 --height 512 --frame-rate 24
+fxlla media voice "Hello from a local voice." --ref reference-voice.wav
 ```
 
-Set `FXLLA_VIDEO_BIN` to your `ltx-2-mlx` binary (it usually lives in a project
-venv) and `FXLLA_MEDIA_HF_HOME` to the cache holding the image weights. Expose
-both as MCP tools (`generate_image`, `generate_video`):
+Point `FXLLA_VIDEO_BIN` at your `ltx-2-mlx` binary and `FXLLA_VOICE_PYTHON` at an
+interpreter with `mlx-audio` (both usually live in a project venv), and
+`FXLLA_MEDIA_HF_HOME` at the weight cache. Expose all three as MCP tools
+(`generate_image`, `generate_video`, `generate_speech`):
 
 ```sh
 fxlla media wire-opencode
