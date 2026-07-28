@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RAG = os.path.join(HERE, "rag.py")
+RAG = os.path.join(HERE, "core.py")
 
 TOOLS = [{
     "name": "rag_search",

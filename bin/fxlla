@@ -619,7 +619,7 @@ cmd_rm() {
 }
 
 # --------------------------------------------------------------------------
-# RAG knowledge bases (delegates to rag/rag.py; MCP server for opencode/Claude)
+# RAG knowledge bases (delegates to rag/core.py; MCP server for opencode/Claude)
 cmd_kb() {
   need python3; require_store
   case "${1:-}" in
@@ -627,7 +627,7 @@ cmd_kb() {
     wire-opencode) _wire_rag_mcp; return ;;
   esac
   FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
-    python3 "$REPO_ROOT/rag/rag.py" "$@"
+    python3 "$REPO_ROOT/rag/core.py" "$@"
 }
 
 # register the RAG MCP server in opencode's config
