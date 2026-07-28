@@ -47,6 +47,10 @@ surprises the user with a large download.
 
 ## Multi-model gateway (router)
 
+Status: v0 delivered (`fxlla serve` / `fxlla unserve`) with aggregated
+`/v1/models`, on-demand load, and LRU eviction under a RAM budget. Passive
+real-traffic metrics (the MLX gap in the stats work) build on this next.
+
 Serving evolves from one model at a time to a single endpoint that fronts
 many. This reconciles the two obvious designs into one: a single unified
 channel (one endpoint, one aggregated model list) and on-demand loading (the

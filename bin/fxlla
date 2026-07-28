@@ -29,8 +29,10 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla pull <alias|org/repo> Download a model, capped at ${FXLLA_RATE_MBIT} Mbps
        [--gguf] [--quant Q4_K_M]
   fxlla ls                    List downloaded models
-  fxlla on [alias]            Start the server (default: $FXLLA_DEFAULT_MODEL)
-  fxlla off                   Stop the server
+  fxlla on [alias]            Start a single-model server (default: $FXLLA_DEFAULT_MODEL)
+  fxlla off                   Stop the single-model server
+  fxlla serve                 Multi-model gateway: one endpoint, load on demand
+  fxlla unserve               Stop the gateway
   fxlla status                Server, model, and idle status
   fxlla stats [--watch]       Live metrics: RAM, TTFT, tok/s (also --json)
   fxlla logs                  Follow the server log
@@ -262,6 +264,93 @@ cmd_wire_opencode() {
   info "Provider 'local' -> $BASE_URL (the active model is registered on 'fxlla on')."
 }
 
+# register every downloaded model under the opencode 'local' provider (gateway mode)
+_sync_opencode_all() {
+  local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+  mkdir -p "$(dirname "$cfg")"
+  BASE_URL="$BASE_URL" MODELS_DIR="$MODELS_DIR" CFG="$cfg" python3 - <<'PY'
+import os, json
+cfg = os.environ["CFG"]; md = os.environ["MODELS_DIR"]
+try:
+    with open(cfg) as f: data = json.load(f)
+except Exception:
+    data = {}
+data.setdefault("$schema", "https://opencode.ai/config.json")
+loc = data.setdefault("provider", {}).setdefault("local", {})
+loc["npm"] = "@ai-sdk/openai-compatible"
+loc["name"] = "Local (fxlla gateway)"
+loc.setdefault("options", {})["baseURL"] = os.environ["BASE_URL"]
+models = {}
+if os.path.isdir(md):
+    for n in sorted(os.listdir(md)):
+        if os.path.exists(os.path.join(md, n, ".source")):
+            models[n] = {"name": "%s (local)" % n}
+loc["models"] = models
+with open(cfg, "w") as f: json.dump(data, f, indent=2)
+PY
+}
+
+# --------------------------------------------------------------------------
+# multi-model gateway: one endpoint routing to per-model backends on demand
+cmd_serve() {
+  need python3; require_store
+  server_alive && die "A single-model server is running on $FXLLA_PORT. Run 'fxlla off' first."
+  if gateway_alive; then warn "Gateway already running (pid $(gateway_pid))."; return 1; fi
+  info "Starting gateway at $BASE_URL (multi-model, on-demand load + LRU eviction)..."
+  FXLLA_HOST="$FXLLA_HOST" FXLLA_PORT="$FXLLA_PORT" FXLLA_STORE="$FXLLA_STORE" \
+    FXLLA_BACKEND_PORT_BASE="${FXLLA_BACKEND_PORT_BASE:-8100}" \
+    FXLLA_GATEWAY_BUDGET_MB="${FXLLA_GATEWAY_BUDGET_MB:-}" \
+    FXLLA_BIN="$SELF" \
+    nohup python3 "$REPO_ROOT/gateway/fxlla_gateway.py" > "$GATEWAY_LOG" 2>&1 &
+  echo $! > "$GATEWAY_PID"
+  local _
+  for _ in $(seq 1 30); do
+    if curl -sf "http://$FXLLA_HOST:$FXLLA_PORT/health" >/dev/null 2>&1; then
+      _sync_opencode_all
+      ok "Gateway up at $BASE_URL"
+      info "Models: $(curl -s "http://$FXLLA_HOST:$FXLLA_PORT/v1/models" | python3 -c 'import sys,json;print(", ".join(m["id"] for m in json.load(sys.stdin)["data"]))' 2>/dev/null)"
+      ok "In opencode: provider 'local', pick any model. The first request loads it."
+      return 0
+    fi
+    gateway_alive || { warn "Gateway died on start:"; tail -n 20 "$GATEWAY_LOG" >&2; rm -f "$GATEWAY_PID"; return 1; }
+    sleep 1
+  done
+  warn "Gateway not ready in time. Check: tail -f $GATEWAY_LOG"; return 1
+}
+
+cmd_unserve() {
+  if gateway_alive; then
+    local p; p="$(gateway_pid)"
+    kill "$p" 2>/dev/null || true; sleep 2
+    kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null || true
+    rm -f "$GATEWAY_PID"
+    ok "Gateway stopped (backends unloaded)."
+  else
+    warn "No gateway running."; rm -f "$GATEWAY_PID"
+  fi
+}
+
+# internal: run one model server in the foreground on a port (spawned by the gateway)
+cmd_backend() {
+  require_store
+  local q="${1:-}" port="${2:-}"
+  [ -n "$q" ] && [ -n "$port" ] || die "usage: fxlla _backend <alias> <port>"
+  local name; name="$(local_name "$q")"
+  local dest="$MODELS_DIR/$name"
+  [ -d "$dest" ] || die "not downloaded: $name"
+  local engine=mlx; [ -f "$dest/.engine" ] && engine="$(cat "$dest/.engine")"
+  if [ "$engine" = gguf ]; then
+    local entry; entry="$(cat "$dest/.entry" 2>/dev/null || true)"
+    if [ -z "$entry" ]; then local f; for f in "$dest"/*.gguf; do [ -e "$f" ] && { entry="$(basename "$f")"; break; }; done; fi
+    [ -z "$entry" ] && die "No .gguf found in $dest"
+    # shellcheck disable=SC2086
+    exec llama-server --model "$dest/$entry" --alias "$name" --host 127.0.0.1 --port "$port" -ngl "$FXLLA_NGL" -c "$FXLLA_CTX" --jinja $FXLLA_SERVER_ARGS
+  else
+    # shellcheck disable=SC2086
+    exec mlx_lm.server --model "$dest" --host 127.0.0.1 --port "$port" $FXLLA_SERVER_ARGS
+  fi
+}
+
 # --------------------------------------------------------------------------
 cmd_on() {
   require_store
@@ -283,6 +372,7 @@ cmd_on() {
   [ -z "$engine" ] && [ -f "$dest/.engine" ] && engine="$(cat "$dest/.engine")"
   [ -z "$engine" ] && engine=mlx
 
+  gateway_alive && die "The gateway is running on $FXLLA_PORT. Use it (it loads models on demand), or run 'fxlla unserve' first."
   server_alive && { warn "A server is already running (pid $(server_pid)). Run 'fxlla off' first."; return 1; }
 
   # warn if the model does not fit the current RAM limit
@@ -357,6 +447,15 @@ cmd_off() {
 }
 
 cmd_status() {
+  if gateway_alive; then
+    ok "* Gateway running (pid $(gateway_pid)) at $BASE_URL"
+    curl -s "http://$FXLLA_HOST:$FXLLA_PORT/health" 2>/dev/null | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+r=d.get("resident",[])
+print("  resident:", ", ".join("%s (%d MB, idle %ds)"%(b["alias"],b["size_mb"],b["idle_s"]) for b in r) or "(none loaded yet)")
+print("  budget:", d.get("budget_mb"), "MB")' 2>/dev/null || warn "  gateway not responding yet"
+    return 0
+  fi
   if server_alive; then
     ok "* Server running (pid $(server_pid))"
     if [ -f "$CURRENT_FILE" ]; then
@@ -558,6 +657,9 @@ main() {
     ls|list)                cmd_ls "$@" ;;
     on|start)               cmd_on "$@" ;;
     off|stop)               cmd_off "$@" ;;
+    serve)                  cmd_serve "$@" ;;
+    unserve)                cmd_unserve "$@" ;;
+    _backend)               cmd_backend "$@" ;;
     status|st)              cmd_status "$@" ;;
     stats)                  cmd_stats "$@" ;;
     doctor)                 cmd_doctor "$@" ;;

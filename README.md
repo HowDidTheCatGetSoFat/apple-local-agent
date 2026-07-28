@@ -111,6 +111,29 @@ The change reverts on reboot.
 `FXLLA_KEEP_WARM` (minutes, default 10) stops the server after that idle time
 to free RAM. Set `0` to disable. `fxlla status` shows the idle timer.
 
+## Multi-model gateway
+
+`fxlla on` serves one model. `fxlla serve` starts a gateway: a single
+OpenAI-compatible endpoint that fronts every downloaded model.
+
+```sh
+fxlla serve                 # start the gateway on 127.0.0.1:8080
+fxlla status                # gateway, resident models, RAM budget
+fxlla unserve               # stop it (unloads all backends)
+```
+
+`GET /v1/models` lists every downloaded model. A request picks one by name:
+
+```sh
+curl -s localhost:8080/v1/chat/completions -d '{"model":"qwen3-coder", ...}'
+```
+
+The gateway loads the requested model on demand, keeps several small models
+resident for instant switching, and evicts the least-recently-used one when a
+load would exceed the RAM budget (`FXLLA_GATEWAY_BUDGET_MB`, derived from the
+GPU limit by default). In opencode you pick any local model from the `local`
+provider and the gateway handles loading.
+
 ## How it fits together
 
 `fxlla` is the control plane. It serves an OpenAI-compatible endpoint that
