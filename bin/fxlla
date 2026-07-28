@@ -191,7 +191,7 @@ cmd_ls() {
     eng="mlx"; [ -f "$d/.engine" ] && eng="$(cat "$d/.engine")"
     printf "%-28s %-7s %-5s %s\n" "$n" "$sz" "$eng" "$([ -f "$d/.source" ] && cat "$d/.source")"
   done
-  [ "$found" = 0 ] && warn "No models downloaded yet. Try: fxlla pull tiny"
+  if [ "$found" = 0 ]; then warn "No models downloaded yet. Try: fxlla pull tiny"; fi
 }
 
 # --------------------------------------------------------------------------
