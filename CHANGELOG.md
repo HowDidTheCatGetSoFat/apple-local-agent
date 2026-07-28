@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- RAG knowledge bases (`fxlla kb add|search|ls|rm`): index files locally with a
+  small embedding model (llama.cpp) into a SQLite store and search by cosine
+  similarity. Exposed to opencode and Claude Code as an MCP server (`rag_search`)
+  via `fxlla kb wire-opencode`.
 - Menu bar app (`app/`, SwiftUI `MenuBarExtra`): live `fxlla status`,
   time-series charts for tokens/s, TTFT, and RAM (GB), gateway start/stop,
   model list with on-demand load, and a GPU RAM limit toggle. Builds to a

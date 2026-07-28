@@ -37,6 +37,7 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla stats [--watch]       Live metrics: RAM, TTFT, tok/s (also --json)
   fxlla logs                  Follow the server log
   fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
+  fxlla kb add|search|ls|rm   Knowledge bases (RAG) over your files
   fxlla wire-opencode         Register the local provider in opencode
   fxlla rm <alias>            Delete a downloaded model
   fxlla config                Show the effective configuration
@@ -146,7 +147,7 @@ cmd_pull() {
       echo "$ggufs" | while IFS= read -r l; do echo "  $l"; done >&2
       die "Recommended for this RAM: Q4_K_M (balanced) or Q5_K_M / Q6_K (higher quality)."
     fi
-    local entry; entry="$(echo "$sel" | grep -- '-00001-of-' | head -1)"
+    local entry; entry="$(echo "$sel" | grep -- '-00001-of-' | head -1 || true)"
     [ -z "$entry" ] && entry="$(echo "$sel" | head -1)"
     echo "gguf" > "$dest/.engine"; basename "$entry" > "$dest/.entry"
   else
@@ -618,6 +619,43 @@ cmd_rm() {
 }
 
 # --------------------------------------------------------------------------
+# RAG knowledge bases (delegates to rag/core.py; MCP server for opencode/Claude)
+cmd_kb() {
+  need python3; require_store
+  case "${1:-}" in
+    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/rag/mcp_server.py" ;;
+    wire-opencode) _wire_rag_mcp; return ;;
+  esac
+  FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
+    python3 "$REPO_ROOT/rag/core.py" "$@"
+}
+
+# register the RAG MCP server in opencode's config
+_wire_rag_mcp() {
+  local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+  mkdir -p "$(dirname "$cfg")"
+  CFG="$cfg" MCP="$REPO_ROOT/rag/mcp_server.py" STORE="$FXLLA_STORE" python3 - <<'PY'
+import os, json
+cfg = os.environ["CFG"]
+try:
+    with open(cfg) as f: data = json.load(f)
+except Exception:
+    data = {}
+data.setdefault("$schema", "https://opencode.ai/config.json")
+mcp = data.setdefault("mcp", {})
+mcp["fxlla-rag"] = {
+    "type": "local",
+    "command": ["python3", os.environ["MCP"]],
+    "environment": {"FXLLA_STORE": os.environ["STORE"]},
+    "enabled": True,
+}
+with open(cfg, "w") as f: json.dump(data, f, indent=2)
+print(cfg)
+PY
+  ok "RAG MCP registered in opencode. Use rag_search over your knowledge bases."
+}
+
+# --------------------------------------------------------------------------
 # keep-warm: watchdog that auto-stops after N idle minutes with no requests
 _start_watchdog() {
   [ "${FXLLA_KEEP_WARM:-0}" -gt 0 ] || return 0
@@ -665,6 +703,7 @@ main() {
     doctor)                 cmd_doctor "$@" ;;
     logs|log)               cmd_logs "$@" ;;
     ram)                    cmd_ram "$@" ;;
+    kb)                     cmd_kb "$@" ;;
     wire-opencode|opencode) cmd_wire_opencode "$@" ;;
     rm|remove)              cmd_rm "$@" ;;
     config)                 cmd_config "$@" ;;

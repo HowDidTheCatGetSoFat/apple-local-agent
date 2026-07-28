@@ -145,6 +145,25 @@ load, and a GPU RAM toggle. It is a thin front end over the CLI. See
 app/build.sh && open app/fxlla.app
 ```
 
+## Knowledge bases (RAG)
+
+Index your files into a local knowledge base and search them semantically. It
+uses a small local embedding model (the `embed` catalog model, via llama.cpp)
+and a SQLite store; nothing leaves the machine.
+
+```sh
+fxlla pull embed --quant Q5_K_M     # one-time: the embedding model (~100 MB)
+fxlla kb add docs ./docs README.md  # index files or directories
+fxlla kb search docs "how does eviction work"
+fxlla kb ls
+```
+
+Expose it to your tools as an MCP server so any model can call `rag_search`:
+
+```sh
+fxlla kb wire-opencode              # register the RAG MCP in opencode
+```
+
 ## How it fits together
 
 `fxlla` is the control plane. It serves an OpenAI-compatible endpoint that
