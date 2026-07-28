@@ -95,6 +95,14 @@ struct PanelView: View {
                 Button(L.t("Quit")) { NSApplication.shared.terminate(nil) }
             }
             .disabled(model.busy)
+
+            HStack {
+                Text("fxlla " + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""))
+                Spacer()
+                Text(Gateway.base)
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
         }
         .padding(12)
         }
