@@ -307,6 +307,8 @@ class Handler(BaseHTTPRequestHandler):
         upstream = "http://127.0.0.1:%d%s" % (port, self.path)
         req = urllib.request.Request(upstream, data=payload,
                                      headers={"Content-Type": "application/json"})
+        measure = metrics.is_completion_path(self.path)
+        start = time.monotonic()
         try:
             resp = urllib.request.urlopen(req, timeout=600)
         except urllib.error.HTTPError as e:
@@ -327,16 +329,53 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
+        streaming = "event-stream" in ctype
+        sm = metrics.StreamMetrics(start) if (measure and streaming) else None
+        buf = bytearray() if (measure and not streaming) else None
         try:
             while True:
                 chunk = resp.read(1024)
                 if not chunk:
                     break
+                if sm is not None:
+                    try:
+                        sm.feed(chunk)
+                    except Exception:
+                        sm = None  # never let metrics break the proxy
+                elif buf is not None and len(buf) < 512 * 1024:
+                    buf.extend(chunk)
                 self.wfile.write(b"%X\r\n%s\r\n" % (len(chunk), chunk))
                 self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n")
         except Exception:
             pass
+        if measure:
+            self._record(alias, start, sm, bytes(buf) if buf is not None else None)
+
+    def _record(self, alias, start, sm, body_bytes):
+        """Append one passive metrics sample derived from a completed request.
+
+        Best-effort: any failure here is logged and swallowed so telemetry never
+        affects the proxied response."""
+        try:
+            end = time.monotonic()
+            if sm is not None:
+                ttft_ms, tps, tokens = sm.result(end)
+            elif body_bytes is not None:
+                tokens = metrics.usage_from_json(body_bytes)
+                ttft_ms = None
+                tps = round(tokens / (end - start), 1) if tokens and end > start else None
+            else:
+                return
+            if not tokens:
+                return  # nothing generated (e.g. an error body): do not record
+            pid = MANAGER.backend_pid(alias)
+            ram = rss_mb(pid) if pid else 0
+            sample = metrics.build_sample(
+                time.time(), alias, engine_for(alias), ram, ttft_ms, tps)
+            metrics.append_sample(metrics.stats_file(), sample)
+        except Exception as e:
+            log("metrics: %s" % e)
 
 
 def _term(signum, frame):
