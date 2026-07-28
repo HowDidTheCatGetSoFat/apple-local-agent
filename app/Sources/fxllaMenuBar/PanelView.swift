@@ -29,20 +29,20 @@ struct PanelView: View {
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         } else {
-                            Button("Load") { model.load(m.alias) }
+                            Button(L.t("Load")) { model.load(m.alias) }
                                 .font(.caption)
                                 .buttonStyle(.borderless)
                         }
                     }
                 }
-                Text(String(format: "budget %.0f GB", model.budgetGB))
+                Text("\(L.t("budget")) " + String(format: "%.0f GB", model.budgetGB))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
 
             if !model.downloadable.isEmpty {
                 Divider()
-                Text("Download").font(.caption2).foregroundStyle(.tertiary)
+                Text(L.t("Download")).font(.caption2).foregroundStyle(.tertiary)
                 ForEach(model.downloadable) { c in
                     HStack {
                         Text(c.alias).font(.caption)
@@ -51,7 +51,7 @@ struct PanelView: View {
                         if model.pulling.contains(c.alias) {
                             ProgressView().controlSize(.small)
                         } else {
-                            Button("Pull") { model.pull(c.alias) }
+                            Button(L.t("Pull")) { model.pull(c.alias) }
                                 .font(.caption)
                                 .buttonStyle(.borderless)
                         }
@@ -66,24 +66,24 @@ struct PanelView: View {
 
             Divider()
             HStack {
-                Text("GPU RAM").font(.caption).foregroundStyle(.secondary)
+                Text(L.t("GPU RAM")).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Max") { model.ramAuto() }
-                Button("Default") { model.ramReset() }
+                Button(L.t("Max")) { model.ramAuto() }
+                Button(L.t("Default")) { model.ramReset() }
             }
             .font(.caption)
             .disabled(model.busy)
 
             HStack {
                 if model.running {
-                    Button("Stop gateway") { model.stopGateway() }
+                    Button(L.t("Stop gateway")) { model.stopGateway() }
                 } else {
-                    Button("Start gateway") { model.startGateway() }
+                    Button(L.t("Start gateway")) { model.startGateway() }
                 }
                 if model.busy { ProgressView().controlSize(.small) }
-                Button("Refresh") { model.refresh() }
+                Button(L.t("Refresh")) { model.refresh() }
                 Spacer()
-                Button("Quit") { NSApplication.shared.terminate(nil) }
+                Button(L.t("Quit")) { NSApplication.shared.terminate(nil) }
             }
             .disabled(model.busy)
         }
