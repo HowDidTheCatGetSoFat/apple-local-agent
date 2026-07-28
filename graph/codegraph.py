@@ -16,6 +16,7 @@ Usage (normally driven via `fxlla graph`):
 """
 import argparse
 import ast
+import json
 import os
 import sqlite3
 import sys
@@ -132,16 +133,45 @@ def cmd_rm(_args):
     print("graph cleared")
 
 
-def cmd_def(_args):
-    sys.exit("def: not implemented yet")
+def _emit(args, items, fmt):
+    if getattr(args, "json", False):
+        print(json.dumps(items))
+        return
+    if not items:
+        print("(none)")
+        return
+    for it in items:
+        print(fmt(it))
 
 
-def cmd_refs(_args):
-    sys.exit("refs: not implemented yet")
+def cmd_def(args):
+    con = _db()
+    rows = con.execute(
+        "SELECT qualname, kind, file, line FROM defs WHERE name=? OR qualname=? "
+        "ORDER BY file, line", (args.name, args.name)).fetchall()
+    _emit(args,
+          [{"qualname": q, "kind": k, "file": f, "line": ln} for q, k, f, ln in rows],
+          lambda r: f"{r['kind']:8} {r['qualname']}  {r['file']}:{r['line']}")
 
 
-def cmd_callers(_args):
-    sys.exit("callers: not implemented yet")
+def cmd_refs(args):
+    con = _db()
+    rows = con.execute(
+        "SELECT file, line, caller FROM refs WHERE name=? ORDER BY file, line",
+        (args.name,)).fetchall()
+    _emit(args,
+          [{"file": f, "line": ln, "caller": c} for f, ln, c in rows],
+          lambda r: f"{r['file']}:{r['line']}" + (f"  in {r['caller']}" if r['caller'] else ""))
+
+
+def cmd_callers(args):
+    con = _db()
+    rows = con.execute(
+        "SELECT DISTINCT caller, file FROM refs WHERE name=? AND caller<>'' "
+        "ORDER BY caller", (args.name,)).fetchall()
+    _emit(args,
+          [{"caller": c, "file": f} for c, f in rows],
+          lambda r: f"{r['caller']}  ({r['file']})")
 
 
 def main():
