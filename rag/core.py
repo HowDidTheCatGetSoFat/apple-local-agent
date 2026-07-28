@@ -139,7 +139,7 @@ def _gather(paths):
     for p in paths:
         if os.path.isdir(p):
             for root, _dirs, names in os.walk(p):
-                if os.sep + ".git" in root:
+                if (os.sep + ".git" + os.sep) in (root + os.sep) or root.endswith(os.sep + ".git"):
                     continue
                 for n in names:
                     if os.path.splitext(n)[1].lower() in TEXT_EXTS:
@@ -159,14 +159,16 @@ def cmd_add(args):
     with Embedder() as emb:
         for f in files:
             try:
-                text = open(f, encoding="utf-8", errors="ignore").read()
+                with open(f, encoding="utf-8", errors="ignore") as fh:
+                    text = fh.read()
             except Exception:
                 continue
             chunks = chunk_text(text)
             if not chunks:
                 continue
-            con.execute("DELETE FROM chunks WHERE kb=? AND source=?", (args.name, f))
+            # embed first: on failure the existing chunks are left intact
             vecs = emb.embed(chunks)
+            con.execute("DELETE FROM chunks WHERE kb=? AND source=?", (args.name, f))
             con.executemany(
                 "INSERT INTO chunks VALUES (?,?,?,?,?)",
                 [(args.name, f, i, c, _pack(v)) for i, (c, v) in enumerate(zip(chunks, vecs))],
