@@ -31,8 +31,8 @@ Built for M-series Macs with large unified memory. Validated on M5 Max
 ## Install
 
 ```sh
-git clone https://github.com/HowDidTheCatGetSoFat/apple-local-agent.git
-cd apple-local-agent
+git clone https://github.com/HowDidTheCatGetSoFat/fxlla.git
+cd fxlla
 ln -sf "$PWD/bin/fxlla" ~/.local/bin/fxlla
 mkdir -p ~/.config/fxlla && cp config/config.env.example ~/.config/fxlla/config.env
 fxlla setup
