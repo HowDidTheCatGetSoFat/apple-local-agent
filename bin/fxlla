@@ -37,6 +37,7 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla stats [--watch]       Live metrics: RAM, TTFT, tok/s (also --json)
   fxlla logs                  Follow the server log
   fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
+  fxlla kb add|search|ls|rm   Knowledge bases (RAG) over your files
   fxlla wire-opencode         Register the local provider in opencode
   fxlla rm <alias>            Delete a downloaded model
   fxlla config                Show the effective configuration
@@ -618,6 +619,14 @@ cmd_rm() {
 }
 
 # --------------------------------------------------------------------------
+# RAG knowledge bases (delegates to rag/rag.py)
+cmd_kb() {
+  need python3; require_store
+  FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
+    python3 "$REPO_ROOT/rag/rag.py" "$@"
+}
+
+# --------------------------------------------------------------------------
 # keep-warm: watchdog that auto-stops after N idle minutes with no requests
 _start_watchdog() {
   [ "${FXLLA_KEEP_WARM:-0}" -gt 0 ] || return 0
@@ -665,6 +674,7 @@ main() {
     doctor)                 cmd_doctor "$@" ;;
     logs|log)               cmd_logs "$@" ;;
     ram)                    cmd_ram "$@" ;;
+    kb)                     cmd_kb "$@" ;;
     wire-opencode|opencode) cmd_wire_opencode "$@" ;;
     rm|remove)              cmd_rm "$@" ;;
     config)                 cmd_config "$@" ;;
