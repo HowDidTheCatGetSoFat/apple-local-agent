@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Syntax check
-        run: bash -n bin/fxlla lib/core.sh tests/test_config.sh tests/test_completions.sh
+        run: bash -n bin/fxlla lib/core.sh tests/test_config.sh tests/test_completions.sh tests/test_avail.sh
 
       - name: ShellCheck
         uses: ludeeus/action-shellcheck@master
@@ -50,6 +50,9 @@ jobs:
 
       - name: Completion tests
         run: bash tests/test_completions.sh
+
+      - name: Availability tests
+        run: bash tests/test_avail.sh
         env:
           SHELLCHECK_OPTS: -e SC1090 -e SC1091
 
