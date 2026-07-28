@@ -15,6 +15,8 @@ Config via environment:
   FXLLA_BACKEND_PORT_BASE       first internal backend port (default 8100)
   FXLLA_GATEWAY_BUDGET_MB       resident RAM budget (default: ~GPU reservable)
   FXLLA_BIN                     path to the fxlla CLI (default: fxlla on PATH)
+  FXLLA_STATS_FILE              passive metrics time-series (default: the CLI's
+                                stats.jsonl under the state dir)
 """
 
 import json

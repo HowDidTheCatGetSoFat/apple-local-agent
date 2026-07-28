@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- Passive gateway metrics: the multi-model gateway now derives time to first
+  token and tokens per second from real proxied traffic (streamed SSE or a
+  response's `usage`) and appends samples to the same `stats.jsonl` time-series
+  the menu bar app renders, so charts reflect actual usage rather than only a
+  synthetic probe. `fxlla stats [--watch]` reads these samples when the gateway
+  is serving.
 - Code graph (`fxlla graph index|def|refs|callers`): index a Python codebase
   with the `ast` module into a SQLite store and navigate it structurally (where
   a symbol is defined, referenced, and which functions call it). Exposed to
