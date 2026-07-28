@@ -65,6 +65,7 @@ Then open opencode and pick the `local` provider.
 | `fxlla on [model]`      | Start the server and register it in opencode    |
 | `fxlla off`             | Stop the server                                 |
 | `fxlla status`          | Server, model, and idle status                  |
+| `fxlla stats [--watch]` | Live tok/s, TTFT, RAM (also --json, --last N)   |
 | `fxlla ram [auto|reset]`| Adjust the GPU memory limit                     |
 | `fxlla wire-opencode`   | Register the local provider in opencode         |
 | `fxlla config`          | Show the effective configuration                |
@@ -133,6 +134,11 @@ resident for instant switching, and evicts the least-recently-used one when a
 load would exceed the RAM budget (`FXLLA_GATEWAY_BUDGET_MB`, derived from the
 GPU limit by default). In opencode you pick any local model from the `local`
 provider and the gateway handles loading.
+
+While it serves, the gateway measures real traffic: it derives tokens/s and
+time to first token from the streams it proxies and appends them to the stats
+time-series, so `fxlla stats` and the menu bar charts reflect actual usage
+rather than a synthetic probe. See `gateway/README.md`.
 
 ## Menu bar app
 
