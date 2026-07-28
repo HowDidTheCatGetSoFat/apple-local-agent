@@ -1,0 +1,145 @@
+# fxlla
+
+Run the best open-weights models locally on Apple Silicon, and plug them into
+the tools you already use.
+
+`fxlla` runs models with MLX or llama.cpp, caches the weights on an external
+disk, downloads them with a bandwidth cap, and serves them over an
+OpenAI-compatible endpoint that integrates with opencode. Claude Code keeps its
+own Claude models untouched.
+
+Built for M-series Macs with large unified memory. Validated on M5 Max
+(128 GB).
+
+## Why
+
+- One command to start or stop a local model, on the right engine, with the
+  weights on the disk you choose.
+- Uses the full unified memory: `fxlla ram` lifts the macOS GPU memory cap so
+  large models fit.
+- Bandwidth-capped, resumable downloads so pulling a 60 GB model does not
+  saturate your connection.
+- Frees RAM on its own after an idle timeout.
+- Adds local models to opencode without touching Claude Code.
+
+## Requirements
+
+- Apple Silicon Mac (M-series).
+- Homebrew, `uv`, and `aria2` (installed or set up by `fxlla setup`).
+- An external disk or a folder with room for the weights.
+
+## Install
+
+```sh
+git clone https://github.com/HowDidTheCatGetSoFat/apple-local-agent.git
+cd apple-local-agent
+ln -sf "$PWD/bin/fxlla" ~/.local/bin/fxlla
+mkdir -p ~/.config/fxlla && cp config/config.env.example ~/.config/fxlla/config.env
+fxlla setup
+```
+
+`fxlla setup` installs `mlx-lm` and `llama.cpp` and verifies the environment.
+
+## Quickstart
+
+```sh
+fxlla models                # browse the catalog
+fxlla pull tiny             # small model to validate the pipeline (~0.3 GB)
+fxlla on tiny               # start and register it in opencode
+fxlla status                # running model and idle time
+fxlla off                   # stop
+
+fxlla pull qwen3-coder      # the daily driver (MLX, ~17 GB)
+```
+
+Then open opencode and pick the `local` provider.
+
+## Commands
+
+| Command                 | What it does                                    |
+|-------------------------|-------------------------------------------------|
+| `fxlla setup`           | Install and verify dependencies                 |
+| `fxlla models`          | List the catalog                                |
+| `fxlla pull <model>`    | Download a model (bandwidth-capped, resumable)  |
+| `fxlla ls`              | List downloaded models                          |
+| `fxlla on [model]`      | Start the server and register it in opencode    |
+| `fxlla off`             | Stop the server                                 |
+| `fxlla status`          | Server, model, and idle status                  |
+| `fxlla ram [auto|reset]`| Adjust the GPU memory limit                     |
+| `fxlla wire-opencode`   | Register the local provider in opencode         |
+| `fxlla config`          | Show the effective configuration                |
+
+## Keys and model cache
+
+Both are set in `~/.config/fxlla/config.env`, which is never committed:
+
+- `FXLLA_STORE` is where models are cached. Point it at any mounted disk or a
+  local folder.
+- `HF_TOKEN` is only needed for gated Hugging Face repositories. Leave it unset
+  otherwise.
+
+Never put tokens anywhere else in the tree. `config/config.env` is git-ignored.
+
+## MLX vs GGUF
+
+MLX is the default and the fastest path on this hardware; the `mlx-community`
+repositories already ship quantized for MLX. GGUF (llama.cpp) is for models
+with no MLX build or when you want a specific imatrix quant:
+
+```sh
+fxlla pull coder32-gguf --quant Q4_K_M
+```
+
+If a GGUF repository has several quants and you omit `--quant`, `fxlla` lists
+them. GGUF cannot be converted to MLX; for Hugging Face safetensors to MLX use
+`mlx_lm.convert -q`.
+
+## Using the full 128 GB
+
+macOS reserves about 75 percent of RAM for the GPU. For large models raise it:
+
+```sh
+fxlla ram          # show current and recommended limit
+fxlla ram auto     # raise it (asks for sudo, keeps a reserve for the OS)
+fxlla ram reset    # back to default
+```
+
+The change reverts on reboot.
+
+## Keep-warm
+
+`FXLLA_KEEP_WARM` (minutes, default 10) stops the server after that idle time
+to free RAM. Set `0` to disable. `fxlla status` shows the idle timer.
+
+## How it fits together
+
+`fxlla` is the control plane. It serves an OpenAI-compatible endpoint that
+opencode consumes as a `local` provider, alongside Claude and any other
+provider. Claude Code is not modified. The roadmap extends this with local
+knowledge bases, a code graph, and image and video generation, all exposed as
+MCP tools that any client can call. See `ROADMAP.md`.
+
+## Configuration
+
+All settings live in `~/.config/fxlla/config.env` or the environment:
+`FXLLA_STORE`, `FXLLA_RATE_MBIT`, `FXLLA_HOST`, `FXLLA_PORT`,
+`FXLLA_DEFAULT_MODEL`, `FXLLA_KEEP_WARM`, `FXLLA_CTX`, `FXLLA_NGL`,
+`FXLLA_RAM_RESERVE_MB`, `HF_TOKEN`.
+
+## Catalog
+
+Edit `config/models.conf`: `alias | repo | size | role | engine | note`.
+`fxlla pull <org/repo>` also works with any Hugging Face repository.
+
+## Governance
+
+See `AGENTS.md`, `MAINTAINERS.md`, `COLLABORATORS.md`, and `SECURITY.md`.
+
+## Community
+
+Part of the [HowDidTheCatGetSoFat](https://github.com/HowDidTheCatGetSoFat)
+community efforts.
+
+## License
+
+MIT. See `LICENSE`.

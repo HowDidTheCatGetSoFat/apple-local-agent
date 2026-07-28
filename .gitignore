@@ -1,0 +1,13 @@
+# config local (tiene rutas/tokens de cada máquina)
+config/config.env
+
+# estado en runtime
+*.pid
+*.log
+.DS_Store
+
+# nunca versionar modelos ni caches
+models/
+hf-cache/
+*.safetensors
+*.gguf

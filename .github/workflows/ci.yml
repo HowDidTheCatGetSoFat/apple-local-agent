@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bin/**"
+      - "lib/**"
+      - "**/*.sh"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "bin/**"
+      - "lib/**"
+      - "**/*.sh"
+      - ".github/workflows/ci.yml"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: Shell lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: bash -n bin/fxlla lib/core.sh
+
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "."
+          additional_files: "fxlla"
+        env:
+          SHELLCHECK_OPTS: -e SC1090 -e SC1091

@@ -1,0 +1,432 @@
+#!/usr/bin/env bash
+#
+# fxlla - local agent for Apple Silicon.
+# Downloads models (bandwidth-capped) to an external disk, serves them over an
+# OpenAI-compatible endpoint (MLX or llama.cpp per model), and registers them
+# in opencode. Claude Code is left untouched.
+#
+# Usage:  fxlla <command> [args]   |   fxlla help
+
+# Re-exec under bash if started by another shell (for example: zsh bin/fxlla).
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+REPO_ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+. "$REPO_ROOT/lib/core.sh"
+
+# --------------------------------------------------------------------------
+cmd_help() {
+  cat <<EOF
+fxlla - local models (MLX + GGUF) on Apple Silicon
+
+  fxlla setup                 Install and verify dependencies, create the store
+  fxlla models                List the catalog
+  fxlla pull <alias|org/repo> Download a model, capped at ${FXLLA_RATE_MBIT} Mbps
+       [--gguf] [--quant Q4_K_M]
+  fxlla ls                    List downloaded models
+  fxlla on [alias]            Start the server (default: $FXLLA_DEFAULT_MODEL)
+  fxlla off                   Stop the server
+  fxlla status                Server, model, and idle status
+  fxlla logs                  Follow the server log
+  fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
+  fxlla wire-opencode         Register the local provider in opencode
+  fxlla rm <alias>            Delete a downloaded model
+  fxlla config                Show the effective configuration
+
+Store:     $FXLLA_STORE
+Endpoint:  $BASE_URL
+Keep-warm: ${FXLLA_KEEP_WARM} idle min -> auto-stop (0 = never)
+EOF
+}
+
+cmd_config() {
+  cat <<EOF
+FXLLA_STORE          $FXLLA_STORE
+FXLLA_RATE_MBIT      $FXLLA_RATE_MBIT  (~$(awk "BEGIN{printf \"%.1f\", $FXLLA_RATE_MBIT/8}") MB/s)
+FXLLA_HOST:PORT      $FXLLA_HOST:$FXLLA_PORT
+FXLLA_DEFAULT_MODEL  $FXLLA_DEFAULT_MODEL
+FXLLA_KEEP_WARM      $FXLLA_KEEP_WARM min
+FXLLA_CTX / FXLLA_NGL  $FXLLA_CTX / $FXLLA_NGL   (gguf)
+FXLLA_SERVER_ARGS    ${FXLLA_SERVER_ARGS:-(empty)}
+MODELS_DIR         $MODELS_DIR
+STATE_DIR          $STATE_DIR
+EOF
+}
+
+cmd_setup() {
+  info "Checking dependencies..."
+  command -v uv >/dev/null || die "Missing 'uv'. Install it: brew install uv"
+  command -v aria2c >/dev/null || { warn "aria2c missing, installing..."; brew install aria2; }
+
+  if command -v mlx_lm.server >/dev/null 2>&1; then
+    ok "mlx-lm already installed"
+  else
+    info "Installing mlx-lm with uv..."; uv tool install --upgrade mlx-lm
+  fi
+
+  if command -v llama-server >/dev/null 2>&1; then
+    ok "llama.cpp already installed"
+  else
+    info "Installing llama.cpp (for GGUF models)..."; brew install llama.cpp
+  fi
+
+  local uvbin="$HOME/.local/bin"
+  echo ":$PATH:" | grep -q ":$uvbin:" || warn "Add to your shell rc: export PATH=\"$uvbin:\$PATH\""
+
+  require_store
+  ok "Store ready at $MODELS_DIR"
+  ok "Setup complete. Try: fxlla models"
+}
+
+cmd_models() {
+  printf "%-18s %-8s %-8s %-6s %s\n" "ALIAS" "SIZE" "ROLE" "ENGINE" "NOTE"
+  printf "%-18s %-8s %-8s %-6s %s\n" "-----" "----" "----" "------" "----"
+  local line alias size role engine note
+  while IFS= read -r line; do
+    case "$line" in \#*|'') continue;; esac
+    alias="$(echo "$line"  | cut -d'|' -f1 | xargs)"; [ -z "$alias" ] && continue
+    size="$(echo "$line"   | cut -d'|' -f3 | xargs)"
+    role="$(echo "$line"   | cut -d'|' -f4 | xargs)"
+    engine="$(echo "$line" | cut -d'|' -f5 | xargs)"
+    note="$(echo "$line"   | cut -d'|' -f6 | xargs)"
+    printf "%-18s %-8s %-8s %-6s %s\n" "$alias" "$size" "$role" "${engine:-mlx}" "$note"
+  done < "$CATALOG"
+}
+
+# --------------------------------------------------------------------------
+cmd_pull() {
+  need aria2c; require_store
+  local q="" engine="" quant=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --gguf)     engine=gguf ;;
+      --mlx)      engine=mlx ;;
+      --quant)    quant="$2"; shift ;;
+      --quant=*)  quant="${1#--quant=}" ;;
+      -*)         die "unknown flag: $1" ;;
+      *)          q="$1" ;;
+    esac; shift
+  done
+  [ -z "$q" ] && die "Usage: fxlla pull <alias|org/repo> [--gguf] [--quant Q4_K_M]"
+
+  local repo; repo="$(resolve_repo "$q")" || die "Unknown '$q'. See 'fxlla models' or pass an org/repo from HF."
+  [ -z "$engine" ] && engine="$(resolve_engine "$q")"
+  [ -z "$engine" ] && engine=mlx
+  local name; name="$(local_name "$q")"
+  local dest="$MODELS_DIR/$name"; mkdir -p "$dest"
+
+  info "Model:    $repo"
+  info "Engine:   $engine"
+  info "Dest:     $dest"
+
+  local listing; listing="$(_hf_list "$repo")" || die "Could not list $repo (typo? gated without HF_TOKEN?)"
+  [ -z "$listing" ] && die "Empty or inaccessible repo: $repo"
+
+  # select files
+  local sel=""
+  if [ "$engine" = gguf ]; then
+    local ggufs; ggufs="$(echo "$listing" | awk -F'\t' '$2 ~ /\.gguf$/ {print $2}')"
+    [ -z "$ggufs" ] && die "No .gguf files in $repo"
+    if [ -n "$quant" ]; then
+      sel="$(echo "$ggufs" | grep -i -- "$quant" || true)"
+      [ -z "$sel" ] && { warn "No quant '$quant'. Available:"; echo "$ggufs" | while IFS= read -r l; do echo "  $l"; done >&2; exit 1; }
+    elif [ "$(echo "$ggufs" | grep -c .)" -eq 1 ]; then
+      sel="$ggufs"
+    else
+      warn "This repo has several quants. Choose with --quant <substr>, for example:"
+      echo "$ggufs" | while IFS= read -r l; do echo "  $l"; done >&2
+      die "Recommended for this RAM: Q4_K_M (balanced) or Q5_K_M / Q6_K (higher quality)."
+    fi
+    local entry; entry="$(echo "$sel" | grep -- '-00001-of-' | head -1)"
+    [ -z "$entry" ] && entry="$(echo "$sel" | head -1)"
+    echo "gguf" > "$dest/.engine"; basename "$entry" > "$dest/.entry"
+  else
+    sel="$(echo "$listing" | awk -F'\t' '{print $2}')"
+    echo "mlx" > "$dest/.engine"
+  fi
+
+  # total size of the selection
+  local total gb
+  total="$(awk -F'\t' 'NR==FNR{w[$1]=1;next} ($2 in w){s+=$1} END{printf "%d", s+0}' \
+      <(echo "$sel") <(echo "$listing"))"
+  gb="$(awk -v b="$total" 'BEGIN{printf "%.2f", b/1073741824}')"
+  info "Cap:      ${FXLLA_RATE_MBIT} Mbps | to download: ${gb} GB"
+
+  # build aria2c input
+  local input; input="$(mktemp)"
+  local p d
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    d="$dest"; case "$(dirname "$p")" in .) ;; *) d="$dest/$(dirname "$p")";; esac
+    printf '%s\n  dir=%s\n  out=%s\n' "https://huggingface.co/$repo/resolve/main/$p" "$d" "$(basename "$p")" >> "$input"
+  done <<< "$sel"
+
+  local auth=(); [ -n "${HF_TOKEN:-}" ] && auth=(--header="Authorization: Bearer $HF_TOKEN")
+
+  info "Downloading (resumable; Ctrl-C and re-run the same command to resume)..."
+  aria2c --input-file="$input" \
+    --max-overall-download-limit="$(rate_bytes)" \
+    --continue=true --auto-file-renaming=false \
+    --max-connection-per-server=4 --max-concurrent-downloads=2 --split=4 \
+    --summary-interval=10 --console-log-level=warn ${auth[@]+"${auth[@]}"}
+
+  rm -f "$input"
+  echo "$repo" > "$dest/.source"
+  ok "Done: $dest"
+  ok "Start it with: fxlla on $name"
+}
+
+cmd_ls() {
+  require_store
+  local found=0 d n sz eng
+  for d in "$MODELS_DIR"/*/; do
+    [ -d "$d" ] || continue
+    found=1; n="$(basename "$d")"
+    sz="$(du -sh "$d" 2>/dev/null | cut -f1)"
+    eng="mlx"; [ -f "$d/.engine" ] && eng="$(cat "$d/.engine")"
+    printf "%-28s %-7s %-5s %s\n" "$n" "$sz" "$eng" "$([ -f "$d/.source" ] && cat "$d/.source")"
+  done
+  [ "$found" = 0 ] && warn "No models downloaded yet. Try: fxlla pull tiny"
+}
+
+# --------------------------------------------------------------------------
+# GPU RAM limit (unified memory)
+cmd_ram() {
+  local total_mb cur reserve rec eff
+  total_mb=$(( $(sysctl -n hw.memsize) / 1048576 ))
+  cur="$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)"
+  reserve="${FXLLA_RAM_RESERVE_MB:-8192}"
+  rec=$(( total_mb - reserve ))
+  case "${1:-show}" in
+    show)
+      eff="$cur"; [ "$cur" = 0 ] && eff="$(( total_mb * 3 / 4 ))"
+      info "Total RAM:          ${total_mb} MB"
+      info "wired_limit_mb:     ${cur} $([ "$cur" = 0 ] && echo '(0 = macOS default ~75%)')"
+      info "GPU can reserve:    ~${eff} MB now"
+      info "recommended:        ${rec} MB (leaves ${reserve} MB for the OS)"
+      info "Apply:  fxlla ram auto     |  Revert:  fxlla ram reset"
+      ;;
+    auto)  _set_ram "$rec" ;;
+    reset) _set_ram 0 ;;
+    *)     [[ "${1:-}" =~ ^[0-9]+$ ]] || die "Usage: fxlla ram [auto|reset|<MB>]"; _set_ram "$1" ;;
+  esac
+}
+_set_ram() {
+  local mb="$1"
+  info "sudo sysctl iogpu.wired_limit_mb=$mb ..."
+  sudo sysctl -w iogpu.wired_limit_mb="$mb" >/dev/null
+  ok "Done: wired_limit_mb=$mb  (reverts on reboot; see README to make it permanent)"
+}
+
+# --------------------------------------------------------------------------
+# opencode: register or update the local provider
+_sync_opencode() {
+  local model_id="$1" label="$2"
+  local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+  mkdir -p "$(dirname "$cfg")"
+  BASE_URL="$BASE_URL" MODEL_ID="$model_id" LABEL="$label" CFG="$cfg" python3 - <<'PY'
+import os, json
+cfg = os.environ["CFG"]
+try:
+    with open(cfg) as f: data = json.load(f)
+except Exception:
+    data = {}
+data.setdefault("$schema", "https://opencode.ai/config.json")
+loc = data.setdefault("provider", {}).setdefault("local", {})
+loc["npm"] = "@ai-sdk/openai-compatible"
+loc["name"] = "Local (MLX/llama.cpp)"
+loc.setdefault("options", {})["baseURL"] = os.environ["BASE_URL"]
+mid = os.environ.get("MODEL_ID", "")
+if mid:
+    loc["models"] = { mid: { "name": os.environ["LABEL"] } }
+else:
+    loc.setdefault("models", {})
+with open(cfg, "w") as f: json.dump(data, f, indent=2)
+print(cfg)
+PY
+}
+
+cmd_wire_opencode() {
+  local cfg; cfg="$(_sync_opencode "" "")"
+  ok "opencode configured: $cfg"
+  info "Provider 'local' -> $BASE_URL (the active model is registered on 'fxlla on')."
+}
+
+# --------------------------------------------------------------------------
+cmd_on() {
+  require_store
+  local q="" force_engine=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --mlx) force_engine=mlx ;;
+      --gguf) force_engine=gguf ;;
+      -*) die "unknown flag: $1" ;;
+      *) q="$1" ;;
+    esac; shift
+  done
+  [ -z "$q" ] && q="$FXLLA_DEFAULT_MODEL"
+  local name; name="$(local_name "$q")"
+  local dest="$MODELS_DIR/$name"
+  [ -d "$dest" ] || die "'$name' is not downloaded. Run: fxlla pull $q"
+
+  local engine="$force_engine"
+  [ -z "$engine" ] && [ -f "$dest/.engine" ] && engine="$(cat "$dest/.engine")"
+  [ -z "$engine" ] && engine=mlx
+
+  server_alive && { warn "A server is already running (pid $(server_pid)). Run 'fxlla off' first."; return 1; }
+
+  # warn if the model does not fit the current RAM limit
+  _ram_check "$dest"
+
+  if [ "$engine" = gguf ]; then
+    need llama-server
+    local entry; entry="$(cat "$dest/.entry" 2>/dev/null || true)"
+    if [ -z "$entry" ]; then
+      local f
+      for f in "$dest"/*.gguf; do [ -e "$f" ] && { entry="$(basename "$f")"; break; }; done
+    fi
+    [ -z "$entry" ] && die "No .gguf found in $dest"
+    info "Starting $name (gguf/llama.cpp) at $BASE_URL ..."
+    # shellcheck disable=SC2086
+    nohup llama-server --model "$dest/$entry" --alias "$name" \
+      --host "$FXLLA_HOST" --port "$FXLLA_PORT" -ngl "$FXLLA_NGL" -c "$FXLLA_CTX" --jinja \
+      $FXLLA_SERVER_ARGS > "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+  else
+    need mlx_lm.server
+    info "Starting $name (mlx) at $BASE_URL ..."
+    # shellcheck disable=SC2086
+    nohup mlx_lm.server --model "$dest" --host "$FXLLA_HOST" --port "$FXLLA_PORT" \
+      $FXLLA_SERVER_ARGS > "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+  fi
+
+  local id
+  for _ in $(seq 1 90); do
+    if curl -sf "$BASE_URL/models" >/dev/null 2>&1; then
+      id="$(curl -s "$BASE_URL/models" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])' 2>/dev/null || echo "$name")"
+      echo "$name|$id|$engine" > "$CURRENT_FILE"
+      touch "$ACT_FILE"
+      _sync_opencode "$id" "$name (local)" >/dev/null
+      _start_watchdog
+      ok "Up: '$name' ($engine) at $BASE_URL"
+      [ "${FXLLA_KEEP_WARM:-0}" -gt 0 ] && info "Auto-stops after ${FXLLA_KEEP_WARM} idle min."
+      ok "In opencode: provider 'local'. Claude Code untouched."
+      return 0
+    fi
+    server_alive || { warn "The server died on start:"; tail -n 25 "$LOG_FILE" >&2; rm -f "$PID_FILE"; return 1; }
+    sleep 1
+  done
+  warn "No response in time. Check: fxlla logs"; return 1
+}
+
+# non-blocking warning if the model exceeds the GPU RAM limit
+_ram_check() {
+  local dest="$1" total_mb cur eff size_mb
+  total_mb=$(( $(sysctl -n hw.memsize) / 1048576 ))
+  cur="$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)"
+  eff="$cur"; [ "$cur" = 0 ] && eff="$(( total_mb * 3 / 4 ))"
+  size_mb=$(( $(du -sk "$dest" 2>/dev/null | cut -f1) / 1024 ))
+  if [ "$size_mb" -gt "$eff" ]; then
+    warn "This model is ~${size_mb} MB and the GPU can reserve ~${eff} MB now."
+    warn "Raise the limit before loading it: fxlla ram auto"
+  fi
+}
+
+cmd_off() {
+  if [ -f "$WATCH_PID" ]; then kill "$(cat "$WATCH_PID")" 2>/dev/null || true; rm -f "$WATCH_PID"; fi
+  if server_alive; then
+    local p; p="$(server_pid)"
+    kill "$p" 2>/dev/null || true; sleep 1
+    kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null || true
+    rm -f "$PID_FILE" "$CURRENT_FILE"
+    ok "Server stopped."
+  else
+    warn "No server running."; rm -f "$PID_FILE"
+  fi
+}
+
+cmd_status() {
+  if server_alive; then
+    ok "* Server running (pid $(server_pid))"
+    if [ -f "$CURRENT_FILE" ]; then
+      info "Model: $(cut -d'|' -f1 "$CURRENT_FILE")  |  engine: $(cut -d'|' -f3 "$CURRENT_FILE")"
+    fi
+    info "Endpoint: $BASE_URL"
+    if [ -f "$ACT_FILE" ] && [ "${FXLLA_KEEP_WARM:-0}" -gt 0 ]; then
+      local idle; idle=$(( $(date +%s) - $(stat -f %m "$ACT_FILE" 2>/dev/null || echo 0) ))
+      info "Idle: $(( idle / 60 ))m $(( idle % 60 ))s  (auto-stop at ${FXLLA_KEEP_WARM}m)"
+    fi
+    if curl -sf "$BASE_URL/models" >/dev/null 2>&1; then ok "Responds OK"; else warn "Not responding yet"; fi
+  else
+    warn "Server stopped"
+  fi
+}
+
+cmd_logs() { [ -f "$LOG_FILE" ] || die "No log yet."; tail -f "$LOG_FILE"; }
+
+cmd_rm() {
+  require_store
+  local q="${1:-}"; [ -z "$q" ] && die "Usage: fxlla rm <alias|name>"
+  local dest; dest="$MODELS_DIR/$(local_name "$q")"
+  [ -d "$dest" ] || die "'$dest' does not exist."
+  info "Deleting $dest ..."; rm -rf "$dest"; ok "Deleted."
+}
+
+# --------------------------------------------------------------------------
+# keep-warm: watchdog that auto-stops after N idle minutes with no requests
+_start_watchdog() {
+  [ "${FXLLA_KEEP_WARM:-0}" -gt 0 ] || return 0
+  nohup "$SELF" __watch >/dev/null 2>&1 &
+  echo $! > "$WATCH_PID"
+}
+
+cmd_watch() {
+  local secs=$(( FXLLA_KEEP_WARM * 60 ))
+  [ "$secs" -gt 0 ] || exit 0
+  # mark activity on every request that shows up in the log
+  ( tail -Fn0 "$LOG_FILE" 2>/dev/null | while IFS= read -r line; do
+      case "$line" in *chat/completions*|*"/v1/"*|*"POST "*) touch "$ACT_FILE" 2>/dev/null || true;; esac
+    done ) &
+  local tailpid=$!
+  trap 'kill $tailpid 2>/dev/null || true' EXIT
+  while true; do
+    sleep 30
+    server_alive || exit 0
+    local last now; last="$(stat -f %m "$ACT_FILE" 2>/dev/null || echo 0)"; now="$(date +%s)"
+    if [ $(( now - last )) -ge "$secs" ]; then
+      local p; p="$(server_pid)"
+      [ -n "$p" ] && { kill "$p" 2>/dev/null || true; sleep 1; kill -9 "$p" 2>/dev/null || true; }
+      rm -f "$PID_FILE" "$CURRENT_FILE" "$WATCH_PID"
+      exit 0
+    fi
+  done
+}
+
+# --------------------------------------------------------------------------
+main() {
+  local cmd="${1:-help}"; shift || true
+  case "$cmd" in
+    setup)                  cmd_setup "$@" ;;
+    models|catalog)         cmd_models "$@" ;;
+    pull|get)               cmd_pull "$@" ;;
+    ls|list)                cmd_ls "$@" ;;
+    on|start)               cmd_on "$@" ;;
+    off|stop)               cmd_off "$@" ;;
+    status|st)              cmd_status "$@" ;;
+    logs|log)               cmd_logs "$@" ;;
+    ram)                    cmd_ram "$@" ;;
+    wire-opencode|opencode) cmd_wire_opencode "$@" ;;
+    rm|remove)              cmd_rm "$@" ;;
+    config)                 cmd_config "$@" ;;
+    __watch)                cmd_watch ;;
+    help|-h|--help)         cmd_help ;;
+    *)                      warn "Unknown command: $cmd"; cmd_help; exit 1 ;;
+  esac
+}
+main "$@"
