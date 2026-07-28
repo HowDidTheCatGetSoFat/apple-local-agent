@@ -83,6 +83,8 @@ def _gather(paths):
             for root, _dirs, names in os.walk(p):
                 if (os.sep + ".git" + os.sep) in (root + os.sep) or root.endswith(os.sep + ".git"):
                     continue
+                if os.path.basename(root) == "__pycache__":
+                    continue
                 for n in names:
                     if n.endswith(".py"):
                         files.append(os.path.join(root, n))
@@ -214,7 +216,8 @@ def cmd_impact(args):
     # Transitive callers (breadth-first over the call graph): the blast radius
     # of changing a symbol. Name-approximate, so cap the depth.
     con = _db()
-    seen = {args.name}
+    seen_callers = set()      # report each distinct caller qualname once
+    queried = {args.name}     # query each leaf name once to avoid loops
     result = []
     frontier = [args.name]
     depth = 0
@@ -227,10 +230,13 @@ def cmd_impact(args):
             tuple(frontier)).fetchall()
         nxt = []
         for (caller,) in rows:
+            if caller in seen_callers:
+                continue
+            seen_callers.add(caller)
+            result.append({"depth": depth, "caller": caller})
             leaf = caller.split(".")[-1]
-            if leaf not in seen:
-                seen.add(leaf)
-                result.append({"depth": depth, "caller": caller})
+            if leaf not in queried:
+                queried.add(leaf)
                 nxt.append(leaf)
         frontier = nxt
     _emit(args, result, lambda r: f"{'  ' * r['depth']}{r['caller']} (depth {r['depth']})")
