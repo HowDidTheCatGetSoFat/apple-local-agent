@@ -51,10 +51,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 - `fxlla pull` now fails loudly if a download leaves pending `.aria2` control
   files, instead of marking an incomplete model as complete.
 
+### Changed
+- Hardened app signing and packaging: shared `app/sign-lib.sh` checks the
+  Developer ID identity before building and verifies the app is signed with the
+  hardened runtime; `app/package-dmg.sh --check` validates the signing
+  prerequisites, and the notarize path validates the staple and runs a
+  Gatekeeper assessment. Both notarytool credential routes are documented.
+
 ### Fixed
 - Configuration precedence: an exported environment variable now wins over
   `~/.config/fxlla/config.env` as documented. Sourcing `config.env` (plain
   assignments) used to clobber values exported in the shell.
+- Signing checks captured command output before matching: piping into
+  `grep -q` under `set -o pipefail` could SIGPIPE the producer and report a
+  false negative (e.g. "not signed with the hardened runtime" on a signed app).
 
 ### Planned
 - Menu bar app (SwiftUI `MenuBarExtra`), signed and notarized.

@@ -9,6 +9,8 @@
 #
 set -euo pipefail
 cd "$(dirname "$0")"
+# shellcheck source=app/sign-lib.sh
+. "./sign-lib.sh"
 
 CONFIG=debug
 SIGN=0
@@ -30,10 +32,10 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp "$BIN" "$APP/Contents/MacOS/fxllaMenuBar"
 
 if [ "$SIGN" = 1 ]; then
-  # Developer ID Application identity (see MAINTAINERS). Override with FXLLA_SIGN_ID.
-  ID="${FXLLA_SIGN_ID:-Developer ID Application: mariano abad (V7MBYBHJX6)}"
-  codesign --force --deep --options runtime --sign "$ID" "$APP"
-  echo "signed with: $ID"
+  require_identity
+  codesign --force --deep --options runtime --sign "$SIGN_ID" "$APP"
+  verify_signed "$APP"
+  echo "signed with: $SIGN_ID"
 fi
 
 echo "built $APP  (run it: open $APP)"

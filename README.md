@@ -180,8 +180,15 @@ load, and a GPU RAM toggle. It is a thin front end over the CLI. See
 `app/README.md`.
 
 ```sh
-app/build.sh && open app/fxlla.app
+app/build.sh && open app/fxlla.app          # unsigned local build
+app/package-dmg.sh --check                   # verify signing prerequisites
+app/package-dmg.sh --notarize <profile>      # signed, notarized, stapled .dmg
 ```
+
+Distribution builds are signed with a Developer ID and notarized. Create the
+`notarytool` keychain profile once (with an app-specific password or an App
+Store Connect API key); `app/package-dmg.sh` reads it from the keychain and
+never from the repo. See `app/package-dmg.sh` for the exact commands.
 
 ## Knowledge bases (RAG)
 
