@@ -12,13 +12,63 @@ Usage:
   rag.py rm <kb>                delete a knowledge base
 """
 import argparse
+import glob
+import json
 import os
 import sqlite3
+import subprocess
 import sys
+import time
+import urllib.request
 
 STORE = os.environ.get("FXLLA_STORE", "")
 KB_DIR = os.path.join(STORE, "kb")
 DB_PATH = os.path.join(KB_DIR, "kb.db")
+EMBED_DIR = os.path.join(STORE, "models", "embed")
+EMBED_PORT = int(os.environ.get("FXLLA_EMBED_PORT", "8090"))
+
+
+def _embed_model():
+    ggufs = sorted(glob.glob(os.path.join(EMBED_DIR, "*.gguf")))
+    return ggufs[0] if ggufs else None
+
+
+# Runs a local llama.cpp embedding server for the lifetime of the context.
+class Embedder:
+    def __enter__(self):
+        model = _embed_model()
+        if not model:
+            sys.exit("embedding model not found. Run: fxlla pull embed --quant Q5_K_M")
+        self.proc = subprocess.Popen(
+            ["llama-server", "--embeddings", "-m", model, "--host", "127.0.0.1",
+             "--port", str(EMBED_PORT), "--pooling", "mean"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(120):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{EMBED_PORT}/health", timeout=2).read()
+                return self
+            except Exception:
+                time.sleep(1)
+        self.__exit__(None, None, None)
+        sys.exit("embedding server did not become ready")
+
+    def embed(self, texts):
+        body = json.dumps({"input": texts}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings", data=body,
+            headers={"Content-Type": "application/json"})
+        data = json.load(urllib.request.urlopen(req, timeout=300))
+        return [d["embedding"] for d in data["data"]]
+
+    def __exit__(self, *_a):
+        try:
+            self.proc.terminate()
+            self.proc.wait(timeout=10)
+        except Exception:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
 
 
 def _db():
