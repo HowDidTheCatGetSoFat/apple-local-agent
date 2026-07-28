@@ -36,6 +36,15 @@ struct PanelView: View {
 
             Divider()
             HStack {
+                Text("GPU RAM").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Max") { model.ramAuto() }
+                Button("Default") { model.ramReset() }
+            }
+            .font(.caption)
+            .disabled(model.busy)
+
+            HStack {
                 if model.running {
                     Button("Stop gateway") { model.stopGateway() }
                 } else {

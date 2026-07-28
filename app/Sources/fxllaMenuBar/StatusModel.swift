@@ -50,4 +50,23 @@ final class StatusModel: ObservableObject {
             await MainActor.run { self.busy = false; self.refresh() }
         }
     }
+
+    func ramAuto() { runPrivileged("ram auto") }
+    func ramReset() { runPrivileged("ram reset") }
+
+    // Raising the GPU limit needs root. Run `fxlla ram ...` via a native admin
+    // prompt (as root, fxlla's internal sudo needs no password).
+    private func runPrivileged(_ args: String) {
+        busy = true
+        let bin = CLI.path
+        Task.detached {
+            let script = "do shell script \"\(bin) \(args)\" with administrator privileges"
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            p.arguments = ["-e", script]
+            try? p.run()
+            p.waitUntilExit()
+            await MainActor.run { self.busy = false; self.refresh() }
+        }
+    }
 }
