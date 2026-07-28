@@ -2,9 +2,18 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
-## 2026-07-28: Config precedence and shell completions
+## 2026-07-28: Config precedence, completions, and model availability
 
-Two CLI items batched into one review-sized change.
+Three CLI items batched into one review-sized change (all touch command
+dispatch and model enumeration, so they share a review).
+
+Model availability (#11), the tool side of the availability-and-consent design:
+`fxlla ls --json` and `fxlla avail <alias>` expose `{cached, known, engine,
+repo, size}` (catalog size for models not yet pulled). `fxlla on` keeps its
+fail-fast when a model is not cached and gains an opt-in `--pull`. The agent or
+skill still owns the offer-and-consent flow; the CLI just gives it a
+machine-readable signal. A partial download (a model dir without the `.source`
+completion marker) is deliberately reported as not cached.
 
 - Config precedence (#15): `config.env` used plain assignments, so sourcing it
   clobbered any `FXLLA_*` value exported in the shell, reversing the documented

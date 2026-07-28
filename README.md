@@ -96,6 +96,21 @@ source <(fxlla completions bash)
 source <(fxlla completions zsh)
 ```
 
+## Model availability
+
+Check what is cached before starting anything. `fxlla ls --json` lists cached
+models and `fxlla avail <alias>` reports availability for any model:
+
+```sh
+fxlla avail qwen3-coder
+# {"alias": "qwen3-coder", "cached": false, "known": true,
+#  "engine": "mlx", "repo": "...", "catalog_size": "17GB"}
+```
+
+`fxlla on <alias>` fails fast when the model is not cached; pass `--pull` to
+download first. This is what lets an agent offer a download (with size and time)
+and only pull after you agree, instead of blocking on a silent large download.
+
 ## MLX vs GGUF
 
 MLX is the default and the fastest path on this hardware; the `mlx-community`

@@ -6,6 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- Machine-readable model availability: `fxlla ls --json` lists cached models
+  (alias, size, engine, repo) and `fxlla avail <alias>` reports
+  `{cached, known, engine, repo, size}` for any catalog or downloaded model, so
+  an agent can check availability before offering a download. `fxlla on` gains
+  opt-in `--pull` while staying fail-fast by default when a model is not cached.
 - Shell completions: `fxlla completions <bash|zsh>` prints a completion script
   (load with `source <(fxlla completions bash)`). Completes commands, catalog
   aliases for `pull`, downloaded models for `on`/`off`/`rm`, and `kb`/`graph`
