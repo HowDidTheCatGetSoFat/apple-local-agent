@@ -122,6 +122,34 @@ class TestUsageFromJson(unittest.TestCase):
         self.assertIsNone(metrics.usage_from_json(b"not json"))
 
 
+class TestStatsFile(unittest.TestCase):
+    def setUp(self):
+        self._saved = {k: os.environ.get(k)
+                       for k in ("FXLLA_STATS_FILE", "XDG_STATE_HOME")}
+        for k in self._saved:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_explicit_env_wins(self):
+        os.environ["FXLLA_STATS_FILE"] = "/custom/s.jsonl"
+        os.environ["XDG_STATE_HOME"] = "/state"
+        self.assertEqual(metrics.stats_file(), "/custom/s.jsonl")
+
+    def test_xdg_state_home(self):
+        os.environ["XDG_STATE_HOME"] = "/state"
+        self.assertEqual(metrics.stats_file(), "/state/fxlla/stats.jsonl")
+
+    def test_default_under_home(self):
+        self.assertTrue(metrics.stats_file().endswith(
+            os.path.join(".local", "state", "fxlla", "stats.jsonl")))
+
+
 class TestAppendSample(unittest.TestCase):
     def test_append_and_trim(self):
         with tempfile.TemporaryDirectory() as d:
