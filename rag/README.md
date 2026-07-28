@@ -7,7 +7,7 @@ Local retrieval-augmented search over your files. Standard library only, plus
 
 - `rag.py` - the store and CLI. SQLite under `<FXLLA_STORE>/kb`, text chunking,
   embeddings via a local `llama-server --embeddings`, and cosine search.
-- `mcp_server.py` - a minimal stdio MCP server exposing one tool, `rag_search`,
+- `rag_mcp.py` - a minimal stdio MCP server exposing one tool, `rag_search`,
   so opencode and Claude Code can query a knowledge base.
 
 Driven through the CLI: `fxlla kb add|search|ls|rm`, `fxlla kb mcp`,

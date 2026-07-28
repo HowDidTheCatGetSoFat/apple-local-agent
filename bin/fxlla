@@ -624,7 +624,7 @@ cmd_rm() {
 cmd_kb() {
   need python3; require_store
   case "${1:-}" in
-    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/rag/mcp_server.py" ;;
+    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/rag/rag_mcp.py" ;;
     wire-opencode) _wire_rag_mcp; return ;;
   esac
   FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
@@ -635,7 +635,7 @@ cmd_kb() {
 _wire_rag_mcp() {
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   mkdir -p "$(dirname "$cfg")"
-  CFG="$cfg" MCP="$REPO_ROOT/rag/mcp_server.py" STORE="$FXLLA_STORE" python3 - <<'PY'
+  CFG="$cfg" MCP="$REPO_ROOT/rag/rag_mcp.py" STORE="$FXLLA_STORE" python3 - <<'PY'
 import os, json
 cfg = os.environ["CFG"]
 try:
@@ -661,7 +661,7 @@ PY
 cmd_graph() {
   need python3; require_store
   case "${1:-}" in
-    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/graph/mcp_server.py" ;;
+    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/graph/graph_mcp.py" ;;
     wire-opencode) _wire_graph_mcp; return ;;
   esac
   FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/graph/codegraph.py" "$@"
@@ -670,7 +670,7 @@ cmd_graph() {
 _wire_graph_mcp() {
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   mkdir -p "$(dirname "$cfg")"
-  CFG="$cfg" MCP="$REPO_ROOT/graph/mcp_server.py" STORE="$FXLLA_STORE" python3 - <<'PY'
+  CFG="$cfg" MCP="$REPO_ROOT/graph/graph_mcp.py" STORE="$FXLLA_STORE" python3 - <<'PY'
 import os, json
 cfg = os.environ["CFG"]
 try:

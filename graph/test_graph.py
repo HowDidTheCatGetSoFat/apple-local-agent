@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 codegraph = importlib.import_module("codegraph")
-mcp_server = importlib.import_module("mcp_server")
+mcp_server = importlib.import_module("graph_mcp")
 
 SNIPPET = """
 class A:
