@@ -11,3 +11,8 @@ models/
 hf-cache/
 *.safetensors
 *.gguf
+
+# Swift build artifacts
+app/.build/
+.build/
+*.app/
