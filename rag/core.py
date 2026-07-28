@@ -5,11 +5,11 @@ Storage is a SQLite database under <store>/kb. Embeddings come from a local
 llama.cpp embedding server (the 'embed' catalog model). Standard library only,
 plus llama-server for embeddings.
 
-Usage:
-  rag.py add <kb> <path...>     index files or directories into a knowledge base
-  rag.py search <kb> <query>    top-k chunks for a query
-  rag.py ls                     list knowledge bases
-  rag.py rm <kb>                delete a knowledge base
+Usage (normally driven via `fxlla kb`):
+  core.py add <kb> <path...>    index files or directories into a knowledge base
+  core.py search <kb> <query>   top-k chunks for a query
+  core.py ls                    list knowledge bases
+  core.py rm <kb>               delete a knowledge base
 """
 import argparse
 import glob
