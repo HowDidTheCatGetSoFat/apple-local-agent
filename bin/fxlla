@@ -38,6 +38,7 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla wire-opencode         Register the local provider in opencode
   fxlla rm <alias>            Delete a downloaded model
   fxlla config                Show the effective configuration
+  fxlla doctor                Diagnose the environment
 
 Store:     $FXLLA_STORE
 Endpoint:  $BASE_URL
@@ -451,6 +452,64 @@ cmd_stats() {
 
 cmd_logs() { [ -f "$LOG_FILE" ] || die "No log yet."; tail -f "$LOG_FILE"; }
 
+cmd_doctor() {
+  local pass=0 warn=0 fail=0
+  _chk() {
+    case "$1" in
+      ok)   pass=$((pass+1)); printf "  [ ok ] %s\n" "$2" ;;
+      warn) warn=$((warn+1)); printf "  [warn] %s\n" "$2" ;;
+      fail) fail=$((fail+1)); printf "  [FAIL] %s\n" "$2" ;;
+    esac
+  }
+
+  info "Dependencies"
+  local c
+  for c in uv aria2c python3 curl; do
+    if command -v "$c" >/dev/null 2>&1; then _chk ok "$c"; else _chk fail "$c missing (run: fxlla setup)"; fi
+  done
+  if command -v mlx_lm.server >/dev/null 2>&1; then _chk ok "mlx_lm.server (MLX engine)"; else _chk warn "mlx_lm.server missing (MLX; run: fxlla setup)"; fi
+  if command -v llama-server >/dev/null 2>&1; then _chk ok "llama-server (GGUF engine)"; else _chk warn "llama-server missing (GGUF; run: fxlla setup)"; fi
+
+  info "Environment"
+  if echo ":$PATH:" | grep -q ":$HOME/.local/bin:"; then _chk ok "$HOME/.local/bin on PATH"; else _chk warn "$HOME/.local/bin not on PATH (add it to your shell rc)"; fi
+
+  info "Store"
+  if [ -d "$FXLLA_STORE" ]; then
+    local free; free="$(df -g "$FXLLA_STORE" 2>/dev/null | awk 'NR==2{print $4}')"
+    local n; n="$(find "$MODELS_DIR" -maxdepth 1 -type d 2>/dev/null | grep -c . || true)"
+    _chk ok "store mounted: $FXLLA_STORE (${free:-?} GB free, $(( n>0 ? n-1 : 0 )) models)"
+  else
+    _chk fail "store not found: $FXLLA_STORE (set FXLLA_STORE in ~/.config/fxlla/config.env)"
+  fi
+
+  info "GPU memory"
+  local total_mb cur eff reserve rec
+  total_mb=$(( $(sysctl -n hw.memsize) / 1048576 ))
+  cur="$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)"
+  reserve="${FXLLA_RAM_RESERVE_MB:-8192}"; rec=$(( total_mb - reserve ))
+  if [ "$cur" = 0 ]; then
+    eff=$(( total_mb * 3 / 4 ))
+    _chk ok "GPU can reserve ~${eff} MB of ${total_mb} MB (macOS default; raise with: fxlla ram auto)"
+  elif [ "$cur" -lt "$rec" ]; then
+    _chk warn "GPU wired limit ${cur} MB is below recommended ${rec} MB (fxlla ram auto)"
+  else
+    _chk ok "GPU wired limit ${cur} MB of ${total_mb} MB"
+  fi
+
+  info "Server"
+  if server_alive; then
+    if curl -sf "$BASE_URL/models" >/dev/null 2>&1; then _chk ok "server up and responding ($BASE_URL)"; else _chk warn "server process alive but not responding yet"; fi
+  else
+    _chk ok "server stopped (idle)"
+  fi
+
+  unset -f _chk
+  echo
+  printf "Summary: %s ok, %s warn, %s fail\n" "$pass" "$warn" "$fail"
+  [ "$fail" -gt 0 ] && return 1
+  return 0
+}
+
 cmd_rm() {
   require_store
   local q="${1:-}"; [ -z "$q" ] && die "Usage: fxlla rm <alias|name>"
@@ -501,6 +560,7 @@ main() {
     off|stop)               cmd_off "$@" ;;
     status|st)              cmd_status "$@" ;;
     stats)                  cmd_stats "$@" ;;
+    doctor)                 cmd_doctor "$@" ;;
     logs|log)               cmd_logs "$@" ;;
     ram)                    cmd_ram "$@" ;;
     wire-opencode|opencode) cmd_wire_opencode "$@" ;;
