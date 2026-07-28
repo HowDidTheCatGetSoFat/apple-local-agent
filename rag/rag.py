@@ -14,6 +14,7 @@ Usage:
 import argparse
 import glob
 import json
+import math
 import os
 import sqlite3
 import struct
@@ -167,8 +168,41 @@ def cmd_add(args):
     print(f"indexed {len(files)} files, {total} chunks into '{args.name}'")
 
 
-def cmd_search(_args):
-    sys.exit("search: not implemented yet")
+def _unpack(blob):
+    return struct.unpack(f"{len(blob) // 4}f", blob)
+
+
+def _cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def cmd_search(args):
+    con = _db()
+    rows = con.execute(
+        "SELECT source, idx, text, emb FROM chunks WHERE kb=?", (args.name,)
+    ).fetchall()
+    if not rows:
+        sys.exit(f"knowledge base '{args.name}' is empty")
+    with Embedder() as emb:
+        qv = emb.embed([args.query])[0]
+    scored = [
+        (_cosine(qv, _unpack(blob)), source, idx, text)
+        for source, idx, text, blob in rows
+    ]
+    scored.sort(reverse=True, key=lambda x: x[0])
+    top = scored[: args.k]
+    if args.json:
+        print(json.dumps([
+            {"score": round(s, 4), "source": src, "chunk": idx, "text": txt}
+            for s, src, idx, txt in top
+        ]))
+        return
+    for score, source, idx, text in top:
+        print(f"[{score:.3f}] {source}#{idx}")
+        print("  " + " ".join(text.split())[:200])
 
 
 def main():
@@ -184,6 +218,7 @@ def main():
     se.add_argument("name")
     se.add_argument("query")
     se.add_argument("-k", type=int, default=5)
+    se.add_argument("-j", "--json", action="store_true")
     args = p.parse_args()
     {"ls": cmd_ls, "rm": cmd_rm, "add": cmd_add, "search": cmd_search}[args.cmd](args)
 
