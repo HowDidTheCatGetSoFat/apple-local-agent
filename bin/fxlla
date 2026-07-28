@@ -147,7 +147,7 @@ cmd_pull() {
       echo "$ggufs" | while IFS= read -r l; do echo "  $l"; done >&2
       die "Recommended for this RAM: Q4_K_M (balanced) or Q5_K_M / Q6_K (higher quality)."
     fi
-    local entry; entry="$(echo "$sel" | grep -- '-00001-of-' | head -1)"
+    local entry; entry="$(echo "$sel" | grep -- '-00001-of-' | head -1 || true)"
     [ -z "$entry" ] && entry="$(echo "$sel" | head -1)"
     echo "gguf" > "$dest/.engine"; basename "$entry" > "$dest/.entry"
   else
