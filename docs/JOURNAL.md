@@ -2,6 +2,27 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-28: Signing and notarization hardening
+
+Shared `app/sign-lib.sh` (identity default, `require_identity`, `verify_signed`)
+used by `build.sh` and `package-dmg.sh`. New `package-dmg.sh --check` validates
+the signing environment without building; the notarize path now validates the
+staple and runs a Gatekeeper assessment. Both notarytool credential routes are
+documented (app-specific password and App Store Connect API key); credentials
+live only in the keychain.
+
+Bug caught while testing: `codesign -d ... | grep -q '...runtime'` reported a
+false negative on a correctly signed app. Under `set -o pipefail`, `grep -q`
+exits on first match and SIGPIPEs `codesign`, so the pipeline returns non-zero
+despite the match. Fixed by capturing the output to a variable and matching
+with `case`. The same shape was latent in `require_identity`. General rule for
+these scripts: do not pipe a long-running producer into `grep -q` under
+pipefail; capture first.
+
+Notarization itself needs the maintainer's Apple credentials (an active
+Developer Program membership plus either an app-specific password or an App
+Store Connect API key), so a real distribution run stays a maintainer step.
+
 ## 2026-07-28: Media generation (image and video)
 
 Phase 4 delivered on the CLI and MCP. `fxlla media image|video` plus an MCP

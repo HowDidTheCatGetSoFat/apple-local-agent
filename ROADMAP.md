@@ -103,8 +103,11 @@ Notes:
   - GPU RAM limit toggle (`fxlla ram auto|reset`) with a privileged helper.
   - Download progress.
   - Localization: English, Portuguese, Spanish.
-- [ ] Signing and notarization: Developer ID Application, `codesign` and
-      `notarytool`. Distribute as a signed `.dmg`.
+- [~] Signing and notarization: Developer ID Application, `codesign` and
+      `notarytool`. Distribute as a signed `.dmg`. Scripting is done
+      (`app/build.sh --sign`, `app/package-dmg.sh --check|--notarize`, hardened
+      runtime verified); a distribution run needs the maintainer's notary
+      credentials in the keychain.
 - [ ] Installer: `.dmg` that installs the app and links the CLI.
 
 ## Phase 2: RAG and knowledge bases
