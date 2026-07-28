@@ -5,11 +5,19 @@ struct PanelView: View {
     @ObservedObject var model: StatusModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("fxlla").font(.headline)
             Text(model.summary)
-                .font(.system(.callout, design: .monospaced))
+                .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .lineLimit(5)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !model.samples.isEmpty {
+                Divider()
+                ChartsView(samples: model.samples)
+            }
+
             Divider()
             HStack {
                 Button("Refresh") { model.refresh() }
@@ -18,6 +26,6 @@ struct PanelView: View {
             }
         }
         .padding(12)
-        .frame(width: 300)
+        .frame(width: 320)
     }
 }

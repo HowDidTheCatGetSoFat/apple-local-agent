@@ -1,15 +1,22 @@
 import SwiftUI
 
-// Holds the state shown in the menu bar, populated from `fxlla status`.
+// Holds the state shown in the menu bar, populated from `fxlla status` and the
+// stats time-series. Refreshes on a timer.
 @MainActor
 final class StatusModel: ObservableObject {
     @Published var running = false
     @Published var summary = "Loading..."
+    @Published var samples: [StatsSample] = []
+
+    private var timer: Timer?
 
     var iconName: String { running ? "cpu.fill" : "cpu" }
 
     init() {
         refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
     }
 
     func refresh() {
@@ -17,9 +24,11 @@ final class StatusModel: ObservableObject {
             let (out, _) = CLI.run(["status"])
             let clean = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines)
             let isRunning = clean.localizedCaseInsensitiveContains("running")
+            let samples = Stats.recent()
             await MainActor.run {
                 self.running = isRunning
                 self.summary = clean.isEmpty ? "fxlla not found or no output" : clean
+                self.samples = samples
             }
         }
     }
