@@ -40,10 +40,13 @@ def main():
 
     audio = np.concatenate([np.asarray(s.audio).reshape(-1) for s in segments])
     pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2")
+    # Use the rate the model reports so the WAV header matches the samples even
+    # if a future build generates at a different native rate.
+    sample_rate = int(getattr(segments[0], "sample_rate", None) or SAMPLE_RATE)
     with wave.open(a.output, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
-        w.setframerate(SAMPLE_RATE)
+        w.setframerate(sample_rate)
         w.writeframes(pcm.tobytes())
     print(a.output)
 
