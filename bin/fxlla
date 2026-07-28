@@ -476,18 +476,25 @@ cmd_doctor() {
   info "Store"
   if [ -d "$FXLLA_STORE" ]; then
     local free; free="$(df -g "$FXLLA_STORE" 2>/dev/null | awk 'NR==2{print $4}')"
-    local n; n="$(find "$MODELS_DIR" -maxdepth 1 -type d 2>/dev/null | grep -c .)"
+    local n; n="$(find "$MODELS_DIR" -maxdepth 1 -type d 2>/dev/null | grep -c . || true)"
     _chk ok "store mounted: $FXLLA_STORE (${free:-?} GB free, $(( n>0 ? n-1 : 0 )) models)"
   else
     _chk fail "store not found: $FXLLA_STORE (set FXLLA_STORE in ~/.config/fxlla/config.env)"
   fi
 
   info "GPU memory"
-  local total_mb cur eff
+  local total_mb cur eff reserve rec
   total_mb=$(( $(sysctl -n hw.memsize) / 1048576 ))
   cur="$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)"
-  eff="$cur"; [ "$cur" = 0 ] && eff=$(( total_mb * 3 / 4 ))
-  _chk ok "GPU can reserve ~${eff} MB of ${total_mb} MB (raise with: fxlla ram auto)"
+  reserve="${FXLLA_RAM_RESERVE_MB:-8192}"; rec=$(( total_mb - reserve ))
+  if [ "$cur" = 0 ]; then
+    eff=$(( total_mb * 3 / 4 ))
+    _chk ok "GPU can reserve ~${eff} MB of ${total_mb} MB (macOS default; raise with: fxlla ram auto)"
+  elif [ "$cur" -lt "$rec" ]; then
+    _chk warn "GPU wired limit ${cur} MB is below recommended ${rec} MB (fxlla ram auto)"
+  else
+    _chk ok "GPU wired limit ${cur} MB of ${total_mb} MB"
+  fi
 
   info "Server"
   if server_alive; then
@@ -496,6 +503,7 @@ cmd_doctor() {
     _chk ok "server stopped (idle)"
   fi
 
+  unset -f _chk
   echo
   printf "Summary: %s ok, %s warn, %s fail\n" "$pass" "$warn" "$fail"
   [ "$fail" -gt 0 ] && return 1
