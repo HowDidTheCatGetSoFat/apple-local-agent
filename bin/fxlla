@@ -45,6 +45,7 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla rm <alias>            Delete a downloaded model
   fxlla config                Show the effective configuration
   fxlla doctor                Diagnose the environment
+  fxlla completions bash|zsh  Print a shell completion script
 
 Store:     $FXLLA_STORE
 Endpoint:  $BASE_URL
@@ -775,6 +776,88 @@ cmd_watch() {
 }
 
 # --------------------------------------------------------------------------
+# Shell completion. The generated bash/zsh scripts stay thin and call back into
+# `fxlla __complete <what>` so the candidate lists live in one place here.
+_complete_catalog() {
+  grep -vE '^[[:space:]]*(#|$)' "$CATALOG" 2>/dev/null | cut -d'|' -f1 | awk 'NF{print $1}'
+}
+
+_complete_downloaded() {
+  [ -d "$MODELS_DIR" ] || return 0
+  local d
+  for d in "$MODELS_DIR"/*/; do
+    [ -f "$d/.source" ] || continue
+    basename "$d"
+  done
+}
+
+cmd_complete() {
+  case "${1:-}" in
+    commands)   printf '%s\n' setup models pull ls on off serve unserve status \
+                  stats doctor logs ram kb graph wire-opencode rm config \
+                  completions help ;;
+    catalog)    _complete_catalog ;;
+    downloaded) _complete_downloaded ;;
+    kb)         printf '%s\n' add search ls rm mcp wire-opencode ;;
+    graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
+                  mcp wire-opencode ;;
+  esac
+}
+
+cmd_completions() {
+  case "${1:-}" in
+    bash) cat <<'EOF'
+# fxlla bash completion. Load with:  source <(fxlla completions bash)
+# Candidates never contain spaces, and macOS ships bash 3.2 (no mapfile), so
+# the classic word-splitting COMPREPLY assignment is used deliberately.
+_fxlla_complete() {
+  local cur cmd words
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  cmd="${COMP_WORDS[1]:-}"
+  if [ "$COMP_CWORD" -eq 1 ]; then
+    # shellcheck disable=SC2207
+    COMPREPLY=( $(compgen -W "$(fxlla __complete commands)" -- "$cur") )
+    return
+  fi
+  words=""
+  case "$cmd" in
+    pull|get)                     words="$(fxlla __complete catalog)" ;;
+    on|start|off|stop|rm|remove)  words="$(fxlla __complete downloaded)" ;;
+    kb)    [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete kb)" ;;
+    graph) [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete graph)" ;;
+    completions) words="bash zsh" ;;
+  esac
+  # shellcheck disable=SC2207
+  COMPREPLY=( $(compgen -W "$words" -- "$cur") )
+}
+complete -F _fxlla_complete fxlla
+EOF
+      ;;
+    zsh) cat <<'EOF'
+#compdef fxlla
+# fxlla zsh completion. Load with:  source <(fxlla completions zsh)
+_fxlla() {
+  local cmd="${words[2]}"
+  if (( CURRENT == 2 )); then
+    compadd -- ${(f)"$(fxlla __complete commands)"}
+    return
+  fi
+  case "$cmd" in
+    pull|get)                     compadd -- ${(f)"$(fxlla __complete catalog)"} ;;
+    on|start|off|stop|rm|remove)  compadd -- ${(f)"$(fxlla __complete downloaded)"} ;;
+    kb)    (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete kb)"} ;;
+    graph) (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete graph)"} ;;
+    completions) compadd -- bash zsh ;;
+  esac
+}
+compdef _fxlla fxlla
+EOF
+      ;;
+    *) die "usage: fxlla completions <bash|zsh>" ;;
+  esac
+}
+
+# --------------------------------------------------------------------------
 main() {
   local cmd="${1:-help}"; shift || true
   case "$cmd" in
@@ -797,6 +880,8 @@ main() {
     wire-opencode|opencode) cmd_wire_opencode "$@" ;;
     rm|remove)              cmd_rm "$@" ;;
     config)                 cmd_config "$@" ;;
+    completions)            cmd_completions "$@" ;;
+    __complete)             cmd_complete "$@" ;;
     __watch)                cmd_watch ;;
     help|-h|--help)         cmd_help ;;
     *)                      warn "Unknown command: $cmd"; cmd_help; exit 1 ;;
