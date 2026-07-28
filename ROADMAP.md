@@ -49,7 +49,9 @@ surprises the user with a large download.
 
 Status: v0 delivered (`fxlla serve` / `fxlla unserve`) with aggregated
 `/v1/models`, on-demand load, and LRU eviction under a RAM budget. Passive
-real-traffic metrics (the MLX gap in the stats work) build on this next.
+real-traffic metrics are now delivered on top of it: the gateway measures tok/s
+and TTFT from the streams it proxies and appends them to the stats time-series,
+closing the MLX gap that log parsing could not (see Phase 1).
 
 Serving evolves from one model at a time to a single endpoint that fronts
 many. This reconciles the two obvious designs into one: a single unified
@@ -88,10 +90,11 @@ Notes:
 
 ## Phase 1: Menu bar app and metrics
 
-- [ ] Stats plumbing: `stats.json` with tokens per second, time to first
-      token, and RAM (server process RSS). Sources: `llama-server` timings
-      (the `timings` object plus `/metrics`) and parsing of the
-      `mlx_lm.server` log. New `fxlla stats` command.
+- [x] Stats plumbing: rolling `stats.jsonl` with tokens per second, time to
+      first token, and RAM (server process RSS). `fxlla stats [--watch]`.
+      Active probe for a single-model server; passive measurement of real
+      traffic from the multi-model gateway (streamed SSE token counting and
+      trailing `usage`), so MLX tok/s is captured without log parsing.
 - [ ] SwiftUI `MenuBarExtra` app (macOS 14+):
   - Start and stop models, show the active one.
   - RAM per model, live tokens per second and time to first token.
