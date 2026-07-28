@@ -16,3 +16,7 @@ hf-cache/
 app/.build/
 .build/
 *.app/
+
+# Python bytecode
+__pycache__/
+*.pyc
