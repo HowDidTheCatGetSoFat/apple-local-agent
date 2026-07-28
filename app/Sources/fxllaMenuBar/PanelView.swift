@@ -3,6 +3,7 @@ import SwiftUI
 // The dropdown panel shown from the menu bar icon.
 struct PanelView: View {
     @ObservedObject var model: StatusModel
+    @State private var pullTarget: CatalogEntry?
 
     var body: some View {
         ScrollView {
@@ -51,7 +52,7 @@ struct PanelView: View {
                         if model.pulling.contains(c.alias) {
                             ProgressView().controlSize(.small)
                         } else {
-                            Button(L.t("Pull")) { model.pull(c.alias) }
+                            Button(L.t("Pull")) { pullTarget = c }
                                 .font(.caption)
                                 .buttonStyle(.borderless)
                         }
@@ -91,5 +92,14 @@ struct PanelView: View {
         }
         .frame(width: 320)
         .frame(maxHeight: 520)
+        .confirmationDialog(
+            pullTarget.map { "\(L.t("Download")) \($0.alias) (\($0.size))?" } ?? "",
+            isPresented: Binding(get: { pullTarget != nil },
+                                 set: { if !$0 { pullTarget = nil } }),
+            presenting: pullTarget
+        ) { target in
+            Button(L.t("Pull")) { model.pull(target.alias); pullTarget = nil }
+            Button("Cancel", role: .cancel) { pullTarget = nil }
+        }
     }
 }
