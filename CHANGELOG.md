@@ -9,6 +9,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 - `fxlla stats [--watch] [--json]`: live RAM (server RSS), time to first token,
   and tokens per second via a small probe, appended to a rolling time-series
   (`stats.jsonl`) for the menu bar app.
+- `fxlla doctor`: environment diagnostics (dependencies, PATH, store, GPU
+  memory, server health).
 - `fxlla pull` now fails loudly if a download leaves pending `.aria2` control
   files, instead of marking an incomplete model as complete.
 

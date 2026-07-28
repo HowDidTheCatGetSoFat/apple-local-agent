@@ -43,9 +43,13 @@ this before opening a pull request.
 
 ## Review
 
-- CodeRabbit runs on demand only. Trigger it with a comment on the pull request
-  when the branch is ready.
-- CodeQL runs on pull requests and on the default branch.
+- Greptile reviews pull requests (installed as a GitHub app on the org). Open a
+  PR only when the branch has enough commits to warrant a single review; do not
+  request a review on a trivial or single-line change.
+- CodeRabbit is available on demand as a second opinion. Trigger it with a
+  comment on the pull request (`@coderabbitai review`).
+- CI runs shell lint (shellcheck and `bash -n`) on changes to `bin/`, `lib/`,
+  or shell scripts. CodeQL runs on pull requests that touch workflow files.
 
 ## Testing
 

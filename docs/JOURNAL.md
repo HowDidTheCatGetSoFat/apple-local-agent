@@ -2,6 +2,22 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-28: Metrics sourcing and fxlla stats
+
+Shipped `fxlla stats` (RAM from server RSS, TTFT and tok/s from a small probe,
+appended to a rolling stats.jsonl time-series). Validated on M5 Max:
+qwen3-coder (30B-A3B 4bit) about 115 tok/s and 90 ms warm TTFT, 16.7 GB RAM.
+
+Finding on passive metrics: mlx_lm.server does not log per-request tok/s (only
+prompt-processing progress and the HTTP line), so passive decode-rate metrics
+for MLX cannot come from log parsing. They will come from the multi-model
+gateway, which sees the real token stream when it proxies. llama-server exposes
+/metrics (Prometheus) and can be read passively. So the passive side of the
+stats work is partly a dependency of the gateway.
+
+Also added `fxlla doctor` (environment diagnostics: deps, PATH, store, GPU
+memory, server health).
+
 ## 2026-07-28: Model availability and consent
 
 Decided the responsibility split for downloading a model that is not cached.
