@@ -2,6 +2,28 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-28: Passive gateway metrics
+
+Closed the passive side of the stats work flagged in the earlier entry. The
+gateway now measures real proxied traffic instead of relying on a synthetic
+probe. Design:
+
+- A separate `gateway/metrics.py` holds the pure logic (SSE token counting,
+  first-token timing, usage parsing, sample append) so it is unit-tested
+  without sockets. The server feeds streamed chunks to a `StreamMetrics` and
+  appends one sample per completed completion request.
+- Token count approximates one token per streamed delta, matching the existing
+  probe. When a server emits a trailing `usage` chunk
+  (`stream_options.include_usage`), its exact `completion_tokens` takes over.
+  Non-streamed responses read `usage.completion_tokens` directly.
+- Recording is best-effort and fully wrapped: a metrics failure logs and is
+  swallowed so it can never affect the proxied response.
+- Samples reuse the CLI probe's schema (`ts, model, engine, ram_mb, ttft_ms,
+  tps`) plus a `source` marker, so the menu bar app renders them unchanged.
+  `serve` pins `FXLLA_STATS_FILE` to the CLI's path so both writers agree.
+- `fxlla stats` now reads these passive samples when the gateway is up (and no
+  single-model server is), rather than probing.
+
 ## 2026-07-28: Metrics sourcing and fxlla stats
 
 Shipped `fxlla stats` (RAM from server RSS, TTFT and tok/s from a small probe,

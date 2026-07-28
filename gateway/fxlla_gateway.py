@@ -15,6 +15,8 @@ Config via environment:
   FXLLA_BACKEND_PORT_BASE       first internal backend port (default 8100)
   FXLLA_GATEWAY_BUDGET_MB       resident RAM budget (default: ~GPU reservable)
   FXLLA_BIN                     path to the fxlla CLI (default: fxlla on PATH)
+  FXLLA_STATS_FILE              passive metrics time-series (default: the CLI's
+                                stats.jsonl under the state dir)
 """
 
 import json
@@ -26,6 +28,9 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import metrics  # noqa: E402  (local module, added to sys.path above)
 
 HOST = os.environ.get("FXLLA_HOST", "127.0.0.1")
 PORT = int(os.environ.get("FXLLA_PORT", "8080"))
@@ -80,26 +85,45 @@ def downloaded_models():
 
 
 class Backend:
-    def __init__(self, alias, port, proc, size_mb, model_field):
+    def __init__(self, alias, port, proc, size_mb, model_field, engine):
         self.alias = alias
         self.port = port
         self.proc = proc
         self.size_mb = size_mb
         self.model_field = model_field  # value to send in the proxied 'model' field
+        self.engine = engine            # 'mlx' or 'gguf', resolved once at load
         self.last_used = time.monotonic()
 
 
-def model_field_for(alias):
-    """The 'model' value each backend expects: the path for MLX, the alias for
-    GGUF (llama-server --alias). Never trust the backend's enumerated id, since
-    mlx_lm.server lists the whole HF cache in /v1/models."""
-    engine = "mlx"
+def engine_for(alias):
+    """Engine marker for a model: 'gguf' or 'mlx' (the default)."""
     try:
         with open(os.path.join(MODELS_DIR, alias, ".engine")) as f:
-            engine = f.read().strip() or "mlx"
+            return f.read().strip() or "mlx"
     except Exception:
-        pass
+        return "mlx"
+
+
+def model_field_from(alias, engine):
+    """The 'model' value a backend expects given its engine: the path for MLX,
+    the alias for GGUF (llama-server --alias). Never trust the backend's
+    enumerated id, since mlx_lm.server lists the whole HF cache in /v1/models."""
     return alias if engine == "gguf" else os.path.join(MODELS_DIR, alias)
+
+
+def model_field_for(alias):
+    """model_field_from with the engine resolved from disk."""
+    return model_field_from(alias, engine_for(alias))
+
+
+def rss_mb(pid):
+    """Resident memory of a process in MB via ps, or 0 if unavailable."""
+    try:
+        out = subprocess.check_output(["ps", "-o", "rss=", "-p", str(pid)],
+                                      stderr=subprocess.DEVNULL)
+        return int(out.strip()) // 1024
+    except Exception:
+        return 0
 
 
 class Manager:
@@ -197,8 +221,10 @@ class Manager:
             with self.lock:
                 self.loading.pop(alias, None)
                 if ready:
-                    model_field = model_field_for(alias)
-                    self.backends[alias] = Backend(alias, port, proc, size_mb, model_field)
+                    engine = engine_for(alias)
+                    model_field = model_field_from(alias, engine)
+                    self.backends[alias] = Backend(
+                        alias, port, proc, size_mb, model_field, engine)
                 ev.set()
         if not ready:
             if proc is not None:
@@ -208,6 +234,14 @@ class Manager:
                     pass
             raise RuntimeError("backend for %s did not become ready" % alias)
         return port, model_field
+
+    def backend_meta(self, alias):
+        """(pid, engine) for a resident backend, or None if it is not loaded."""
+        with self.lock:
+            b = self.backends.get(alias)
+            if b is None or b.proc is None:
+                return None
+            return b.proc.pid, b.engine
 
     def status(self):
         with self.lock:
@@ -285,6 +319,8 @@ class Handler(BaseHTTPRequestHandler):
         upstream = "http://127.0.0.1:%d%s" % (port, self.path)
         req = urllib.request.Request(upstream, data=payload,
                                      headers={"Content-Type": "application/json"})
+        measure = metrics.is_completion_path(self.path)
+        start = time.monotonic()
         try:
             resp = urllib.request.urlopen(req, timeout=600)
         except urllib.error.HTTPError as e:
@@ -305,16 +341,57 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
+        streaming = "event-stream" in ctype
+        sm = metrics.StreamMetrics(start) if (measure and streaming) else None
+        buf = bytearray() if (measure and not streaming) else None
         try:
             while True:
                 chunk = resp.read(1024)
                 if not chunk:
                     break
+                if sm is not None:
+                    try:
+                        sm.feed(chunk)
+                    except Exception:
+                        sm = None  # never let metrics break the proxy
+                elif buf is not None and len(buf) < 512 * 1024:
+                    buf.extend(chunk)
                 self.wfile.write(b"%X\r\n%s\r\n" % (len(chunk), chunk))
                 self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n")
         except Exception:
             pass
+        if measure:
+            self._record(alias, start, sm, bytes(buf) if buf is not None else None)
+
+    def _record(self, alias, start, sm, body_bytes):
+        """Append one passive metrics sample derived from a completed request.
+
+        Best-effort: any failure here is logged and swallowed so telemetry never
+        affects the proxied response."""
+        try:
+            end = time.monotonic()
+            if sm is not None:
+                ttft_ms, tps, tokens = sm.result(end)
+            elif body_bytes is not None:
+                # Non-streamed: no first-token signal, so tps is over the whole
+                # wall time (includes prompt processing); an approximation.
+                tokens = metrics.usage_from_json(body_bytes)
+                ttft_ms = None
+                tps = round(tokens / (end - start), 1) if tokens and end > start else None
+            else:
+                return
+            if not tokens:
+                return  # nothing generated (e.g. an error body): do not record
+            meta = MANAGER.backend_meta(alias)
+            if meta is None:
+                return  # backend evicted between response and record
+            pid, engine = meta
+            sample = metrics.build_sample(
+                time.time(), alias, engine, rss_mb(pid), ttft_ms, tps)
+            metrics.append_sample(metrics.stats_file(), sample)
+        except Exception as e:
+            log("metrics: %s" % e)
 
 
 def _term(signum, frame):
