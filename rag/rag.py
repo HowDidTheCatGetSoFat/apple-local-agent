@@ -16,6 +16,7 @@ import glob
 import json
 import os
 import sqlite3
+import struct
 import subprocess
 import sys
 import time
@@ -113,8 +114,57 @@ def cmd_rm(args):
     print(f"removed {n} chunks from '{args.name}'")
 
 
-def cmd_add(_args):
-    sys.exit("add: not implemented yet")
+TEXT_EXTS = {
+    ".txt", ".md", ".rst", ".py", ".js", ".ts", ".swift", ".sh", ".json",
+    ".yaml", ".yml", ".toml", ".html", ".css", ".go", ".rs", ".java",
+    ".c", ".h", ".cpp", ".hpp",
+}
+
+
+def _pack(vec):
+    return struct.pack(f"{len(vec)}f", *vec)
+
+
+def _gather(paths):
+    files = []
+    for p in paths:
+        if os.path.isdir(p):
+            for root, _dirs, names in os.walk(p):
+                if os.sep + ".git" in root:
+                    continue
+                for n in names:
+                    if os.path.splitext(n)[1].lower() in TEXT_EXTS:
+                        files.append(os.path.join(root, n))
+        elif os.path.isfile(p):
+            files.append(p)
+    return files
+
+
+def cmd_add(args):
+    files = _gather(args.paths)
+    if not files:
+        sys.exit("no text files found in the given paths")
+    con = _db()
+    total = 0
+    with Embedder() as emb:
+        for f in files:
+            try:
+                text = open(f, encoding="utf-8", errors="ignore").read()
+            except Exception:
+                continue
+            chunks = chunk_text(text)
+            if not chunks:
+                continue
+            con.execute("DELETE FROM chunks WHERE kb=? AND source=?", (args.name, f))
+            vecs = emb.embed(chunks)
+            con.executemany(
+                "INSERT INTO chunks VALUES (?,?,?,?,?)",
+                [(args.name, f, i, c, _pack(v)) for i, (c, v) in enumerate(zip(chunks, vecs))],
+            )
+            con.commit()
+            total += len(chunks)
+            print(f"  {f}: {len(chunks)} chunks")
+    print(f"indexed {len(files)} files, {total} chunks into '{args.name}'")
 
 
 def cmd_search(_args):
