@@ -32,6 +32,7 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla on [alias]            Start the server (default: $FXLLA_DEFAULT_MODEL)
   fxlla off                   Stop the server
   fxlla status                Server, model, and idle status
+  fxlla stats [--watch]       Live metrics: RAM, TTFT, tok/s (also --json)
   fxlla logs                  Follow the server log
   fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
   fxlla wire-opencode         Register the local provider in opencode
@@ -371,6 +372,83 @@ cmd_status() {
   fi
 }
 
+# measure time-to-first-token (ms) and decode rate (tok/s) with a tiny probe.
+# prints "TTFT_MS TPS".
+_probe() {
+  BASE_URL="$BASE_URL" python3 - <<'PY'
+import os, json, time, urllib.request
+base = os.environ["BASE_URL"]
+body = json.dumps({
+    "messages": [{"role": "user", "content": "Reply with one short sentence."}],
+    "max_tokens": 48, "stream": True, "temperature": 0,
+}).encode()
+req = urllib.request.Request(base + "/chat/completions", data=body,
+                            headers={"Content-Type": "application/json"})
+t0 = time.time(); tfirst = None; n = 0
+try:
+    r = urllib.request.urlopen(req, timeout=60)
+    for raw in r:
+        line = raw.decode("utf-8", "ignore").strip()
+        if not line.startswith("data:"): continue
+        data = line[5:].strip()
+        if data == "[DONE]": break
+        try: obj = json.loads(data)
+        except Exception: continue
+        delta = (obj.get("choices") or [{}])[0].get("delta", {}).get("content")
+        if delta:
+            if tfirst is None: tfirst = time.time()
+            n += 1
+    tend = time.time()
+    ttft = int((tfirst - t0) * 1000) if tfirst else 0
+    gen = (tend - tfirst) if tfirst else 0
+    tps = round(n / gen, 1) if gen > 0 else 0
+    print(f"{ttft} {tps}")
+except Exception:
+    print("0 0")
+PY
+}
+
+_stats_once() {
+  local json="$1" probe="$2"
+  local pid model engine ram_kb ram_mb idle ttft tps ts sample
+  pid="$(server_pid)"
+  model="$(cut -d'|' -f1 "$CURRENT_FILE" 2>/dev/null || echo '?')"
+  engine="$(cut -d'|' -f3 "$CURRENT_FILE" 2>/dev/null || echo '?')"
+  ram_kb="$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ')"; ram_mb=$(( ${ram_kb:-0} / 1024 ))
+  idle=$(( $(date +%s) - $(stat -f %m "$ACT_FILE" 2>/dev/null || date +%s) ))
+  ttft="null"; tps="null"
+  if [ "$probe" = 1 ]; then read -r ttft tps < <(_probe); fi
+  ts="$(date +%s)"
+  sample="{\"ts\":$ts,\"model\":\"$model\",\"engine\":\"$engine\",\"ram_mb\":$ram_mb,\"ttft_ms\":$ttft,\"tps\":$tps,\"idle_s\":$idle}"
+  echo "$sample" >> "$STATS_FILE"
+  tail -n 5000 "$STATS_FILE" > "$STATS_FILE.tmp" 2>/dev/null && mv "$STATS_FILE.tmp" "$STATS_FILE"
+  if [ "$json" = 1 ]; then
+    echo "$sample"
+  else
+    printf "%-14s %-5s  RAM %5s MB  TTFT %5s ms  %6s tok/s  idle %ss\n" \
+      "$model" "$engine" "$ram_mb" "$ttft" "$tps" "$idle"
+  fi
+}
+
+cmd_stats() {
+  local json=0 watch=0 interval=5 probe=1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json)      json=1 ;;
+      --watch)     watch=1 ;;
+      --interval)  interval="$2"; shift ;;
+      --no-probe)  probe=0 ;;
+      -*)          die "unknown flag: $1" ;;
+    esac; shift
+  done
+  server_alive || die "No server running. Start one: fxlla on <model>"
+  if [ "$watch" = 1 ]; then
+    while true; do _stats_once "$json" "$probe"; server_alive || break; sleep "$interval"; done
+  else
+    _stats_once "$json" "$probe"
+  fi
+}
+
 cmd_logs() { [ -f "$LOG_FILE" ] || die "No log yet."; tail -f "$LOG_FILE"; }
 
 cmd_rm() {
@@ -422,6 +500,7 @@ main() {
     on|start)               cmd_on "$@" ;;
     off|stop)               cmd_off "$@" ;;
     status|st)              cmd_status "$@" ;;
+    stats)                  cmd_stats "$@" ;;
     logs|log)               cmd_logs "$@" ;;
     ram)                    cmd_ram "$@" ;;
     wire-opencode|opencode) cmd_wire_opencode "$@" ;;
