@@ -1,7 +1,6 @@
 import SwiftUI
 
-// Holds the state shown in the menu bar. Populated from the fxlla CLI; this is
-// a scaffold and gets wired to the CLI and stats.jsonl in later commits.
+// Holds the state shown in the menu bar, populated from `fxlla status`.
 @MainActor
 final class StatusModel: ObservableObject {
     @Published var running = false
@@ -14,7 +13,14 @@ final class StatusModel: ObservableObject {
     }
 
     func refresh() {
-        // TODO: shell out to `fxlla status` and parse. Placeholder for now.
-        summary = "fxlla menu bar (scaffold)"
+        Task.detached {
+            let (out, _) = CLI.run(["status"])
+            let clean = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines)
+            let isRunning = clean.localizedCaseInsensitiveContains("running")
+            await MainActor.run {
+                self.running = isRunning
+                self.summary = clean.isEmpty ? "fxlla not found or no output" : clean
+            }
+        }
     }
 }
