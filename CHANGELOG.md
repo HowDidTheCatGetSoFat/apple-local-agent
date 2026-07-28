@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- Menu bar app (`app/`, SwiftUI `MenuBarExtra`): live `fxlla status`,
+  time-series charts for tokens/s, TTFT, and RAM (GB), gateway start/stop,
+  model list with on-demand load, and a GPU RAM limit toggle. Builds to a
+  `.app` bundle with an optional signed `.dmg`.
 - Multi-model gateway (`fxlla serve` / `fxlla unserve`): one OpenAI-compatible
   endpoint fronting every downloaded model, with on-demand loading and
   least-recently-used eviction under a RAM budget. Aggregated `/v1/models`,

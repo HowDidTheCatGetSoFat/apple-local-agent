@@ -37,15 +37,14 @@ this before opening a pull request.
 ## Commits and pull requests
 
 - Small, focused commits with clear messages.
-- Group related work into a branch and accumulate enough commits before
-  requesting review, so reviews are not fragmented.
-- Do not request an automated review on a trivial or single-line change.
+- Accumulate work on a feature branch and request a review only once it has
+  about 20 commits, so reviews batch meaningful work instead of fragmenting.
+- Do not request a review on a trivial or single-commit change.
 
 ## Review
 
-- Greptile reviews pull requests (installed as a GitHub app on the org). Open a
-  PR only when the branch has enough commits to warrant a single review; do not
-  request a review on a trivial or single-line change.
+- Greptile reviews pull requests (installed as a GitHub app on the org).
+  Request a Greptile review once the branch has reached about 20 commits.
 - CodeRabbit is available on demand as a second opinion. Trigger it with a
   comment on the pull request (`@coderabbitai review`).
 - CI runs shell lint (shellcheck and `bash -n`) on changes to `bin/`, `lib/`,

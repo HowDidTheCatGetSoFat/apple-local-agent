@@ -134,6 +134,17 @@ load would exceed the RAM budget (`FXLLA_GATEWAY_BUDGET_MB`, derived from the
 GPU limit by default). In opencode you pick any local model from the `local`
 provider and the gateway handles loading.
 
+## Menu bar app
+
+A native SwiftUI menu bar app lives in `app/`: live status, time-series charts
+(tokens/s, TTFT, RAM in GB), gateway start/stop, model list with on-demand
+load, and a GPU RAM toggle. It is a thin front end over the CLI. See
+`app/README.md`.
+
+```sh
+app/build.sh && open app/fxlla.app
+```
+
 ## How it fits together
 
 `fxlla` is the control plane. It serves an OpenAI-compatible endpoint that
