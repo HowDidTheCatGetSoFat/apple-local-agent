@@ -8,9 +8,12 @@ final class StatusModel: ObservableObject {
     @Published var summary = "Loading..."
     @Published var samples: [StatsSample] = []
     @Published var resident: [ResidentModel] = []
+    @Published var models: [CatalogModel] = []
     @Published var budgetGB: Double = 0
 
     private var timer: Timer?
+
+    func residentFor(_ alias: String) -> ResidentModel? { resident.first { $0.alias == alias } }
 
     var iconName: String { running ? "cpu.fill" : "cpu" }
 
@@ -30,11 +33,13 @@ final class StatusModel: ObservableObject {
             let isRunning = clean.localizedCaseInsensitiveContains("running")
             let samples = Stats.recent()
             let health = Gateway.health()
+            let models = Gateway.models()
             await MainActor.run {
                 self.running = isRunning
                 self.summary = clean.isEmpty ? "fxlla not found or no output" : clean
                 self.samples = samples
                 self.resident = health?.resident ?? []
+                self.models = models
                 self.budgetGB = (health?.budgetMB ?? 0) / 1024
             }
         }
@@ -42,6 +47,14 @@ final class StatusModel: ObservableObject {
 
     func startGateway() { runThenRefresh(["serve"]) }
     func stopGateway() { runThenRefresh(["unserve"]) }
+
+    func load(_ alias: String) {
+        busy = true
+        Task.detached {
+            Gateway.warmup(alias)
+            await MainActor.run { self.busy = false; self.refresh() }
+        }
+    }
 
     private func runThenRefresh(_ args: [String]) {
         busy = true

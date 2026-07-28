@@ -13,15 +13,25 @@ struct PanelView: View {
                 .lineLimit(5)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if !model.resident.isEmpty {
+            if !model.models.isEmpty {
                 Divider()
-                ForEach(model.resident) { m in
+                ForEach(model.models) { m in
+                    let res = model.residentFor(m.alias)
                     HStack {
-                        Text(m.alias).font(.caption.bold())
+                        Circle()
+                            .fill(res != nil ? Color.green : Color.secondary.opacity(0.4))
+                            .frame(width: 6, height: 6)
+                        Text(m.alias).font(.caption)
                         Spacer()
-                        Text(String(format: "%.1f GB", m.sizeMB / 1024))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                        if let res {
+                            Text(String(format: "%.1f GB", res.sizeMB / 1024))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Button("Load") { model.load(m.alias) }
+                                .font(.caption)
+                                .buttonStyle(.borderless)
+                        }
                     }
                 }
                 Text(String(format: "budget %.0f GB", model.budgetGB))
