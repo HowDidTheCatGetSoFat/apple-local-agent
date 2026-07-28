@@ -8,6 +8,7 @@ struct StatsSample: Identifiable {
     let ramMB: Double
     let ttftMS: Double?
     let tps: Double?
+    let source: String   // "gateway" for passive real traffic, else "probe"
 }
 
 enum Stats {
@@ -32,7 +33,8 @@ enum Stats {
                 model: obj["model"] as? String ?? "?",
                 ramMB: num(obj["ram_mb"]) ?? 0,
                 ttftMS: num(obj["ttft_ms"]),
-                tps: num(obj["tps"])))
+                tps: num(obj["tps"]),
+                source: obj["source"] as? String ?? "probe"))
         }
         return out
     }

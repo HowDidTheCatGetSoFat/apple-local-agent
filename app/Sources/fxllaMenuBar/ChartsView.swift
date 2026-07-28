@@ -5,8 +5,18 @@ import Charts
 struct ChartsView: View {
     let samples: [StatsSample]
 
+    // "live" when the newest sample came from real gateway traffic, else "probe".
+    private var sourceLabel: String {
+        (samples.last?.source == "gateway") ? L.t("live traffic") : L.t("probe")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(L.t("Metrics")).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text(sourceLabel).font(.caption2).foregroundStyle(.tertiary)
+            }
             metric("tokens/s", color: .blue, format: "%.0f",
                    points: samples.compactMap { s in s.tps.map { (s.ts, $0) } })
             metric("TTFT ms", color: .orange, format: "%.0f",

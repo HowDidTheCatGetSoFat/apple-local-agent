@@ -10,6 +10,7 @@ enum L {
             "Start gateway": "Iniciar gateway", "Stop gateway": "Detener gateway",
             "GPU RAM": "RAM GPU", "Max": "Máx", "Default": "Predeterminado",
             "budget": "presupuesto",
+            "Metrics": "Métricas", "live traffic": "tráfico real", "probe": "sonda",
         ],
         "pt": [
             "Download": "Baixar", "Load": "Carregar", "Pull": "Baixar",
@@ -17,6 +18,7 @@ enum L {
             "Start gateway": "Iniciar gateway", "Stop gateway": "Parar gateway",
             "GPU RAM": "RAM GPU", "Max": "Máx", "Default": "Padrão",
             "budget": "orçamento",
+            "Metrics": "Métricas", "live traffic": "tráfego real", "probe": "sonda",
         ],
     ]
 
