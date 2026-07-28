@@ -619,11 +619,40 @@ cmd_rm() {
 }
 
 # --------------------------------------------------------------------------
-# RAG knowledge bases (delegates to rag/rag.py)
+# RAG knowledge bases (delegates to rag/rag.py; MCP server for opencode/Claude)
 cmd_kb() {
   need python3; require_store
+  case "${1:-}" in
+    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/rag/mcp_server.py" ;;
+    wire-opencode) _wire_rag_mcp; return ;;
+  esac
   FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
     python3 "$REPO_ROOT/rag/rag.py" "$@"
+}
+
+# register the RAG MCP server in opencode's config
+_wire_rag_mcp() {
+  local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+  mkdir -p "$(dirname "$cfg")"
+  CFG="$cfg" MCP="$REPO_ROOT/rag/mcp_server.py" STORE="$FXLLA_STORE" python3 - <<'PY'
+import os, json
+cfg = os.environ["CFG"]
+try:
+    with open(cfg) as f: data = json.load(f)
+except Exception:
+    data = {}
+data.setdefault("$schema", "https://opencode.ai/config.json")
+mcp = data.setdefault("mcp", {})
+mcp["fxlla-rag"] = {
+    "type": "local",
+    "command": ["python3", os.environ["MCP"]],
+    "environment": {"FXLLA_STORE": os.environ["STORE"]},
+    "enabled": True,
+}
+with open(cfg, "w") as f: json.dump(data, f, indent=2)
+print(cfg)
+PY
+  ok "RAG MCP registered in opencode. Use rag_search over your knowledge bases."
 }
 
 # --------------------------------------------------------------------------
