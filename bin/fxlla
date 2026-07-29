@@ -45,6 +45,8 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla media image "<prompt>"  Generate an image locally (mflux-cv). Also 'models'
   fxlla media video "<prompt>"  Generate a short video locally (ltx-2-mlx)
   fxlla media voice "<text>"    Synthesize speech locally (mlx-audio)
+  fxlla media edit "<prompt>" --image p  Edit an image locally (mflux-cv qwen-edit)
+  fxlla media upscale --image p          Upscale an image locally (mflux-cv seedvr2)
   fxlla wire-opencode [--all] Register the local provider (--all: + MCP + skills)
   fxlla skills install        Install the tool-usage skills (opencode + Claude Code)
   fxlla rm <alias>            Delete a downloaded model
@@ -1155,7 +1157,7 @@ cmd_complete() {
     kb)         printf '%s\n' add search ls rm mcp wire-opencode ;;
     graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
                   mcp wire-opencode ;;
-    media)      printf '%s\n' image video voice models mcp wire-opencode ;;
+    media)      printf '%s\n' image video voice edit upscale models mcp wire-opencode ;;
     skills)     printf '%s\n' install ls ;;
   esac
 }

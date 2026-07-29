@@ -169,9 +169,9 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
 - Code graph upgrades (L): KuzuDB (embedded, Cypher) instead of flat SQLite;
   multi-language parsing via tree-sitter or SCIP (Python-only today);
   transitive change-impact queries.
-- More media tools (M): `edit_image` and `upscale_image` (mflux-cv already
-  ships the CLIs, so this is wrapper plus validation work); wire Wan 2.2
-  (mlx-video) as a second video backend alongside LTX.
+- More media tools: `edit_image` and `upscale_image` are DONE
+  (`fxlla media edit` / `upscale`). Still open: wire Wan 2.2 (mlx-video) as a
+  second video backend alongside LTX (M).
 - Async media jobs (M): submit returns a job id, the caller polls for status
   and the output path. Keeps MCP tool calls fast and lets heavy video runs
   happen in the background. Pairs naturally with the Tier 1 coordination.

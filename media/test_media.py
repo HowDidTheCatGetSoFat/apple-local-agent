@@ -138,6 +138,57 @@ class TestBuildVideoCommand(unittest.TestCase):
         self.assertEqual(cmd[0], "/venv/bin/ltx-2-mlx")
 
 
+class TestBuildEditCommand(unittest.TestCase):
+    def test_builds_edit_invocation(self):
+        cmd = media.build_edit_command("make it night", "/in.png", "/out.png",
+                                       bin_path="qwen-edit")
+        self.assertEqual(cmd[0], "qwen-edit")
+        self.assertEqual(cmd[cmd.index("--prompt") + 1], "make it night")
+        self.assertEqual(cmd[cmd.index("--image-paths") + 1], "/in.png")
+        self.assertEqual(cmd[cmd.index("--output") + 1], "/out.png")
+        self.assertIn("--quantize", cmd)
+
+    def test_seed_and_quantize(self):
+        cmd = media.build_edit_command("x", "/in.png", "/out.png", seed=7,
+                                       quantize=4, bin_path="qwen-edit")
+        self.assertEqual(cmd[cmd.index("--seed") + 1], "7")
+        self.assertEqual(cmd[cmd.index("--quantize") + 1], "4")
+
+    def test_missing_image_raises(self):
+        with self.assertRaises(ValueError):
+            media.build_edit_command("x", "", "/out.png")
+
+    def test_empty_prompt_raises(self):
+        with self.assertRaises(ValueError):
+            media.build_edit_command("", "/in.png", "/out.png")
+
+    def test_missing_input_path_raises(self):
+        with self.assertRaises(ValueError):
+            media.generate_edit("x", "/no/such/input.png")
+
+
+class TestBuildUpscaleCommand(unittest.TestCase):
+    def test_builds_upscale_invocation(self):
+        cmd = media.build_upscale_command("/in.png", "/out.png", bin_path="seedvr2")
+        self.assertEqual(cmd[0], "seedvr2")
+        self.assertEqual(cmd[cmd.index("--image-path") + 1], "/in.png")
+        self.assertEqual(cmd[cmd.index("--output") + 1], "/out.png")
+        self.assertNotIn("--resolution", cmd)
+
+    def test_scale_maps_to_resolution(self):
+        cmd = media.build_upscale_command("/in.png", "/out.png", scale="2x",
+                                          bin_path="seedvr2")
+        self.assertEqual(cmd[cmd.index("--resolution") + 1], "2x")
+
+    def test_missing_image_raises(self):
+        with self.assertRaises(ValueError):
+            media.build_upscale_command("", "/out.png")
+
+    def test_missing_input_path_raises(self):
+        with self.assertRaises(ValueError):
+            media.generate_upscale("/no/such/input.png")
+
+
 class TestValidateVideoOutput(unittest.TestCase):
     def test_missing(self):
         with self.assertRaises(RuntimeError):
@@ -191,7 +242,16 @@ class TestMCP(unittest.TestCase):
     def test_tools_list(self):
         r = media_mcp.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         self.assertEqual({t["name"] for t in r["result"]["tools"]},
-                         {"generate_image", "generate_video", "generate_speech"})
+                         {"generate_image", "generate_video", "generate_speech",
+                          "edit_image", "upscale_image"})
+
+    def test_edit_and_upscale_require_image(self):
+        tools = {t["name"]: t for t in
+                 media_mcp.handle({"jsonrpc": "2.0", "id": 9,
+                                   "method": "tools/list"})["result"]["tools"]}
+        self.assertIn("image", tools["edit_image"]["inputSchema"]["required"])
+        self.assertIn("prompt", tools["edit_image"]["inputSchema"]["required"])
+        self.assertEqual(tools["upscale_image"]["inputSchema"]["required"], ["image"])
 
     def test_unknown_tool(self):
         r = media_mcp.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -206,6 +266,15 @@ class TestMCP(unittest.TestCase):
 
     def test_generate_speech_requires_text(self):
         self.assertTrue(media_mcp.run_generate_speech({}).startswith("error"))
+
+    def test_edit_requires_image(self):
+        self.assertTrue(media_mcp.run_edit({"prompt": "x"}).startswith("error"))
+
+    def test_edit_requires_prompt(self):
+        self.assertTrue(media_mcp.run_edit({"image": "/in.png"}).startswith("error"))
+
+    def test_upscale_requires_image(self):
+        self.assertTrue(media_mcp.run_upscale({}).startswith("error"))
 
 
 class TestBuildVoiceCommand(unittest.TestCase):
