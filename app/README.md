@@ -12,6 +12,8 @@ the CLI.
 - Time-series charts (Swift Charts): tokens/s, TTFT, and RAM in GB.
 - Gateway start/stop.
 - Model list with resident markers and on-demand load.
+- Media generation: a prompt, an image/video/voice picker, and a Generate
+  button that runs `fxlla media` and reveals the output in Finder.
 - GPU RAM limit toggle (native admin prompt).
 
 ## Build and run

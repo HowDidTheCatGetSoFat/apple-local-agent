@@ -11,6 +11,8 @@ enum L {
             "GPU RAM": "RAM GPU", "Max": "Máx", "Default": "Predeterminado",
             "budget": "presupuesto",
             "Metrics": "Métricas", "live traffic": "tráfico real", "probe": "sonda",
+            "Media": "Medios", "Prompt": "Indicacion", "Generate": "Generar",
+            "Image": "Imagen", "Video": "Video", "Voice": "Voz",
         ],
         "pt": [
             "Download": "Baixar", "Load": "Carregar", "Pull": "Baixar",
@@ -19,6 +21,8 @@ enum L {
             "GPU RAM": "RAM GPU", "Max": "Máx", "Default": "Padrão",
             "budget": "orçamento",
             "Metrics": "Métricas", "live traffic": "tráfego real", "probe": "sonda",
+            "Media": "Midia", "Prompt": "Instrucao", "Generate": "Gerar",
+            "Image": "Imagem", "Video": "Video", "Voice": "Voz",
         ],
     ]
 

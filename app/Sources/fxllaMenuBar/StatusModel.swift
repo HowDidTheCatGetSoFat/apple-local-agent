@@ -1,4 +1,18 @@
+import AppKit
 import SwiftUI
+
+// The kind of media the CLI can generate: `fxlla media <type> "<prompt>"`.
+enum MediaKind: String, CaseIterable, Identifiable {
+    case image, video, voice
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .image: return "Image"
+        case .video: return "Video"
+        case .voice: return "Voice"
+        }
+    }
+}
 
 // Holds the state shown in the menu bar, populated from `fxlla status`, the
 // gateway, and the stats time-series. All I/O is async so the UI stays live.
@@ -14,6 +28,9 @@ final class StatusModel: ObservableObject {
     @Published var budgetGB: Double = 0
     @Published var busy = false
     @Published var lastError: String?
+    @Published var mediaPrompt = ""
+    @Published var mediaKind: MediaKind = .image
+    @Published var generating = false
 
     private var timer: Timer?
 
@@ -67,6 +84,28 @@ final class StatusModel: ObservableObject {
             pulling.remove(alias)
             if code != 0 { lastError = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines) }
             refresh()
+        }
+    }
+
+    // Generate media locally. The CLI prints the output file path on stdout as
+    // its last line; on success reveal that file in Finder.
+    func generateMedia() {
+        let prompt = mediaPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !generating else { return }
+        generating = true
+        lastError = nil
+        Task {
+            let (out, code) = await CLI.run(["media", mediaKind.rawValue, prompt])
+            generating = false
+            let clean = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines)
+            if code == 0 {
+                if let last = clean.split(separator: "\n").last.map(String.init), !last.isEmpty {
+                    let url = URL(fileURLWithPath: last)
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+            } else {
+                lastError = clean
+            }
         }
     }
 
