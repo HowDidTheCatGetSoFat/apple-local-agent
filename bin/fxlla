@@ -750,18 +750,19 @@ cmd_doctor() {
   else
     _chk warn "video backend not found: $FXLLA_VIDEO_BIN (set FXLLA_VIDEO_BIN)"
   fi
-  if command -v "$FXLLA_VOICE_PYTHON" >/dev/null 2>&1 \
-     && "$FXLLA_VOICE_PYTHON" -c 'import mlx_audio' >/dev/null 2>&1; then
+  if ! command -v "$FXLLA_VOICE_PYTHON" >/dev/null 2>&1; then
+    _chk warn "voice interpreter not found: $FXLLA_VOICE_PYTHON (set FXLLA_VOICE_PYTHON)"
+  elif "$FXLLA_VOICE_PYTHON" -c 'import mlx_audio' >/dev/null 2>&1; then
     _chk ok "voice backend: $FXLLA_VOICE_PYTHON has mlx-audio"
   else
-    _chk warn "voice backend has no mlx-audio (set FXLLA_VOICE_PYTHON to a venv with it)"
+    _chk warn "voice interpreter has no mlx-audio: $FXLLA_VOICE_PYTHON (install it in that venv)"
   fi
-  if [ -n "$FXLLA_MEDIA_HF_HOME" ]; then
-    if [ -d "$FXLLA_MEDIA_HF_HOME" ]; then
-      _chk ok "media weight cache: $FXLLA_MEDIA_HF_HOME"
-    else
-      _chk warn "media weight cache not found: $FXLLA_MEDIA_HF_HOME (is the disk mounted?)"
-    fi
+  if [ -z "$FXLLA_MEDIA_HF_HOME" ]; then
+    _chk warn "FXLLA_MEDIA_HF_HOME unset (using the default HF cache; set it to verify a path)"
+  elif [ -d "$FXLLA_MEDIA_HF_HOME" ]; then
+    _chk ok "media weight cache: $FXLLA_MEDIA_HF_HOME"
+  else
+    _chk warn "media weight cache not found: $FXLLA_MEDIA_HF_HOME (is the disk mounted?)"
   fi
 
   info "Server"
