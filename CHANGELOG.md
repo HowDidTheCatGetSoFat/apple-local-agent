@@ -6,6 +6,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- Tool enablement: `fxlla wire-opencode --all` registers the provider and every
+  MCP server (rag, graph, media) at once, and `fxlla skills install` installs a
+  portable skill pack (`skills/`) that tells a model when to use the tools -
+  retrieve from a knowledge base, walk the code graph before editing, offer
+  media generation, and check availability and consent before a download.
+  Installs for Claude Code (`~/.claude/skills`) and opencode (its `instructions`
+  list), idempotently.
 - Menu bar app media controls: a prompt, an image/video/voice picker, and a
   Generate button that runs `fxlla media` and reveals the output in Finder. A
   path-filtered macOS CI job builds the app on `app/**` changes.
