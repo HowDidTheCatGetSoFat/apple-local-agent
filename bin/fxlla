@@ -987,16 +987,21 @@ cmd_rm() {
 # python that can load sqlite extensions; the system python often cannot, so with
 # FXLLA_KB_INDEX on we run under `uv run --with sqlite-vec` (uv is a hard dep).
 # FXLLA_KB_PYTHON overrides with an explicit interpreter for advanced setups.
+# Pure resolution: it never checks for uv, so wire-opencode can register the uv
+# command on a machine where uv is only present at run time. Callers that execute
+# KB_PY guard it with `_need_kb_uv`.
 _kb_python() {
   if [ -n "${FXLLA_KB_PYTHON:-}" ]; then
     KB_PY=("$FXLLA_KB_PYTHON")
   elif is_true "${FXLLA_KB_INDEX:-}"; then
-    need uv
     KB_PY=(uv run --with sqlite-vec --no-project python)
   else
     KB_PY=(python3)
   fi
 }
+
+# Requires uv only when KB_PY actually runs under it (index on, no override).
+_need_kb_uv() { [ "${KB_PY[0]}" = uv ] && need uv || true; }
 
 # RAG knowledge bases (delegates to rag/core.py; MCP server for opencode/Claude)
 cmd_kb() {
@@ -1005,12 +1010,14 @@ cmd_kb() {
   case "${1:-}" in
     # Run the MCP server under the kb python so its own core.py subprocess
     # (spawned via sys.executable) inherits sqlite-vec when the index is on.
-    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" \
+    mcp)           _need_kb_uv
+                   exec env FXLLA_STORE="$FXLLA_STORE" \
                      FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
                      FXLLA_KB_INDEX="${FXLLA_KB_INDEX:-}" \
                      "${KB_PY[@]}" "$REPO_ROOT/rag/rag_mcp.py" ;;
     wire-opencode) _wire_rag_mcp; return ;;
   esac
+  _need_kb_uv
   FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
   FXLLA_KB_INDEX="${FXLLA_KB_INDEX:-}" \
     "${KB_PY[@]}" "$REPO_ROOT/rag/core.py" "$@"
