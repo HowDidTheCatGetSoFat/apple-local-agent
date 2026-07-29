@@ -983,6 +983,21 @@ cmd_rm() {
 }
 
 # --------------------------------------------------------------------------
+# Selects the python that runs rag/core.py. The sqlite-vec KNN index needs a
+# python that can load sqlite extensions; the system python often cannot, so with
+# FXLLA_KB_INDEX on we run under `uv run --with sqlite-vec` (uv is a hard dep).
+# FXLLA_KB_PYTHON overrides with an explicit interpreter for advanced setups.
+_kb_python() {
+  if [ -n "${FXLLA_KB_PYTHON:-}" ]; then
+    KB_PY=("$FXLLA_KB_PYTHON")
+  elif is_true "${FXLLA_KB_INDEX:-}"; then
+    need uv
+    KB_PY=(uv run --with sqlite-vec --no-project python)
+  else
+    KB_PY=(python3)
+  fi
+}
+
 # RAG knowledge bases (delegates to rag/core.py; MCP server for opencode/Claude)
 cmd_kb() {
   need python3; require_store
@@ -990,8 +1005,10 @@ cmd_kb() {
     mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/rag/rag_mcp.py" ;;
     wire-opencode) _wire_rag_mcp; return ;;
   esac
+  local KB_PY; _kb_python
   FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
-    python3 "$REPO_ROOT/rag/core.py" "$@"
+  FXLLA_KB_INDEX="${FXLLA_KB_INDEX:-}" \
+    "${KB_PY[@]}" "$REPO_ROOT/rag/core.py" "$@"
 }
 
 # register the RAG MCP server in opencode's config

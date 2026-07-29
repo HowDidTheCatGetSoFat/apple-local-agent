@@ -11,6 +11,8 @@ ok()   { printf '%s%s%s\n' "$(_c '0;32')" "$*" "$(_c 0)"; }
 warn() { printf '%s%s%s\n' "$(_c '0;33')" "$*" "$(_c 0)" >&2; }
 die()  { printf '%s%s%s\n' "$(_c '0;31')" "$*" "$(_c 0)" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "Missing '$1'. Run: fxlla setup"; }
+# True for the usual opt-in values; empty, 0, false, no, off are all false.
+is_true() { case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in 1|true|yes|on) return 0;; *) return 1;; esac; }
 
 # --- configuration --------------------------------------------------------
 # Precedence: already-exported vars > ~/.config/fxlla/config.env > defaults.
@@ -47,6 +49,9 @@ fi
 : "${FXLLA_MEDIA_KEEP_MODELS:=}"  # set to 1 to keep gateway models during media jobs
 : "${FXLLA_CIVITAI_TOKEN:=}"   # Civitai API token for downloading from civitai.com
 : "${FXLLA_DOWNLOADER:=aria2}"  # default pull transfer: aria2 (bandwidth-capped) or hf
+: "${FXLLA_KB_INDEX:=}"        # set to 1 for the sqlite-vec KNN index (kb search)
+: "${FXLLA_KB_PYTHON:=}"       # override interpreter for rag/core.py (see fxlla kb)
+: "${FXLLA_EMBED_PORT:=8090}"  # port for the local llama.cpp embedding server
 
 MODELS_DIR="$FXLLA_STORE/models"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/fxlla"

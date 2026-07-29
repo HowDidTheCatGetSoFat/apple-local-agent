@@ -2,6 +2,31 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-29: RAG vector index (sqlite-vec), opt-in
+
+First step of the RAG/KuzuDB priority. `fxlla kb search` scored every chunk with
+a python cosine loop (O(n)); fine for small bases, wasteful past a few thousand
+chunks.
+
+- `FXLLA_KB_INDEX=1` opts into a `sqlite-vec` KNN index. A per-kb `vec0` virtual
+  table (`vec_<kb>`, cosine distance) is rebuilt on demand from the `chunks`
+  table whenever its row count drifts, so `cmd_add` stays untouched and the
+  index never re-embeds anything - it only repacks stored vectors.
+- The chunks table remains the single source of truth. The index is derived
+  state; deleting or corrupting it only forces a rebuild on the next search.
+- sqlite-vec is not in the system python and macOS system python often forbids
+  `load_extension`. So with the index on, `bin/fxlla kb` runs `rag/core.py`
+  under `uv run --with sqlite-vec --no-project python` (uv is a hard dep, same
+  pattern as `pull --downloader hf`). `FXLLA_KB_PYTHON` overrides the interpreter.
+- Fully graceful: `_load_vec` returns None when the index is off or the extension
+  will not load, and search falls back to the original brute-force scan. Scores
+  are identical (cosine distance = 1 - cosine similarity), verified end to end
+  against the live nomic embedder.
+- Gotcha found in testing: dropping a `vec0` table needs the extension loaded on
+  that connection, so `cmd_rm` loads it best-effort and guards the DROP.
+- The RAG MCP server still uses the scan (it spawns system python3); routing it
+  through the index is left in the roadmap.
+
 ## 2026-07-28: Media and gateway memory coordination
 
 Closed the one robustness gap from docs/roadmap-remaining.md (Tier 1). Media
