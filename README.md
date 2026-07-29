@@ -88,6 +88,13 @@ Both are set in `~/.config/fxlla/config.env`, which is never committed:
   local folder.
 - `HF_TOKEN` is only needed for gated Hugging Face repositories. Leave it unset
   otherwise.
+- `FXLLA_CIVITAI_TOKEN` lets `fxlla pull civitai:<id>` fetch LoRAs and
+  checkpoints from civitai.com (into `<store>/civitai`):
+
+  ```sh
+  fxlla pull civitai:12345                 # a Civitai model-version id
+  fxlla pull https://civitai.com/models/999?modelVersionId=12345
+  ```
 
 Never put tokens anywhere else in the tree. `config/config.env` is git-ignored.
 An exported environment variable always wins over `config.env`, which in turn

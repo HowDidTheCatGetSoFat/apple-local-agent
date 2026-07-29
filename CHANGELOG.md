@@ -6,6 +6,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- Civitai as a weight source: `fxlla pull civitai:<id>` (or a civitai.com URL)
+  downloads a LoRA or checkpoint from civitai.com into `<store>/civitai`,
+  bandwidth-capped like every pull, authenticated with `FXLLA_CIVITAI_TOKEN`.
 - Tool enablement: `fxlla wire-opencode --all` registers the provider and every
   MCP server (rag, graph, media) at once, and `fxlla skills install` installs a
   portable skill pack (`skills/`) that tells a model when to use the tools -
