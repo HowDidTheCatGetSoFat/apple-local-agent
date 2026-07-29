@@ -6,6 +6,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- Menu bar app media controls: a prompt, an image/video/voice picker, and a
+  Generate button that runs `fxlla media` and reveals the output in Finder. A
+  path-filtered macOS CI job builds the app on `app/**` changes.
 - Media generation (`fxlla media image|video|voice`): local image generation
   through the mflux-cv toolchain (z-image-turbo and friends), short video through
   ltx-2-mlx (LTX-2.3), and text-to-speech through mlx-audio (Chatterbox), with

@@ -50,7 +50,10 @@ Delivered: media generation frees the gateway's resident models before a job
 
 ## Tier 2: completeness and UX
 
-### Media controls in the menu bar app
+### Media controls in the menu bar app - DONE
+
+Delivered: a Media section (prompt, image/video/voice picker, Generate) that runs
+`fxlla media` and reveals the output in Finder. Original note kept below.
 
 - What: the app predates the media feature and exposes none of it. Add
   image/video/voice entry points (at minimum: trigger a generation, show
@@ -87,7 +90,11 @@ capped pull integration (the L part below) is still pending. Original note kept.
 - Effort: S.
 - Acceptance: after installing from the .dmg, a new terminal runs `fxlla`.
 
-### CI for the Swift app
+### CI for the Swift app - DONE
+
+Delivered: `.github/workflows/app.yml` builds the app (unsigned) on a macOS
+runner, path-filtered to `app/**` so the paid runner stays idle otherwise.
+Original note kept below.
 
 - What: CI covers shell, python, and CodeQL; the app is only built locally.
   Add a macOS runner job that runs `app/build.sh` (unsigned) on every PR.

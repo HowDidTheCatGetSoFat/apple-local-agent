@@ -1,4 +1,18 @@
+import AppKit
 import SwiftUI
+
+// The kind of media the CLI can generate: `fxlla media <type> "<prompt>"`.
+enum MediaKind: String, CaseIterable, Identifiable {
+    case image, video, voice
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .image: return "Image"
+        case .video: return "Video"
+        case .voice: return "Voice"
+        }
+    }
+}
 
 // Holds the state shown in the menu bar, populated from `fxlla status`, the
 // gateway, and the stats time-series. All I/O is async so the UI stays live.
@@ -14,6 +28,9 @@ final class StatusModel: ObservableObject {
     @Published var budgetGB: Double = 0
     @Published var busy = false
     @Published var lastError: String?
+    @Published var mediaPrompt = ""
+    @Published var mediaKind: MediaKind = .image
+    @Published var generating = false
 
     private var timer: Timer?
 
@@ -23,8 +40,8 @@ final class StatusModel: ObservableObject {
 
     init() {
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+            Task { @MainActor [weak self] in self?.refresh() }
         }
     }
 
@@ -67,6 +84,52 @@ final class StatusModel: ObservableObject {
             pulling.remove(alias)
             if code != 0 { lastError = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines) }
             refresh()
+        }
+    }
+
+    // Generate media locally. The CLI prints the output file path on stdout as
+    // its last line; on success reveal that file in Finder.
+    func generateMedia() {
+        let prompt = mediaPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !generating else { return }
+        generating = true
+        lastError = nil
+        let kind = mediaKind.rawValue
+        Task {
+            // Guard against a hung CLI leaving the UI stuck: recover after a
+            // generous ceiling (a real job finishes well within it).
+            let result = await Self.withTimeout(seconds: 900) {
+                await CLI.run(["media", kind, prompt])
+            }
+            generating = false
+            guard let (out, code) = result else {
+                lastError = "media \(kind) is taking too long; it may still be running"
+                return
+            }
+            let clean = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines)
+            if code == 0 {
+                if let last = clean.split(separator: "\n").last.map(String.init), !last.isEmpty {
+                    let url = URL(fileURLWithPath: last)
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+            } else {
+                lastError = clean
+            }
+        }
+    }
+
+    // Race an async operation against a timeout; returns nil if the timeout wins.
+    private static func withTimeout<T: Sendable>(
+        seconds: UInt64, _ op: @escaping @Sendable () async -> T) async -> T? {
+        await withTaskGroup(of: T?.self) { group in
+            group.addTask { await op() }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
         }
     }
 

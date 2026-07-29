@@ -74,6 +74,28 @@ struct PanelView: View {
             }
 
             Divider()
+            Text(L.t("Media")).font(.caption2).foregroundStyle(.tertiary)
+            TextField(L.t("Prompt"), text: $model.mediaPrompt)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+                .disabled(model.generating)
+            Picker("", selection: $model.mediaKind) {
+                ForEach(MediaKind.allCases) { kind in
+                    Text(L.t(kind.label)).tag(kind)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(model.generating)
+            HStack {
+                Button(L.t("Generate")) { model.generateMedia() }
+                    .disabled(model.generating
+                        || model.mediaPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if model.generating { ProgressView().controlSize(.small) }
+            }
+            .font(.caption)
+
+            Divider()
             HStack {
                 Text(L.t("GPU RAM")).font(.caption).foregroundStyle(.secondary)
                 Spacer()

@@ -1,0 +1,32 @@
+name: App
+
+# macOS only, and only when the app changes, so the paid macOS runner stays idle
+# on ordinary PRs. Guards compilation; signing and notarization stay local.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/app.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/app.yml"
+
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Swift build
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (unsigned)
+        run: app/build.sh
