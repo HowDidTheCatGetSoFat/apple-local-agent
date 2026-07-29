@@ -361,17 +361,63 @@ cmd_ram() {
       info "GPU can reserve:    ~${eff} MB now"
       info "recommended:        ${rec} MB (leaves ${reserve} MB for the OS)"
       info "Apply:  fxlla ram auto     |  Revert:  fxlla ram reset"
+      info "Persist across reboots:  fxlla ram persist  |  Remove:  fxlla ram unpersist"
       ;;
-    auto)  _set_ram "$rec" ;;
-    reset) _set_ram 0 ;;
-    *)     [[ "${1:-}" =~ ^[0-9]+$ ]] || die "Usage: fxlla ram [auto|reset|<MB>]"; _set_ram "$1" ;;
+    auto)      _set_ram "$rec" ;;
+    reset)     _set_ram 0 ;;
+    persist)   _ram_persist "$rec" ;;
+    unpersist) _ram_unpersist ;;
+    *)         [[ "${1:-}" =~ ^[0-9]+$ ]] || die "Usage: fxlla ram [auto|reset|persist|unpersist|<MB>]"; _set_ram "$1" ;;
   esac
 }
 _set_ram() {
   local mb="$1"
   info "sudo sysctl iogpu.wired_limit_mb=$mb ..."
   sudo sysctl -w iogpu.wired_limit_mb="$mb" >/dev/null
-  ok "Done: wired_limit_mb=$mb  (reverts on reboot; see README to make it permanent)"
+  ok "Done: wired_limit_mb=$mb  (reverts on reboot; persist with 'fxlla ram persist')"
+}
+
+RAM_DAEMON_LABEL="com.fxlla.wiredlimit"
+RAM_DAEMON_PLIST="/Library/LaunchDaemons/$RAM_DAEMON_LABEL.plist"
+
+# The LaunchDaemon plist that re-applies the wired limit at every boot.
+_ram_plist_content() {
+  cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$RAM_DAEMON_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/sbin/sysctl</string>
+    <string>-w</string>
+    <string>iogpu.wired_limit_mb=$1</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+</dict>
+</plist>
+PLIST
+}
+
+_ram_persist() {
+  local mb="$1"
+  info "Installing a LaunchDaemon to set iogpu.wired_limit_mb=$mb at boot (sudo)..."
+  _ram_plist_content "$mb" | sudo tee "$RAM_DAEMON_PLIST" >/dev/null || die "could not write $RAM_DAEMON_PLIST"
+  sudo launchctl unload "$RAM_DAEMON_PLIST" 2>/dev/null || true
+  sudo launchctl load "$RAM_DAEMON_PLIST" || die "could not load the LaunchDaemon"
+  sudo sysctl -w iogpu.wired_limit_mb="$mb" >/dev/null
+  ok "Persisted: wired_limit_mb=$mb reapplies on every boot. Remove: fxlla ram unpersist"
+}
+
+_ram_unpersist() {
+  if [ ! -f "$RAM_DAEMON_PLIST" ]; then
+    warn "No fxlla wired-limit LaunchDaemon installed."; return 0
+  fi
+  info "Removing the LaunchDaemon (sudo)..."
+  sudo launchctl unload "$RAM_DAEMON_PLIST" 2>/dev/null || true
+  sudo rm -f "$RAM_DAEMON_PLIST"
+  ok "Removed. The wired limit returns to the macOS default on the next boot."
 }
 
 # --------------------------------------------------------------------------
@@ -1200,6 +1246,7 @@ main() {
     completions)            cmd_completions "$@" ;;
     __complete)             cmd_complete "$@" ;;
     __civitai-id)           _civitai_version_id "$@" || die "invalid civitai reference: ${1:-}" ;;
+    __ram-plist)            _ram_plist_content "${1:-0}" ;;
     __watch)                cmd_watch ;;
     help|-h|--help)         cmd_help ;;
     *)                      warn "Unknown command: $cmd"; cmd_help; exit 1 ;;

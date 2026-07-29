@@ -6,6 +6,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- `fxlla ram persist` / `unpersist`: install or remove a LaunchDaemon that
+  re-applies the GPU wired limit at every boot, so `fxlla ram auto` survives a
+  reboot.
 - `fxlla pull --downloader hf`: fetch a Hugging Face repo with the official CLI
   (run via `uvx`, no persistent install) instead of the aria2c tree walk. More
   robust for xet-backed and LFS repos, but it ignores the bandwidth cap. Default
