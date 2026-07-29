@@ -113,7 +113,44 @@ cmd_models() {
 }
 
 # --------------------------------------------------------------------------
+# Extract the numeric model-version id from a Civitai reference, or fail:
+#   civitai:12345
+#   https://civitai.com/api/download/models/12345
+#   https://civitai.com/models/999?modelVersionId=12345
+_civitai_version_id() {
+  local ref="$1" vid=""
+  case "$ref" in
+    civitai:*)                              vid="${ref#civitai:}" ;;
+    *civitai.com/api/download/models/*)     vid="${ref##*/models/}"; vid="${vid%%[?&]*}" ;;
+    *civitai.com/*modelVersionId=*)         vid="${ref##*modelVersionId=}"; vid="${vid%%&*}" ;;
+    *)                                      return 1 ;;
+  esac
+  case "$vid" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$vid"
+}
+
+# Download a single file from Civitai (LoRA, checkpoint) to <store>/civitai.
+_pull_civitai() {
+  need aria2c; require_store
+  local vid; vid="$(_civitai_version_id "$1")" \
+    || die "civitai needs a numeric model-version id (civitai:<id> or a civitai.com URL)"
+  local dir="$FXLLA_STORE/civitai"; mkdir -p "$dir"
+  local url="https://civitai.com/api/download/models/$vid"
+  local auth=()
+  [ -n "${FXLLA_CIVITAI_TOKEN:-}" ] && auth=(--header="Authorization: Bearer $FXLLA_CIVITAI_TOKEN")
+  info "Civitai:  model-version $vid -> $dir"
+  info "Cap:      ${FXLLA_RATE_MBIT} Mbps"
+  aria2c --dir="$dir" --continue=true --max-overall-download-limit="$(rate_bytes)" \
+    --content-disposition-default-utf8=true ${auth[@]+"${auth[@]}"} "$url" \
+    || die "civitai download failed (is FXLLA_CIVITAI_TOKEN set and the id valid?)"
+  ok "Downloaded to $dir"
+}
+
 cmd_pull() {
+  # Civitai is a separate source (single files: LoRAs, checkpoints).
+  case "${1:-}" in
+    civitai:*|*civitai.com/*) _pull_civitai "$1"; return ;;
+  esac
   need aria2c; require_store
   local q="" engine="" quant=""
   while [ $# -gt 0 ]; do
@@ -126,7 +163,7 @@ cmd_pull() {
       *)          q="$1" ;;
     esac; shift
   done
-  [ -z "$q" ] && die "Usage: fxlla pull <alias|org/repo> [--gguf] [--quant Q4_K_M]"
+  [ -z "$q" ] && die "Usage: fxlla pull <alias|org/repo|civitai:<id>> [--gguf] [--quant Q4_K_M]"
 
   local repo; repo="$(resolve_repo "$q")" || die "Unknown '$q'. See 'fxlla models' or pass an org/repo from HF."
   [ -z "$engine" ] && engine="$(resolve_engine "$q")"
@@ -1140,6 +1177,7 @@ main() {
     config)                 cmd_config "$@" ;;
     completions)            cmd_completions "$@" ;;
     __complete)             cmd_complete "$@" ;;
+    __civitai-id)           _civitai_version_id "$@" || die "invalid civitai reference: ${1:-}" ;;
     __watch)                cmd_watch ;;
     help|-h|--help)         cmd_help ;;
     *)                      warn "Unknown command: $cmd"; cmd_help; exit 1 ;;

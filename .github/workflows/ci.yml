@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Syntax check
-        run: bash -n bin/fxlla lib/core.sh tests/test_config.sh tests/test_completions.sh tests/test_avail.sh tests/test_skills.sh
+        run: bash -n bin/fxlla lib/core.sh tests/test_config.sh tests/test_completions.sh tests/test_avail.sh tests/test_skills.sh tests/test_civitai.sh
 
       - name: ShellCheck
         uses: ludeeus/action-shellcheck@master
@@ -60,6 +60,9 @@ jobs:
 
       - name: Skills tests
         run: bash tests/test_skills.sh
+
+      - name: Civitai tests
+        run: bash tests/test_civitai.sh
 
   python:
     name: Python tests
