@@ -158,7 +158,9 @@ fxlla ram auto     # raise it (asks for sudo, keeps a reserve for the OS)
 fxlla ram reset    # back to default
 ```
 
-The change reverts on reboot.
+`fxlla ram auto` reverts on reboot. To make it stick, `fxlla ram persist`
+installs a small LaunchDaemon that re-applies the limit at every boot;
+`fxlla ram unpersist` removes it.
 
 ## Keep-warm
 

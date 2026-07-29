@@ -177,8 +177,8 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
   happen in the background. Pairs naturally with the Tier 1 coordination.
 - Evals (L): measure quality and speed per model to choose with data instead
   of catalog notes.
-- Persist the GPU wired limit (S): `fxlla ram auto` reverts on reboot; a
-  LaunchDaemon can reapply it. Opt-in, since it changes a system-wide sysctl.
+- Persist the GPU wired limit: DONE - `fxlla ram persist` installs a
+  LaunchDaemon that reapplies the limit at boot; `fxlla ram unpersist` removes it.
 
 ## Suggested order
 
