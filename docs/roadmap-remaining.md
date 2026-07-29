@@ -117,6 +117,39 @@ note kept.
   make delivered work look pending.
 - Effort: S. Do this first; it costs minutes and corrects the record.
 
+### Unified MCP install and tool-usage skills
+
+- What: one command that registers the model provider and all MCP servers
+  (rag, graph, media) at once, instead of the current per-tool
+  `kb|graph|media wire-opencode`. Plus a shippable skills/prompt pack that
+  teaches a model when and how to use them: retrieve from a knowledge base
+  before answering, walk the code graph before an edit, offer media generation,
+  and run the availability-and-consent download flow (`fxlla avail` -> present
+  size and time -> confirm -> pull).
+- Why: wiring a tool is not the same as using it. Today the MCP servers get
+  registered but there is no guidance layer, so the tools sit idle unless the
+  user asks for them by name. This is the orchestration half the main ROADMAP
+  delegates to the client, but the pack has to exist and be installable.
+- Effort: M. The unified command is S; authoring the skills and validating them
+  against opencode and Claude Code is the bulk.
+- Open choice: skill format - opencode skills/rules, Claude Code skills, or a
+  portable prompt pack that `fxlla` installs into each client's config.
+
+### Model weight sources: Civitai and Hugging Face keys, optional downloaders
+
+- What: configurable API keys for Civitai (`FXLLA_CIVITAI_TOKEN`) and Hugging
+  Face (`HF_TOKEN`, already present), and an option to fetch weights with the
+  providers' own downloaders (`hf download` / `huggingface_hub.snapshot_download`
+  for HF; Civitai's download API) instead of the built-in aria2c tree walk.
+- Why: the aria2c walk does not cover Civitai at all, and can miss HF edge cases
+  (xet-backed repos, some LFS). Keys unlock gated and account-scoped downloads;
+  Civitai hosts LoRAs and checkpoints useful for the image models. Keep aria2c
+  the default for the bandwidth cap; the native downloaders are opt-in.
+- Effort: M. Keys and a Civitai pull path are S-M; wiring HF's own downloader as
+  an option is S.
+- Note: keys live only in the git-ignored `config.env`, never in the repo, the
+  same rule as `HF_TOKEN`.
+
 ## Tier 3: backlog
 
 Already noted as later-phase in ROADMAP.md. Kept here for completeness.
@@ -140,9 +173,13 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
 
 ## Suggested order
 
-1. Reconcile the ROADMAP.md checkboxes (minutes, corrects the public record).
-2. Media/gateway memory coordination (the only crash-grade gap).
-3. Media in the menu bar app, then the rest of Tier 2 in any order (the doctor
-   check for media prerequisites is the cheapest and most useful next).
+The Tier 1 gap and most of Tier 2 are done (checkboxes, doctor media checks,
+media in the app, Swift CI). What remains, in order:
+
+1. Unified MCP install and tool-usage skills - the highest-leverage gap now: the
+   tools are wired but a model does not know when to use them.
+2. Model weight sources (Civitai and HF keys, optional native downloaders) -
+   unblocks image LoRAs/checkpoints and gated repos.
+3. CLI on PATH from the installer, then full media-weight pull integration.
 4. Tier 3 backlog as demand appears; async media jobs first if video usage
-   grows, since it builds on the coordination work.
+   grows, since it builds on the memory coordination already in place.
