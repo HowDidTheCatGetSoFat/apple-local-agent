@@ -49,7 +49,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   and tokens per second via a small probe, appended to a rolling time-series
   (`stats.jsonl`) for the menu bar app.
 - `fxlla doctor`: environment diagnostics (dependencies, PATH, store, GPU
-  memory, server health).
+  memory, media prerequisites, server health). The media section checks the
+  image/video/voice backends and weight cache so a fresh machine sees the gap
+  instead of a cryptic runtime failure.
 - `fxlla pull` now fails loudly if a download leaves pending `.aria2` control
   files, instead of marking an incomplete model as complete.
 

@@ -97,7 +97,7 @@ Notes:
       Active probe for a single-model server; passive measurement of real
       traffic from the multi-model gateway (streamed SSE token counting and
       trailing `usage`), so MLX tok/s is captured without log parsing.
-- [ ] SwiftUI `MenuBarExtra` app (macOS 14+):
+- [x] SwiftUI menu bar app (macOS 14+; AppKit NSStatusItem + NSPopover):
   - Start and stop models, show the active one.
   - RAM per model, live tokens per second and time to first token.
   - GPU RAM limit toggle (`fxlla ram auto|reset`) with a privileged helper.
@@ -107,7 +107,8 @@ Notes:
       `notarytool` (`app/build.sh --sign`, `app/package-dmg.sh --check|--notarize`).
       Verified end to end: a notarized, stapled `.dmg` that passes a Gatekeeper
       assessment offline.
-- [ ] Installer: `.dmg` that installs the app and links the CLI.
+- [~] Installer: the signed, notarized `.dmg` installs the app; symlinking the
+      `fxlla` CLI onto PATH from the installer is still pending.
 
 ## Phase 2: RAG and knowledge bases
 
@@ -163,9 +164,10 @@ in opencode or Claude Code invokes it through tool calling.
 ## Cross-cutting
 
 - [ ] Evals: measure quality and speed per model to choose with data.
-- [ ] `fxlla doctor`: environment diagnostics.
+- [x] `fxlla doctor`: environment diagnostics (dependencies, PATH, store, GPU
+      memory, media prerequisites, server health).
 - [ ] Optional persistence of the wired limit (LaunchDaemon).
-- [ ] Shell completions for bash and zsh.
+- [x] Shell completions for bash and zsh (`fxlla completions <bash|zsh>`).
 
 ## Open decisions
 

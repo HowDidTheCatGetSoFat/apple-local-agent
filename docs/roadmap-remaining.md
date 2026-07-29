@@ -60,7 +60,11 @@ Delivered: media generation frees the gateway's resident models before a job
 - Effort: M. Depends on the Tier 1 coordination so an app-triggered video job
   does not race the gateway for memory.
 
-### Media weights on a fresh machine
+### Media weights on a fresh machine - doctor check DONE
+
+Delivered: `fxlla doctor` now has a media section that checks the image/video/
+voice backends and the weight cache, so the gap is visible. Full bandwidth-
+capped pull integration (the L part below) is still pending. Original note kept.
 
 - What: `fxlla pull` only manages LLM catalog models (`config/models.conf`).
   The media backends rely on external Hugging Face caches and venv binaries
@@ -92,7 +96,11 @@ Delivered: media generation frees the gateway's resident models before a job
   the job only guards compilation.
 - Effort: S.
 
-### Reconcile ROADMAP.md checkboxes
+### Reconcile ROADMAP.md checkboxes - DONE
+
+Delivered: the shipped items (menu bar app, `fxlla doctor`, shell completions)
+are now marked in ROADMAP.md, and the installer item is marked partial. Original
+note kept.
 
 - What: several shipped items are still marked `[ ]` in ROADMAP.md: the
   SwiftUI menu bar app (Phase 1), `fxlla doctor`, and shell completions
