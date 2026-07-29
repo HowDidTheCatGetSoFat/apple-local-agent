@@ -232,6 +232,18 @@ Expose it to your tools as an MCP server so any model can call `rag_search`:
 fxlla kb wire-opencode              # register the RAG MCP in opencode
 ```
 
+Search uses a brute-force cosine scan by default, which is fine up to a few
+thousand chunks. For larger knowledge bases, opt into a vector index:
+
+```sh
+export FXLLA_KB_INDEX=1             # sqlite-vec KNN index, built on demand
+fxlla kb search docs "how does eviction work"
+```
+
+With the index on, `fxlla kb` runs under `uv run --with sqlite-vec` (no
+persistent install); it falls back to the scan automatically when the extension
+is unavailable, and the results are identical either way.
+
 ## Code graph
 
 Index a Python codebase and navigate it structurally: where a symbol is

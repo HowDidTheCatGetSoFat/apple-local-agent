@@ -5,6 +5,11 @@ Storage is a SQLite database under <store>/kb. Embeddings come from a local
 llama.cpp embedding server (the 'embed' catalog model). Standard library only,
 plus llama-server for embeddings.
 
+Search defaults to a brute-force cosine scan. Set FXLLA_KB_INDEX=1 and run this
+module under a python that can load extensions (e.g. `uv run --with sqlite-vec`)
+to use a sqlite-vec KNN index instead; the index is rebuilt from the chunks table
+on demand and the code silently falls back to the scan when unavailable.
+
 Usage (normally driven via `fxlla kb`):
   core.py add <kb> <path...>    index files or directories into a knowledge base
   core.py search <kb> <query>   top-k chunks for a query
@@ -29,6 +34,10 @@ KB_DIR = os.path.join(STORE, "kb")
 DB_PATH = os.path.join(KB_DIR, "kb.db")
 EMBED_DIR = os.path.join(STORE, "models", "embed")
 EMBED_PORT = int(os.environ.get("FXLLA_EMBED_PORT", "8090"))
+
+
+def _index_enabled():
+    return os.environ.get("FXLLA_KB_INDEX", "").lower() in ("1", "true", "yes", "on")
 
 
 def _embed_model():
@@ -119,6 +128,14 @@ def cmd_rm(args):
     _valid_kb(args.name)
     con = _db()
     n = con.execute("DELETE FROM chunks WHERE kb=?", (args.name,)).rowcount
+    # Dropping a vec0 virtual table needs the extension loaded on this connection.
+    # Load it best-effort; if it is unavailable the stale index is left behind and
+    # a later search rebuilds it once the extension is present.
+    _load_vec_raw(con)
+    try:
+        con.execute("DROP TABLE IF EXISTS %s" % _vec_table(args.name))
+    except sqlite3.OperationalError:
+        pass
     con.commit()
     print(f"removed {n} chunks from '{args.name}'")
 
@@ -190,22 +207,106 @@ def _cosine(a, b):
     return dot / (na * nb) if na and nb else 0.0
 
 
+# Loads the sqlite-vec extension into a connection regardless of FXLLA_KB_INDEX.
+# Returns the module on success, else None. Used by maintenance paths (rm) that
+# must touch a vec0 table even when the index is not the active search backend.
+def _load_vec_raw(con):
+    try:
+        import sqlite_vec
+    except Exception:
+        return None
+    try:
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.enable_load_extension(False)
+    except Exception:
+        return None
+    return sqlite_vec
+
+
+# Loads sqlite-vec only when the index is opted in (FXLLA_KB_INDEX) and a python
+# that permits loading extensions is in use (e.g. `uv run --with sqlite-vec`).
+# Returns None otherwise, so the caller falls back to the brute-force scan.
+def _load_vec(con):
+    if not _index_enabled():
+        return None
+    return _load_vec_raw(con)
+
+
+def _vec_table(kb):
+    # kb is validated against [A-Za-z0-9._-]+, so double-quoting is safe.
+    return '"vec_%s"' % kb.replace('"', '')
+
+
+# Rebuilds a per-kb vec0 index from the chunks table when it is missing or stale
+# (row count differs). The chunks table stays the source of truth; the index only
+# stores each chunk's rowid and embedding, so a rebuild never re-embeds anything.
+def _ensure_vec_index(con, vec, kb):
+    rows = con.execute("SELECT rowid, emb FROM chunks WHERE kb=?", (kb,)).fetchall()
+    if not rows:
+        return 0
+    table = _vec_table(kb)
+    dim = len(rows[0][1]) // 4
+    try:
+        have = con.execute("SELECT COUNT(*) FROM %s" % table).fetchone()[0]
+    except sqlite3.OperationalError:
+        have = None
+    if have == len(rows):
+        return dim
+    con.execute("DROP TABLE IF EXISTS %s" % table)
+    con.execute(
+        "CREATE VIRTUAL TABLE %s USING vec0(embedding float[%d] distance_metric=cosine)"
+        % (table, dim)
+    )
+    con.executemany(
+        "INSERT INTO %s(rowid, embedding) VALUES (?, ?)" % table,
+        [(rid, vec.serialize_float32(list(_unpack(blob)))) for rid, blob in rows],
+    )
+    con.commit()
+    return dim
+
+
+# KNN search through the vec0 index. Cosine distance is 1 - cosine similarity, so
+# the reported score matches the brute-force _cosine path.
+def _search_indexed(con, vec, kb, qv, k):
+    _ensure_vec_index(con, vec, kb)
+    table = _vec_table(kb)
+    hits = con.execute(
+        "SELECT rowid, distance FROM %s WHERE embedding MATCH ? AND k = ? "
+        "ORDER BY distance" % table,
+        (vec.serialize_float32(list(qv)), k),
+    ).fetchall()
+    out = []
+    for rowid, distance in hits:
+        row = con.execute(
+            "SELECT source, idx, text FROM chunks WHERE rowid=?", (rowid,)
+        ).fetchone()
+        if row:
+            out.append((1.0 - distance, row[0], row[1], row[2]))
+    return out
+
+
 def cmd_search(args):
     _valid_kb(args.name)
     con = _db()
-    rows = con.execute(
-        "SELECT source, idx, text, emb FROM chunks WHERE kb=?", (args.name,)
-    ).fetchall()
-    if not rows:
+    n = con.execute("SELECT COUNT(*) FROM chunks WHERE kb=?", (args.name,)).fetchone()[0]
+    if not n:
         sys.exit(f"knowledge base '{args.name}' is empty")
     with Embedder() as emb:
         qv = emb.embed([args.query])[0]
-    scored = [
-        (_cosine(qv, _unpack(blob)), source, idx, text)
-        for source, idx, text, blob in rows
-    ]
-    scored.sort(reverse=True, key=lambda x: x[0])
-    top = scored[: args.k]
+    vec = _load_vec(con)
+    if vec is not None:
+        top = _search_indexed(con, vec, args.name, qv, args.k)
+    else:
+        rows = con.execute(
+            "SELECT source, idx, text, emb FROM chunks WHERE kb=?", (args.name,)
+        ).fetchall()
+        scored = [
+            (_cosine(qv, _unpack(blob)), source, idx, text)
+            for source, idx, text, blob in rows
+        ]
+        scored.sort(reverse=True, key=lambda x: x[0])
+        top = scored[: args.k]
     if args.json:
         print(json.dumps([
             {"score": round(s, 4), "source": src, "chunk": idx, "text": txt}

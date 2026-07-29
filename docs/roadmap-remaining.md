@@ -163,9 +163,11 @@ Hugging Face CLI via `uvx` for xet/LFS repos. Original note kept below.
 
 Already noted as later-phase in ROADMAP.md. Kept here for completeness.
 
-- RAG vector index (M): replace brute-force cosine with `sqlite-vec` or
-  LanceDB; optional MLX embeddings and a persistent warm embedding server.
-  Only matters once knowledge bases grow past a few thousand chunks.
+- RAG vector index: DONE for the CLI. `FXLLA_KB_INDEX=1` swaps the brute-force
+  cosine scan for a `sqlite-vec` KNN index (run via `uv run --with sqlite-vec`,
+  rebuilt on demand, falls back to the scan when unavailable). Still open (M):
+  route the RAG MCP server through the index too, optional MLX embeddings, and a
+  persistent warm embedding server.
 - Code graph upgrades (L): KuzuDB (embedded, Cypher) instead of flat SQLite;
   multi-language parsing via tree-sitter or SCIP (Python-only today);
   transitive change-impact queries.
