@@ -1044,10 +1044,13 @@ _graph_python() {
   if [ -n "${FXLLA_GRAPH_PYTHON:-}" ]; then
     GRAPH_PY=("$FXLLA_GRAPH_PYTHON")
   else
-    need uv
     GRAPH_PY=(uv run --with kuzu --no-project python)
   fi
 }
+
+# Requires uv only when GRAPH_PY actually runs under it (no override). Keeps
+# wire-opencode able to register the uv command on a machine without uv present.
+_need_graph_uv() { [ "${GRAPH_PY[0]}" = uv ] && need uv || true; }
 
 # --------------------------------------------------------------------------
 # Code graph (delegates to graph/codegraph.py; MCP server for opencode/Claude)
@@ -1057,9 +1060,11 @@ cmd_graph() {
   case "${1:-}" in
     # The MCP server re-invokes codegraph.py via its own interpreter, so it must
     # run under the same kuzu-capable python.
-    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" "${GRAPH_PY[@]}" "$REPO_ROOT/graph/graph_mcp.py" ;;
+    mcp)           _need_graph_uv
+                   exec env FXLLA_STORE="$FXLLA_STORE" "${GRAPH_PY[@]}" "$REPO_ROOT/graph/graph_mcp.py" ;;
     wire-opencode) _wire_graph_mcp; return ;;
   esac
+  _need_graph_uv
   FXLLA_STORE="$FXLLA_STORE" "${GRAPH_PY[@]}" "$REPO_ROOT/graph/codegraph.py" "$@"
 }
 
