@@ -139,13 +139,12 @@ for Claude Code and opencode. Original note kept below.
 - Open choice: skill format - opencode skills/rules, Claude Code skills, or a
   portable prompt pack that `fxlla` installs into each client's config.
 
-### Model weight sources: Civitai and Hugging Face keys, optional downloaders - PARTIAL
+### Model weight sources: Civitai and Hugging Face keys, optional downloaders - DONE
 
 Delivered: `FXLLA_CIVITAI_TOKEN` and `fxlla pull civitai:<id>` fetch LoRAs and
-checkpoints from civitai.com (bandwidth-capped, into `<store>/civitai`). HF
-already downloads gated repos with `HF_TOKEN`. Still open: an opt-in native HF
-downloader (`hf download` / `snapshot_download`) as an alternative to the aria2c
-tree walk. Original note kept below.
+checkpoints from civitai.com (bandwidth-capped, into `<store>/civitai`); HF
+downloads gated repos with `HF_TOKEN`; and `fxlla pull --downloader hf` runs the
+Hugging Face CLI via `uvx` for xet/LFS repos. Original note kept below.
 
 - What: configurable API keys for Civitai (`FXLLA_CIVITAI_TOKEN`) and Hugging
   Face (`HF_TOKEN`, already present), and an option to fetch weights with the

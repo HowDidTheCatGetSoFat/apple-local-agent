@@ -144,6 +144,10 @@ If a GGUF repository has several quants and you omit `--quant`, `fxlla` lists
 them. GGUF cannot be converted to MLX; for Hugging Face safetensors to MLX use
 `mlx_lm.convert -q`.
 
+Pulls use `aria2c` with a bandwidth cap by default. For a xet-backed or awkward
+repo, `fxlla pull <repo> --downloader hf` fetches it with the Hugging Face CLI
+(run via `uvx`, no extra install); it is more robust but ignores the cap.
+
 ## Using the full 128 GB
 
 macOS reserves about 75 percent of RAM for the GPU. For large models raise it:
