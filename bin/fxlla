@@ -122,7 +122,7 @@ _civitai_version_id() {
   case "$ref" in
     civitai:*)                              vid="${ref#civitai:}" ;;
     *civitai.com/api/download/models/*)     vid="${ref##*/models/}"; vid="${vid%%[?&]*}" ;;
-    *civitai.com/*modelVersionId=*)         vid="${ref##*modelVersionId=}"; vid="${vid%%&*}" ;;
+    *civitai.com/*modelVersionId=*)         vid="${ref##*modelVersionId=}"; vid="${vid%%[&#]*}" ;;
     *)                                      return 1 ;;
   esac
   case "$vid" in ''|*[!0-9]*) return 1 ;; esac
@@ -136,12 +136,16 @@ _pull_civitai() {
     || die "civitai needs a numeric model-version id (civitai:<id> or a civitai.com URL)"
   local dir="$FXLLA_STORE/civitai"; mkdir -p "$dir"
   local url="https://civitai.com/api/download/models/$vid"
-  local auth=()
-  [ -n "${FXLLA_CIVITAI_TOKEN:-}" ] && auth=(--header="Authorization: Bearer $FXLLA_CIVITAI_TOKEN")
+  # Civitai authenticates with a token query parameter (its documented method).
+  # Unlike an Authorization header, the token then goes only to civitai.com and
+  # is not resent on the redirect to the CDN. --auto-file-renaming=false keeps a
+  # re-run from writing a numbered duplicate, matching the HF pull path.
+  [ -n "${FXLLA_CIVITAI_TOKEN:-}" ] && url="$url?token=$FXLLA_CIVITAI_TOKEN"
   info "Civitai:  model-version $vid -> $dir"
   info "Cap:      ${FXLLA_RATE_MBIT} Mbps"
-  aria2c --dir="$dir" --continue=true --max-overall-download-limit="$(rate_bytes)" \
-    --content-disposition-default-utf8=true ${auth[@]+"${auth[@]}"} "$url" \
+  aria2c --dir="$dir" --continue=true --auto-file-renaming=false \
+    --max-overall-download-limit="$(rate_bytes)" \
+    --content-disposition-default-utf8=true "$url" \
     || die "civitai download failed (is FXLLA_CIVITAI_TOKEN set and the id valid?)"
   ok "Downloaded to $dir"
 }

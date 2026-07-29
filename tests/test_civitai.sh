@@ -28,6 +28,7 @@ eq  "civitai: prefix"          "civitai:12345"                                  
 eq  "api download url"         "https://civitai.com/api/download/models/67890"         "67890"
 eq  "api url with query"       "https://civitai.com/api/download/models/67890?type=Model" "67890"
 eq  "model page modelVersionId" "https://civitai.com/models/999?modelVersionId=42&x=1"  "42"
+eq  "modelVersionId with fragment" "https://civitai.com/models/9?modelVersionId=42#gallery" "42"
 
 reject "non-numeric id"        "civitai:abc"
 reject "empty id"              "civitai:"
