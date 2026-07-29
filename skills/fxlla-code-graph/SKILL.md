@@ -27,6 +27,8 @@ fxlla exposes a structural view of a Python codebase over an MCP server:
 
 ## Notes
 
-- Python only, via the standard library `ast`; no external dependency.
+- Python only: symbols are extracted with the standard library `ast` and stored
+  in an embedded KuzuDB graph. `fxlla graph` runs the backend under
+  `uv run --with kuzu`, so no manual install is needed.
 - The graph must be indexed first: `fxlla graph index <paths...>`. If a query
   returns nothing, suggest indexing.

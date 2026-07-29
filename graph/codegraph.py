@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """fxlla code graph: index Python symbols and references, query the graph.
 
-Uses the standard library `ast` module and a SQLite store under <store>/graph.
-Definitions (functions, classes, methods), references (calls), and the enclosing
-scope of each call are extracted so you can find where a symbol is defined, who
-references it, and who calls it.
+Symbols are extracted with the standard library `ast` module and stored in an
+embedded KuzuDB graph under <store>/graph. Definitions (functions, classes,
+methods) and references (calls, with the enclosing scope) become nodes; a CALLS
+relationship between definitions is derived by name so transitive queries like
+change-impact are a single Cypher variable-length path.
+
+KuzuDB is not in the standard library. This module is normally run under a python
+that has it (e.g. `uv run --with kuzu`); `fxlla graph` handles that. The kuzu
+import is deferred so the ast extraction and the MCP layer can be imported
+without it.
 
 Usage (normally driven via `fxlla graph`):
   codegraph.py index <path...>   index Python files or directories
   codegraph.py def <name>        where a symbol is defined
   codegraph.py refs <name>       where a symbol is referenced
   codegraph.py callers <name>    which functions call a symbol
+  codegraph.py impact <name>     transitive callers (blast radius)
+  codegraph.py unused            definitions never referenced by name
+  codegraph.py stats             graph totals
   codegraph.py ls                indexed files
   codegraph.py rm                clear the graph
 """
@@ -18,24 +27,45 @@ import argparse
 import ast
 import json
 import os
-import sqlite3
 import sys
 
 STORE = os.environ.get("FXLLA_STORE", "")
 GRAPH_DIR = os.path.join(STORE, "graph")
-DB_PATH = os.path.join(GRAPH_DIR, "graph.db")
+DB_PATH = os.path.join(GRAPH_DIR, "graph.kuzu")
+
+_CONN = None  # (database, connection); the database must outlive the connection
 
 
-def _db():
+def _conn():
+    global _CONN
+    if _CONN is not None:
+        return _CONN[1]
+    try:
+        import kuzu
+    except Exception:
+        sys.exit("kuzu is required. Run `fxlla graph` (it uses uv run --with kuzu) "
+                 "or set FXLLA_GRAPH_PYTHON to an interpreter that has kuzu.")
     os.makedirs(GRAPH_DIR, exist_ok=True)
-    con = sqlite3.connect(DB_PATH)
-    con.execute("CREATE TABLE IF NOT EXISTS defs "
-                "(name TEXT, qualname TEXT, kind TEXT, file TEXT, line INTEGER)")
-    con.execute("CREATE TABLE IF NOT EXISTS refs "
-                "(name TEXT, file TEXT, line INTEGER, caller TEXT)")
-    con.execute("CREATE INDEX IF NOT EXISTS defs_name ON defs(name)")
-    con.execute("CREATE INDEX IF NOT EXISTS refs_name ON refs(name)")
+    db = kuzu.Database(DB_PATH)
+    con = kuzu.Connection(db)
+    con.execute(
+        "CREATE NODE TABLE IF NOT EXISTS Def"
+        "(id STRING, name STRING, qualname STRING, kind STRING, file STRING, "
+        "line INT64, PRIMARY KEY(id))")
+    con.execute(
+        "CREATE NODE TABLE IF NOT EXISTS Ref"
+        "(id STRING, name STRING, file STRING, line INT64, caller STRING, "
+        "PRIMARY KEY(id))")
+    con.execute("CREATE REL TABLE IF NOT EXISTS CALLS(FROM Def TO Def)")
+    _CONN = (db, con)
     return con
+
+
+def _all(res):
+    out = []
+    while res.has_next():
+        out.append(res.get_next())
+    return out
 
 
 class _Visitor(ast.NodeVisitor):
@@ -93,11 +123,23 @@ def _gather(paths):
     return files
 
 
+# Drops and rebuilds the CALLS edges from the current Def/Ref rows. An edge goes
+# from the definition that encloses a call (matched by caller qualname within the
+# same file) to every definition sharing the called name (name-approximate, since
+# Python calls are not statically resolved). MERGE keeps a single edge per pair.
+def _rebuild_calls(con):
+    con.execute("MATCH ()-[c:CALLS]->() DELETE c")
+    con.execute(
+        "MATCH (c:Def), (e:Def), (r:Ref) "
+        "WHERE r.caller = c.qualname AND r.file = c.file AND r.name = e.name "
+        "MERGE (c)-[:CALLS]->(e)")
+
+
 def cmd_index(args):
     files = _gather(args.paths)
     if not files:
         sys.exit("no Python files found in the given paths")
-    con = _db()
+    con = _conn()
     total_defs = total_refs = 0
     for f in files:
         try:
@@ -107,13 +149,23 @@ def cmd_index(args):
             continue
         v = _Visitor(f)
         v.visit(tree)
-        con.execute("DELETE FROM defs WHERE file=?", (f,))
-        con.execute("DELETE FROM refs WHERE file=?", (f,))
-        con.executemany("INSERT INTO defs VALUES (?,?,?,?,?)", v.defs)
-        con.executemany("INSERT INTO refs VALUES (?,?,?,?)", v.refs)
+        con.execute("MATCH (d:Def) WHERE d.file = $f DETACH DELETE d", {"f": f})
+        con.execute("MATCH (r:Ref) WHERE r.file = $f DETACH DELETE r", {"f": f})
+        defs = [{"id": f"{fl}::{ln}::{q}", "name": nm, "q": q, "k": k, "f": fl, "l": ln}
+                for (nm, q, k, fl, ln) in v.defs]
+        refs = [{"id": f"{fl}::{ln}::{i}", "name": nm, "f": fl, "l": ln, "c": c}
+                for i, (nm, fl, ln, c) in enumerate(v.refs)]
+        if defs:
+            con.execute(
+                "UNWIND $rows AS r CREATE (:Def {id:r.id, name:r.name, "
+                "qualname:r.q, kind:r.k, file:r.f, line:r.l})", {"rows": defs})
+        if refs:
+            con.execute(
+                "UNWIND $rows AS r CREATE (:Ref {id:r.id, name:r.name, "
+                "file:r.f, line:r.l, caller:r.c})", {"rows": refs})
         total_defs += len(v.defs)
         total_refs += len(v.refs)
-    con.commit()
+    _rebuild_calls(con)
     print(f"indexed {len(files)} files: {total_defs} defs, {total_refs} refs")
 
 
@@ -121,29 +173,29 @@ def cmd_unused(args):
     # Definitions never referenced by name: dead-code candidates. Approximate,
     # so this excludes dunders and will still list entry points and test
     # functions called reflectively.
-    con = _db()
-    rows = con.execute(
-        r"SELECT qualname, kind, file, line FROM defs d "
-        r"WHERE d.name NOT LIKE '\_\_%' ESCAPE '\' "
-        r"AND NOT EXISTS (SELECT 1 FROM refs r WHERE r.name = d.name) "
-        r"ORDER BY file, line").fetchall()
+    con = _conn()
+    rows = _all(con.execute(
+        "MATCH (d:Def) WHERE NOT d.name STARTS WITH '__' "
+        "AND NOT EXISTS { MATCH (r:Ref) WHERE r.name = d.name } "
+        "RETURN d.qualname, d.kind, d.file, d.line ORDER BY d.file, d.line"))
     _emit(args,
           [{"qualname": q, "kind": k, "file": f, "line": ln} for q, k, f, ln in rows],
           lambda r: f"{r['kind']:8} {r['qualname']}  {r['file']}:{r['line']}")
 
 
 def cmd_stats(args):
-    con = _db()
-    files = con.execute("SELECT COUNT(DISTINCT file) FROM defs").fetchone()[0]
-    defs = con.execute("SELECT COUNT(*) FROM defs").fetchone()[0]
-    refs = con.execute("SELECT COUNT(*) FROM refs").fetchone()[0]
-    by_kind = con.execute("SELECT kind, COUNT(*) FROM defs GROUP BY kind").fetchall()
-    top = con.execute(
-        "SELECT name, COUNT(*) c FROM refs GROUP BY name ORDER BY c DESC LIMIT 10").fetchall()
+    con = _conn()
+    files = _all(con.execute("MATCH (d:Def) RETURN count(DISTINCT d.file)"))[0][0]
+    defs = _all(con.execute("MATCH (d:Def) RETURN count(*)"))[0][0]
+    refs = _all(con.execute("MATCH (r:Ref) RETURN count(*)"))[0][0]
+    by_kind = _all(con.execute(
+        "MATCH (d:Def) RETURN d.kind, count(*) ORDER BY d.kind"))
+    top = _all(con.execute(
+        "MATCH (r:Ref) RETURN r.name, count(*) AS c ORDER BY c DESC, r.name LIMIT 10"))
     if getattr(args, "json", False):
         print(json.dumps({
             "files": files, "defs": defs, "refs": refs,
-            "by_kind": dict(by_kind),
+            "by_kind": {k: c for k, c in by_kind},
             "top_referenced": [{"name": n, "count": c} for n, c in top]}))
         return
     print(f"files: {files}  defs: {defs}  refs: {refs}")
@@ -154,8 +206,9 @@ def cmd_stats(args):
 
 
 def cmd_ls(_args):
-    con = _db()
-    rows = con.execute("SELECT file, COUNT(*) FROM defs GROUP BY file ORDER BY file").fetchall()
+    con = _conn()
+    rows = _all(con.execute(
+        "MATCH (d:Def) RETURN d.file, count(*) ORDER BY d.file"))
     if not rows:
         print("(graph is empty)")
         return
@@ -164,10 +217,8 @@ def cmd_ls(_args):
 
 
 def cmd_rm(_args):
-    con = _db()
-    con.execute("DELETE FROM defs")
-    con.execute("DELETE FROM refs")
-    con.commit()
+    con = _conn()
+    con.execute("MATCH (n) DETACH DELETE n")
     print("graph cleared")
 
 
@@ -183,63 +234,50 @@ def _emit(args, items, fmt):
 
 
 def cmd_def(args):
-    con = _db()
-    rows = con.execute(
-        "SELECT qualname, kind, file, line FROM defs WHERE name=? OR qualname=? "
-        "ORDER BY file, line", (args.name, args.name)).fetchall()
+    con = _conn()
+    rows = _all(con.execute(
+        "MATCH (d:Def) WHERE d.name = $n OR d.qualname = $n "
+        "RETURN d.qualname, d.kind, d.file, d.line ORDER BY d.file, d.line",
+        {"n": args.name}))
     _emit(args,
           [{"qualname": q, "kind": k, "file": f, "line": ln} for q, k, f, ln in rows],
           lambda r: f"{r['kind']:8} {r['qualname']}  {r['file']}:{r['line']}")
 
 
 def cmd_refs(args):
-    con = _db()
-    rows = con.execute(
-        "SELECT file, line, caller FROM refs WHERE name=? ORDER BY file, line",
-        (args.name,)).fetchall()
+    con = _conn()
+    rows = _all(con.execute(
+        "MATCH (r:Ref) WHERE r.name = $n "
+        "RETURN r.file, r.line, r.caller ORDER BY r.file, r.line", {"n": args.name}))
     _emit(args,
           [{"file": f, "line": ln, "caller": c} for f, ln, c in rows],
           lambda r: f"{r['file']}:{r['line']}" + (f"  in {r['caller']}" if r['caller'] else ""))
 
 
 def cmd_callers(args):
-    con = _db()
-    rows = con.execute(
-        "SELECT DISTINCT caller, file FROM refs WHERE name=? AND caller<>'' "
-        "ORDER BY caller", (args.name,)).fetchall()
+    con = _conn()
+    rows = _all(con.execute(
+        "MATCH (r:Ref) WHERE r.name = $n AND r.caller <> '' "
+        "RETURN DISTINCT r.caller, r.file ORDER BY r.caller", {"n": args.name}))
     _emit(args,
           [{"caller": c, "file": f} for c, f in rows],
           lambda r: f"{r['caller']}  ({r['file']})")
 
 
 def cmd_impact(args):
-    # Transitive callers (breadth-first over the call graph): the blast radius
-    # of changing a symbol. Name-approximate, so cap the depth.
-    con = _db()
-    seen_callers = set()      # report each distinct caller qualname once
-    queried = {args.name}     # query each leaf name once to avoid loops
-    result = []
-    frontier = [args.name]
-    depth = 0
-    max_depth = getattr(args, "depth", None) or 5
-    while frontier and depth < max_depth:
-        depth += 1
-        placeholders = ",".join("?" * len(frontier))
-        rows = con.execute(
-            f"SELECT DISTINCT caller FROM refs WHERE name IN ({placeholders}) AND caller<>''",
-            tuple(frontier)).fetchall()
-        nxt = []
-        for (caller,) in rows:
-            if caller in seen_callers:
-                continue
-            seen_callers.add(caller)
-            result.append({"depth": depth, "caller": caller})
-            leaf = caller.split(".")[-1]
-            if leaf not in queried:
-                queried.add(leaf)
-                nxt.append(leaf)
-        frontier = nxt
-    _emit(args, result, lambda r: f"{'  ' * r['depth']}{r['caller']} (depth {r['depth']})")
+    # Transitive callers (the blast radius of changing a symbol) as a single
+    # Cypher variable-length path over the derived CALLS graph. Name-approximate,
+    # so the depth is capped. Reports each caller definition once at its shortest
+    # distance from the target.
+    depth = max(1, min(int(getattr(args, "depth", None) or 5), 50))
+    con = _conn()
+    rows = _all(con.execute(
+        f"MATCH p = (a:Def)-[:CALLS*1..{depth}]->(t:Def) WHERE t.name = $n "
+        "RETURN a.qualname AS caller, min(length(p)) AS depth "
+        "ORDER BY depth, caller", {"n": args.name}))
+    _emit(args,
+          [{"depth": d, "caller": c} for c, d in rows],
+          lambda r: f"{'  ' * r['depth']}{r['caller']} (depth {r['depth']})")
 
 
 def main():

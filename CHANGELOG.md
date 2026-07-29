@@ -5,6 +5,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Changed
+- Code graph now uses an embedded KuzuDB graph (Cypher) instead of a flat SQLite
+  store. `fxlla graph impact` is a Cypher variable-length path over a derived
+  CALLS relationship, replacing the Python breadth-first walk. `fxlla graph`
+  runs the backend under `uv run --with kuzu` (uv is already required);
+  `FXLLA_GRAPH_PYTHON` overrides the interpreter. The `ast` extraction, the CLI,
+  and the MCP tools are unchanged. Existing graphs are re-created at the new
+  `<store>/graph/graph.kuzu` location on the next `fxlla graph index`.
+
 ### Added
 - Optional sqlite-vec KNN index for `fxlla kb search`: set `FXLLA_KB_INDEX=1` to
   replace the brute-force cosine scan with a vector index rebuilt on demand from
