@@ -163,11 +163,12 @@ Hugging Face CLI via `uvx` for xet/LFS repos. Original note kept below.
 
 Already noted as later-phase in ROADMAP.md. Kept here for completeness.
 
-- RAG vector index: DONE for the CLI. `FXLLA_KB_INDEX=1` swaps the brute-force
+- RAG vector index: DONE, CLI and MCP. `FXLLA_KB_INDEX=1` swaps the brute-force
   cosine scan for a `sqlite-vec` KNN index (run via `uv run --with sqlite-vec`,
-  rebuilt on demand, falls back to the scan when unavailable). Still open (M):
-  route the RAG MCP server through the index too, optional MLX embeddings, and a
-  persistent warm embedding server.
+  rebuilt on demand, falls back to the scan when unavailable). The MCP server and
+  its `wire-opencode` registration run under the same interpreter, so `rag_search`
+  uses the index too. Still open (M): optional MLX embeddings and a persistent
+  warm embedding server.
 - Code graph upgrades: Phase A DONE. The store is now an embedded KuzuDB graph
   (Cypher) instead of flat SQLite, and `impact` is a Cypher variable-length path
   over a derived CALLS relationship. `fxlla graph` runs under `uv run --with

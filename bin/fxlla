@@ -1001,11 +1001,16 @@ _kb_python() {
 # RAG knowledge bases (delegates to rag/core.py; MCP server for opencode/Claude)
 cmd_kb() {
   need python3; require_store
+  local KB_PY; _kb_python
   case "${1:-}" in
-    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/rag/rag_mcp.py" ;;
+    # Run the MCP server under the kb python so its own core.py subprocess
+    # (spawned via sys.executable) inherits sqlite-vec when the index is on.
+    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" \
+                     FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
+                     FXLLA_KB_INDEX="${FXLLA_KB_INDEX:-}" \
+                     "${KB_PY[@]}" "$REPO_ROOT/rag/rag_mcp.py" ;;
     wire-opencode) _wire_rag_mcp; return ;;
   esac
-  local KB_PY; _kb_python
   FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
   FXLLA_KB_INDEX="${FXLLA_KB_INDEX:-}" \
     "${KB_PY[@]}" "$REPO_ROOT/rag/core.py" "$@"
@@ -1015,7 +1020,11 @@ cmd_kb() {
 _wire_rag_mcp() {
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   mkdir -p "$(dirname "$cfg")"
-  CFG="$cfg" MCP="$REPO_ROOT/rag/rag_mcp.py" STORE="$FXLLA_STORE" python3 - <<'PY'
+  local KB_PY; _kb_python
+  CFG="$cfg" MCP="$REPO_ROOT/rag/rag_mcp.py" STORE="$FXLLA_STORE" \
+  EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" KB_INDEX="${FXLLA_KB_INDEX:-}" \
+  KB_PY_JSON="$(printf '%s\n' "${KB_PY[@]}" | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin]))')" \
+  python3 - <<'PY'
 import os, json
 cfg = os.environ["CFG"]
 try:
@@ -1026,8 +1035,12 @@ data.setdefault("$schema", "https://opencode.ai/config.json")
 mcp = data.setdefault("mcp", {})
 mcp["fxlla-rag"] = {
     "type": "local",
-    "command": ["python3", os.environ["MCP"]],
-    "environment": {"FXLLA_STORE": os.environ["STORE"]},
+    "command": json.loads(os.environ["KB_PY_JSON"]) + [os.environ["MCP"]],
+    "environment": {
+        "FXLLA_STORE": os.environ["STORE"],
+        "FXLLA_EMBED_PORT": os.environ["EMBED_PORT"],
+        "FXLLA_KB_INDEX": os.environ["KB_INDEX"],
+    },
     "enabled": True,
 }
 with open(cfg, "w") as f: json.dump(data, f, indent=2)

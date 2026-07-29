@@ -19,7 +19,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   replace the brute-force cosine scan with a vector index rebuilt on demand from
   the chunks table. It runs `rag/core.py` under `uv run --with sqlite-vec`
   (no persistent install) and falls back to the scan when the extension is
-  unavailable, so a clean clone still works. The `fxlla kb` CLI is unchanged.
+  unavailable, so a clean clone still works. The `fxlla kb` CLI is unchanged. The
+  RAG MCP server and its `wire-opencode` registration run under the same
+  interpreter, so `rag_search` uses the index too.
 - Image editing and upscaling: `fxlla media edit "<prompt>" --image <path>`
   (mflux-cv qwen-edit) and `fxlla media upscale --image <path>` (mflux-cv
   seedvr2), exposed over MCP as `edit_image` and `upscale_image`.
