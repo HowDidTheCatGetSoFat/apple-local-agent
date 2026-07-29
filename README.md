@@ -264,6 +264,22 @@ resident models so a heavy render does not exceed the GPU limit (opt out with
 fxlla media wire-opencode
 ```
 
+## Tools and skills
+
+Wire every local tool into your client at once, and install the skills that tell
+a model when to use them:
+
+```sh
+fxlla wire-opencode --all     # provider + rag, graph, and media MCP servers + skills
+fxlla skills install          # the skill pack for opencode and Claude Code
+```
+
+The skill pack (`skills/`) is guidance, not code: retrieve from a knowledge base
+before answering, walk the code graph before editing, offer media generation,
+and check availability and consent before a download. Registering a tool makes
+it callable; the skills make a model reach for it at the right time. Install is
+idempotent; restart the client to load them.
+
 ## How it fits together
 
 `fxlla` is the control plane. It serves an OpenAI-compatible endpoint that

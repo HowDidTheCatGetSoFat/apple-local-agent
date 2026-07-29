@@ -117,7 +117,11 @@ note kept.
   make delivered work look pending.
 - Effort: S. Do this first; it costs minutes and corrects the record.
 
-### Unified MCP install and tool-usage skills
+### Unified MCP install and tool-usage skills - DONE
+
+Delivered: `fxlla wire-opencode --all` registers the provider and all MCP servers
+at once, and `fxlla skills install` installs a portable skill pack (`skills/`)
+for Claude Code and opencode. Original note kept below.
 
 - What: one command that registers the model provider and all MCP servers
   (rag, graph, media) at once, instead of the current per-tool
@@ -176,10 +180,9 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
 The Tier 1 gap and most of Tier 2 are done (checkboxes, doctor media checks,
 media in the app, Swift CI). What remains, in order:
 
-1. Unified MCP install and tool-usage skills - the highest-leverage gap now: the
-   tools are wired but a model does not know when to use them.
-2. Model weight sources (Civitai and HF keys, optional native downloaders) -
-   unblocks image LoRAs/checkpoints and gated repos.
+1. Model weight sources (Civitai and HF keys, optional native downloaders) -
+   unblocks image LoRAs/checkpoints and gated repos. (Unified MCP install and
+   the tool-usage skills are done.)
 3. CLI on PATH from the installer, then full media-weight pull integration.
 4. Tier 3 backlog as demand appears; async media jobs first if video usage
    grows, since it builds on the memory coordination already in place.

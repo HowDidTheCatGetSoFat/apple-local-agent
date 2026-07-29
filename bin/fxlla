@@ -45,7 +45,8 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla media image "<prompt>"  Generate an image locally (mflux-cv). Also 'models'
   fxlla media video "<prompt>"  Generate a short video locally (ltx-2-mlx)
   fxlla media voice "<text>"    Synthesize speech locally (mlx-audio)
-  fxlla wire-opencode         Register the local provider in opencode
+  fxlla wire-opencode [--all] Register the local provider (--all: + MCP + skills)
+  fxlla skills install        Install the tool-usage skills (opencode + Claude Code)
   fxlla rm <alias>            Delete a downloaded model
   fxlla config                Show the effective configuration
   fxlla doctor                Diagnose the environment
@@ -343,9 +344,96 @@ PY
 }
 
 cmd_wire_opencode() {
+  need python3
+  local all=0
+  case "${1:-}" in
+    --all|--mcp) all=1 ;;
+    "") ;;
+    *) die "unknown flag: $1 (try --all)" ;;
+  esac
   local cfg; cfg="$(_sync_opencode "" "")"
   ok "opencode configured: $cfg"
   info "Provider 'local' -> $BASE_URL (the active model is registered on 'fxlla on')."
+  if [ "$all" = 1 ]; then
+    _wire_rag_mcp
+    _wire_graph_mcp
+    _wire_media_mcp
+    _skills_install_opencode "$REPO_ROOT/skills"
+    ok "All MCP servers registered and skills installed. Restart opencode to load them."
+  fi
+}
+
+# Install the skill pack: guidance that tells a model when to use the fxlla
+# tools (knowledge base, code graph, media) and the download-consent flow.
+cmd_skills() {
+  case "${1:-}" in
+    install) shift; _skills_install "$@" ;;
+    ls|list)
+      local d
+      for d in "$REPO_ROOT/skills"/*/; do [ -d "$d" ] && basename "$d"; done ;;
+    *) die "usage: fxlla skills install [--client all|opencode|claude]" ;;
+  esac
+}
+
+_skills_install() {
+  local client="all"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --client) client="$2"; shift ;;
+      -*) die "unknown flag: $1" ;;
+      *) die "unexpected argument: $1 (use --client <all|opencode|claude>)" ;;
+    esac; shift
+  done
+  case "$client" in all|opencode|claude) ;; *) die "unknown client: $client (all|opencode|claude)" ;; esac
+  local src="$REPO_ROOT/skills"
+  [ -d "$src" ] || die "no skills directory at $src"
+  [ "$client" = opencode ] || _skills_install_claude "$src"
+  [ "$client" = claude ] || _skills_install_opencode "$src"
+}
+
+# Claude Code reads skills from ~/.claude/skills/<name>/SKILL.md.
+_skills_install_claude() {
+  local src="$1" dest="$HOME/.claude/skills" d name
+  mkdir -p "$dest"
+  for d in "$src"/*/; do
+    [ -f "$d/SKILL.md" ] || continue
+    name="$(basename "$d")"
+    mkdir -p "$dest/$name"
+    cp "$d/SKILL.md" "$dest/$name/SKILL.md"
+  done
+  ok "Claude Code skills installed: $dest"
+}
+
+# opencode includes extra guidance via the 'instructions' file list in its
+# config. Copy the skills to a stable location first and point opencode there,
+# so the instructions survive the repo being moved or re-cloned elsewhere.
+_skills_install_opencode() {
+  local src="$1" cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+  local store="${XDG_DATA_HOME:-$HOME/.local/share}/fxlla/skills" d name
+  need python3; mkdir -p "$(dirname "$cfg")" "$store"
+  for d in "$src"/*/; do
+    [ -f "$d/SKILL.md" ] || continue
+    name="$(basename "$d")"
+    mkdir -p "$store/$name"
+    cp "$d/SKILL.md" "$store/$name/SKILL.md"
+  done
+  CFG="$cfg" SRC="$store" python3 - <<'PY'
+import os, json, glob
+cfg = os.environ["CFG"]
+try:
+    with open(cfg) as f: data = json.load(f)
+except Exception:
+    data = {}
+data.setdefault("$schema", "https://opencode.ai/config.json")
+paths = sorted(glob.glob(os.path.join(os.environ["SRC"], "*", "SKILL.md")))
+instr = data.setdefault("instructions", [])
+for p in paths:
+    if p not in instr:
+        instr.append(p)
+with open(cfg, "w") as f: json.dump(data, f, indent=2)
+print(cfg)
+PY
+  ok "opencode instructions updated: $cfg"
 }
 
 # register every downloaded model under the opencode 'local' provider (gateway mode)
@@ -955,14 +1043,15 @@ _complete_downloaded() {
 cmd_complete() {
   case "${1:-}" in
     commands)   printf '%s\n' setup models pull ls avail on off serve unserve \
-                  status stats doctor logs ram kb graph media wire-opencode rm \
-                  config completions help ;;
+                  status stats doctor logs ram kb graph media wire-opencode \
+                  skills rm config completions help ;;
     catalog)    _complete_catalog ;;
     downloaded) _complete_downloaded ;;
     kb)         printf '%s\n' add search ls rm mcp wire-opencode ;;
     graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
                   mcp wire-opencode ;;
     media)      printf '%s\n' image video voice models mcp wire-opencode ;;
+    skills)     printf '%s\n' install ls ;;
   esac
 }
 
@@ -985,8 +1074,10 @@ _fxlla_complete() {
   case "$cmd" in
     pull|get|avail|check)         words="$(fxlla __complete catalog)" ;;
     on|start|off|stop|rm|remove)  words="$(fxlla __complete downloaded)" ;;
-    kb)    [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete kb)" ;;
-    graph) [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete graph)" ;;
+    kb)     [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete kb)" ;;
+    graph)  [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete graph)" ;;
+    media)  [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete media)" ;;
+    skills) [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete skills)" ;;
     completions) words="bash zsh" ;;
   esac
   # shellcheck disable=SC2207
@@ -1007,8 +1098,10 @@ _fxlla() {
   case "$cmd" in
     pull|get|avail|check)         compadd -- ${(f)"$(fxlla __complete catalog)"} ;;
     on|start|off|stop|rm|remove)  compadd -- ${(f)"$(fxlla __complete downloaded)"} ;;
-    kb)    (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete kb)"} ;;
-    graph) (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete graph)"} ;;
+    kb)     (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete kb)"} ;;
+    graph)  (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete graph)"} ;;
+    media)  (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete media)"} ;;
+    skills) (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete skills)"} ;;
     completions) compadd -- bash zsh ;;
   esac
 }
@@ -1042,6 +1135,7 @@ main() {
     graph)                  cmd_graph "$@" ;;
     media)                  cmd_media "$@" ;;
     wire-opencode|opencode) cmd_wire_opencode "$@" ;;
+    skills)                 cmd_skills "$@" ;;
     rm|remove)              cmd_rm "$@" ;;
     config)                 cmd_config "$@" ;;
     completions)            cmd_completions "$@" ;;
