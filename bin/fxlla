@@ -739,6 +739,32 @@ cmd_doctor() {
     _chk ok "GPU wired limit ${cur} MB of ${total_mb} MB"
   fi
 
+  info "Media (optional)"
+  if command -v mflux-generate >/dev/null 2>&1; then
+    _chk ok "mflux-generate (image)"
+  else
+    _chk warn "mflux-generate missing (image; pip install mflux-cv)"
+  fi
+  if command -v "$FXLLA_VIDEO_BIN" >/dev/null 2>&1; then
+    _chk ok "video backend: $FXLLA_VIDEO_BIN"
+  else
+    _chk warn "video backend not found: $FXLLA_VIDEO_BIN (set FXLLA_VIDEO_BIN)"
+  fi
+  if ! command -v "$FXLLA_VOICE_PYTHON" >/dev/null 2>&1; then
+    _chk warn "voice interpreter not found: $FXLLA_VOICE_PYTHON (set FXLLA_VOICE_PYTHON)"
+  elif "$FXLLA_VOICE_PYTHON" -c 'import mlx_audio' >/dev/null 2>&1; then
+    _chk ok "voice backend: $FXLLA_VOICE_PYTHON has mlx-audio"
+  else
+    _chk warn "voice interpreter has no mlx-audio: $FXLLA_VOICE_PYTHON (install it in that venv)"
+  fi
+  if [ -z "$FXLLA_MEDIA_HF_HOME" ]; then
+    _chk warn "FXLLA_MEDIA_HF_HOME unset (using the default HF cache; set it to verify a path)"
+  elif [ -d "$FXLLA_MEDIA_HF_HOME" ]; then
+    _chk ok "media weight cache: $FXLLA_MEDIA_HF_HOME"
+  else
+    _chk warn "media weight cache not found: $FXLLA_MEDIA_HF_HOME (is the disk mounted?)"
+  fi
+
   info "Server"
   if server_alive; then
     if curl -sf "$BASE_URL/models" >/dev/null 2>&1; then _chk ok "server up and responding ($BASE_URL)"; else _chk warn "server process alive but not responding yet"; fi
