@@ -62,7 +62,7 @@ Then open opencode and pick the `local` provider.
 |-------------------------------|-------------------------------------------|
 | `fxlla setup`                 | Install and verify dependencies           |
 | `fxlla models`                | List the catalog                          |
-| `fxlla pull <model>`          | Download a model (bandwidth-capped)       |
+| `fxlla pull <model>`          | Download a model (bandwidth-capped, resumable) |
 | `fxlla ls [--json]`           | List downloaded models                    |
 | `fxlla avail <alias>`         | Availability as JSON (cached, size, engine) |
 | `fxlla on [model] [--pull]`   | Start a single model, register in opencode |
