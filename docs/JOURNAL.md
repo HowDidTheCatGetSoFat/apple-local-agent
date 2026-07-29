@@ -2,6 +2,34 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-29: Code graph on KuzuDB (Phase A)
+
+Second step of the RAG/KuzuDB priority. Swapped the code graph's flat SQLite
+store for an embedded KuzuDB graph, keeping the `ast` extraction (`_Visitor`),
+the CLI, and the MCP tools identical.
+
+- Model: `Def` and `Ref` node tables mirror the old `defs`/`refs` rows, plus a
+  derived `CALLS` relationship from the definition that encloses a call to every
+  definition sharing the called name (name-approximate, since Python calls are
+  not statically resolved). CALLS is rebuilt in full after each `index` with a
+  single MERGE join, so the per-file incremental replace of Def/Ref is untouched
+  and edges never duplicate.
+- `impact` is now one Cypher variable-length path
+  (`MATCH p=(a:Def)-[:CALLS*1..N]->(t:Def) ... min(length(p))`), replacing the
+  hand-rolled Python BFS. `unused` uses a `NOT EXISTS { }` subquery. `refs` and
+  `callers` stay name-based over `Ref` nodes, so they still resolve calls to
+  symbols with no project definition (verified against `serialize_float32`).
+- KuzuDB is not stdlib, so `import kuzu` is deferred inside `_conn()`: the module
+  still imports under system python for the `_Visitor`/MCP unit tests (CI runs
+  there), while `fxlla graph` runs the backend under `uv run --with kuzu`
+  (`FXLLA_GRAPH_PYTHON` overrides). The MCP server runs under the same
+  interpreter so its `sys.executable` re-invocation of codegraph.py inherits
+  kuzu. No stdlib fallback: KuzuDB is the sole engine now, matching the plan.
+- Variable-length path bounds cannot be parameterized, so the depth (an int from
+  argparse, clamped 1..50) is formatted into the query string.
+- Verified end to end: indexed the repo (290 defs, 1418 refs), def/callers/
+  impact/refs/unused/stats/ls/rm, the JSON-RPC MCP path, and re-index idempotency.
+
 ## 2026-07-29: RAG vector index (sqlite-vec), opt-in
 
 First step of the RAG/KuzuDB priority. `fxlla kb search` scored every chunk with

@@ -1036,21 +1036,40 @@ PY
   ok "RAG MCP registered in opencode. Use rag_search over your knowledge bases."
 }
 
+# Selects the python that runs the code graph. Its store is an embedded KuzuDB,
+# which is not in the standard library, so by default we run under `uv run --with
+# kuzu` (uv is a hard dep). FXLLA_GRAPH_PYTHON overrides with an interpreter that
+# already has kuzu. GRAPH_PY is set as an array the caller can expand.
+_graph_python() {
+  if [ -n "${FXLLA_GRAPH_PYTHON:-}" ]; then
+    GRAPH_PY=("$FXLLA_GRAPH_PYTHON")
+  else
+    need uv
+    GRAPH_PY=(uv run --with kuzu --no-project python)
+  fi
+}
+
 # --------------------------------------------------------------------------
 # Code graph (delegates to graph/codegraph.py; MCP server for opencode/Claude)
 cmd_graph() {
   need python3; require_store
+  local GRAPH_PY; _graph_python
   case "${1:-}" in
-    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/graph/graph_mcp.py" ;;
+    # The MCP server re-invokes codegraph.py via its own interpreter, so it must
+    # run under the same kuzu-capable python.
+    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" "${GRAPH_PY[@]}" "$REPO_ROOT/graph/graph_mcp.py" ;;
     wire-opencode) _wire_graph_mcp; return ;;
   esac
-  FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/graph/codegraph.py" "$@"
+  FXLLA_STORE="$FXLLA_STORE" "${GRAPH_PY[@]}" "$REPO_ROOT/graph/codegraph.py" "$@"
 }
 
 _wire_graph_mcp() {
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   mkdir -p "$(dirname "$cfg")"
-  CFG="$cfg" MCP="$REPO_ROOT/graph/graph_mcp.py" STORE="$FXLLA_STORE" python3 - <<'PY'
+  local GRAPH_PY; _graph_python
+  CFG="$cfg" MCP="$REPO_ROOT/graph/graph_mcp.py" STORE="$FXLLA_STORE" \
+  GRAPH_PY_JSON="$(printf '%s\n' "${GRAPH_PY[@]}" | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin]))')" \
+  python3 - <<'PY'
 import os, json
 cfg = os.environ["CFG"]
 try:
@@ -1061,7 +1080,7 @@ data.setdefault("$schema", "https://opencode.ai/config.json")
 mcp = data.setdefault("mcp", {})
 mcp["fxlla-graph"] = {
     "type": "local",
-    "command": ["python3", os.environ["MCP"]],
+    "command": json.loads(os.environ["GRAPH_PY_JSON"]) + [os.environ["MCP"]],
     "environment": {"FXLLA_STORE": os.environ["STORE"]},
     "enabled": True,
 }

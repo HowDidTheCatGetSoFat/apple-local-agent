@@ -247,14 +247,19 @@ is unavailable, and the results are identical either way.
 ## Code graph
 
 Index a Python codebase and navigate it structurally: where a symbol is
-defined, where it is referenced, and which functions call it. Uses the standard
-library `ast` and a SQLite store; no dependencies.
+defined, where it is referenced, which functions call it, and the transitive
+blast radius of a change. Symbols are extracted with the standard library `ast`
+and stored in an embedded [KuzuDB](https://kuzudb.com) graph, so change-impact is
+a single Cypher variable-length path. `fxlla graph` runs the backend under
+`uv run --with kuzu` (uv is already required); set `FXLLA_GRAPH_PYTHON` to use
+your own interpreter that has kuzu.
 
 ```sh
 fxlla graph index .                 # index Python files or directories
 fxlla graph def _db                 # where a symbol is defined
 fxlla graph callers _db             # which functions call it
 fxlla graph refs chunk_text         # where it is referenced
+fxlla graph impact chunk_text       # transitive callers (blast radius)
 ```
 
 Expose it to your tools as an MCP server (`find_definition`, `find_references`,

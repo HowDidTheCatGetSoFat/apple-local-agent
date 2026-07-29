@@ -168,9 +168,12 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
   rebuilt on demand, falls back to the scan when unavailable). Still open (M):
   route the RAG MCP server through the index too, optional MLX embeddings, and a
   persistent warm embedding server.
-- Code graph upgrades (L): KuzuDB (embedded, Cypher) instead of flat SQLite;
-  multi-language parsing via tree-sitter or SCIP (Python-only today);
-  transitive change-impact queries.
+- Code graph upgrades: Phase A DONE. The store is now an embedded KuzuDB graph
+  (Cypher) instead of flat SQLite, and `impact` is a Cypher variable-length path
+  over a derived CALLS relationship. `fxlla graph` runs under `uv run --with
+  kuzu` (or FXLLA_GRAPH_PYTHON). Still open (L): Phase B, multi-language parsing
+  via tree-sitter or SCIP (Python-only `ast` today), and routing the graph MCP
+  server through richer Cypher queries.
 - More media tools: `edit_image` and `upscale_image` are DONE
   (`fxlla media edit` / `upscale`). Still open: wire Wan 2.2 (mlx-video) as a
   second video backend alongside LTX (M).
