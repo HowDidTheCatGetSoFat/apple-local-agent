@@ -71,18 +71,42 @@ class TestEnsureColdLoad(unittest.TestCase):
         self.assertEqual(model_field, os.path.join(_MODELS, "mlx-model"))
         self.assertIsNotNone(model_field)
 
+    def test_load_cancelled_by_concurrent_unload(self):
+        m = gw.Manager()
+        saved = (gw.downloaded_models, gw.subprocess.Popen, gw.Manager._wait_ready)
+        try:
+            gw.downloaded_models = lambda: {"gguf-model": {"size_mb": 1}}
+            gw.subprocess.Popen = lambda *a, **k: _FakeProc()
+
+            def wait_ready(self, port, timeout=180):
+                self.epoch += 1   # an unload_all races this load
+                return True
+            gw.Manager._wait_ready = wait_ready
+            with self.assertRaises(RuntimeError):
+                m.ensure("gguf-model")
+            self.assertEqual(m.backends, {})   # the raced load is not registered
+        finally:
+            gw.downloaded_models, gw.subprocess.Popen, gw.Manager._wait_ready = saved
+
 
 class _TermProc:
     def __init__(self):
         self.pid = os.getpid()
         self.terminated = False
+        self.waited = False
 
     def terminate(self):
         self.terminated = True
 
+    def wait(self, timeout=None):
+        self.waited = True
+
+    def kill(self):
+        pass
+
 
 class TestUnloadAll(unittest.TestCase):
-    def test_unload_frees_and_reports(self):
+    def test_unload_frees_waits_and_reports(self):
         m = gw.Manager()
         p1, p2 = _TermProc(), _TermProc()
         m.backends["a"] = gw.Backend("a", 8100, p1, 10, "a", "gguf")
@@ -90,11 +114,29 @@ class TestUnloadAll(unittest.TestCase):
         freed = m.unload_all()
         self.assertEqual(set(freed), {"a", "b"})
         self.assertEqual(m.backends, {})
-        self.assertTrue(p1.terminated and p2.terminated)
+        # terminated AND waited: memory is released before returning
+        self.assertTrue(p1.terminated and p1.waited)
+        self.assertTrue(p2.terminated and p2.waited)
+
+    def test_unload_bumps_epoch(self):
+        m = gw.Manager()
+        e = m.epoch
+        m.unload_all()
+        self.assertEqual(m.epoch, e + 1)
 
     def test_unload_empty_is_noop(self):
         m = gw.Manager()
         self.assertEqual(m.unload_all(), [])
+
+
+class TestLoopback(unittest.TestCase):
+    def test_loopback_addresses(self):
+        for a in ("127.0.0.1", "127.0.0.5", "::1", "::ffff:127.0.0.1"):
+            self.assertTrue(gw._is_loopback(a), a)
+
+    def test_non_loopback_addresses(self):
+        for a in ("10.0.0.5", "192.168.1.9", "0.0.0.0", "::"):
+            self.assertFalse(gw._is_loopback(a), a)
 
 
 class TestRss(unittest.TestCase):
