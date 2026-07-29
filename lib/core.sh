@@ -44,6 +44,7 @@ fi
 : "${FXLLA_VOICE_MODEL:=YUGOROU/Chatterbox-Multilingual-MLX-4bit}"  # TTS model
 : "${FXLLA_VOICE_REF:=}"       # reference voice wav (required for voice; sets timbre)
 : "${FXLLA_VOICE_LANG:=en}"    # default speech language code
+: "${FXLLA_MEDIA_KEEP_MODELS:=}"  # set to 1 to keep gateway models during media jobs
 
 MODELS_DIR="$FXLLA_STORE/models"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/fxlla"
