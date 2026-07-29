@@ -167,6 +167,22 @@ class TestValidateVideoOutput(unittest.TestCase):
             media.generate_video("")
 
 
+class TestFreeGpu(unittest.TestCase):
+    def test_keep_skips(self):
+        # keep=True must not attempt any network call; simply returns.
+        media.free_gpu("image", keep=True)
+
+    def test_no_gateway_is_swallowed(self):
+        # Point at a closed port; connection refused must be caught, not raised.
+        saved = (media.GATEWAY_PORT, media.KEEP_MODELS)
+        try:
+            media.GATEWAY_PORT = "9"  # discard port, nothing listening
+            media.KEEP_MODELS = False
+            media.free_gpu("video")  # must not raise
+        finally:
+            media.GATEWAY_PORT, media.KEEP_MODELS = saved
+
+
 class TestMCP(unittest.TestCase):
     def test_initialize(self):
         r = media_mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})

@@ -45,6 +45,11 @@ def log(msg):
     sys.stderr.flush()
 
 
+def _is_loopback(addr):
+    """True for IPv4/IPv6 loopback, including IPv4-mapped IPv6."""
+    return addr == "::1" or addr.startswith("127.") or addr.startswith("::ffff:127.")
+
+
 def dir_size_mb(path):
     try:
         out = subprocess.check_output(["du", "-sk", path], stderr=subprocess.DEVNULL)
@@ -131,6 +136,7 @@ class Manager:
         self.backends = {}          # alias -> Backend
         self.loading = {}           # alias -> (Event, port) for in-flight loads
         self.lock = threading.Lock()
+        self.epoch = 0              # bumped by unload_all to cancel in-flight loads
 
     def _alloc_port(self):
         used = {b.port for b in self.backends.values()}
@@ -197,6 +203,7 @@ class Manager:
                 ev = threading.Event()
                 self.loading[alias] = (ev, port)
                 loader = True
+                load_epoch = self.epoch
 
         if not loader:
             # another thread is loading this model; wait for it, do not hold a lock
@@ -211,6 +218,7 @@ class Manager:
         # loader path: spawn and wait OUTSIDE the lock
         proc = None
         ready = False
+        stale = False
         model_field = None
         try:
             log("loading %s on :%d (%d MB)" % (alias, port, size_mb))
@@ -220,18 +228,23 @@ class Manager:
         finally:
             with self.lock:
                 self.loading.pop(alias, None)
-                if ready:
+                # If unload_all ran while this model was loading, do not register
+                # it: the gateway already reported the memory freed.
+                stale = ready and self.epoch != load_epoch
+                if ready and not stale:
                     engine = engine_for(alias)
                     model_field = model_field_from(alias, engine)
                     self.backends[alias] = Backend(
                         alias, port, proc, size_mb, model_field, engine)
                 ev.set()
-        if not ready:
+        if not ready or stale:
             if proc is not None:
                 try:
                     proc.terminate()
                 except Exception:
                     pass
+            if stale:
+                raise RuntimeError("model '%s' was unloaded during load" % alias)
             raise RuntimeError("backend for %s did not become ready" % alias)
         return port, model_field
 
@@ -249,14 +262,35 @@ class Manager:
                      "idle_s": int(time.monotonic() - b.last_used)}
                     for b in self.backends.values()]
 
-    def shutdown(self):
+    def unload_all(self):
+        """Terminate every resident backend and clear the registry, freeing
+        their memory. The gateway keeps serving and reloads a model on the next
+        request. Returns the aliases that were unloaded, only after the
+        processes have actually exited so their memory is released."""
         with self.lock:
-            for b in list(self.backends.values()):
+            self.epoch += 1          # cancel any in-flight load (see ensure)
+            victims = list(self.backends.values())
+            freed = list(self.backends.keys())
+            self.backends.clear()
+        # terminate and wait outside the lock so a slow exit does not block
+        # other requests; wait so the memory is gone before we return.
+        for b in victims:
+            try:
+                b.proc.terminate()
+            except Exception:
+                pass
+        for b in victims:
+            try:
+                b.proc.wait(timeout=10)
+            except Exception:
                 try:
-                    b.proc.terminate()
+                    b.proc.kill()
                 except Exception:
                     pass
-            self.backends.clear()
+        return freed
+
+    def shutdown(self):
+        self.unload_all()
 
 
 MANAGER = Manager()
@@ -291,6 +325,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length else b""
+
+        # Admin: free resident models so a heavy local job (media generation)
+        # has headroom in unified memory. The gateway reloads on demand after.
+        # Loopback only, so a non-local bind (FXLLA_HOST=0.0.0.0) cannot let a
+        # remote host unload models and deny inference.
+        if self.path.rstrip("/") == "/admin/unload":
+            if not _is_loopback(self.client_address[0]):
+                self._json(403, {"error": {"message": "admin endpoints are loopback-only"}})
+                return
+            freed = MANAGER.unload_all()
+            if freed:
+                log("unloaded on request: %s" % ", ".join(freed))
+            self._json(200, {"unloaded": freed})
+            return
+
         try:
             body = json.loads(raw or b"{}")
         except Exception:

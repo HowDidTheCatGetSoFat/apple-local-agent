@@ -54,6 +54,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   files, instead of marking an incomplete model as complete.
 
 ### Changed
+- Media generation now frees the gateway's resident models before a job so a
+  heavy render does not compete with a large LLM for unified memory (they share
+  it, and the overlap could OOM). The gateway exposes `POST /admin/unload` and
+  reloads on demand afterward; opt out with `--keep-models` or
+  `FXLLA_MEDIA_KEEP_MODELS`. MCP tool calls get this for free.
 - Hardened app signing and packaging: shared `app/sign-lib.sh` checks the
   Developer ID identity before building and verifies the app is signed with the
   hardened runtime; `app/package-dmg.sh --check` validates the signing

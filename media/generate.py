@@ -21,15 +21,24 @@ Usage (normally driven via `fxlla media`):
   generate.py models          list the supported image models
 """
 import argparse
+import json
 import os
 import subprocess
 import sys
 import time
+import urllib.request
 
 STORE = os.environ.get("FXLLA_STORE", "")
 OUT_DIR = os.environ.get("FXLLA_MEDIA_OUT") or os.path.join(STORE, "media")
 DEFAULT_MODEL = os.environ.get("FXLLA_MEDIA_MODEL", "z-image-turbo")
 VIDEO_BIN = os.environ.get("FXLLA_VIDEO_BIN", "ltx-2-mlx")
+
+# Media generation and the gateway's resident LLMs share unified memory. Before
+# a job, ask a running gateway to free its models so the render has headroom;
+# the gateway reloads on demand afterward. FXLLA_MEDIA_KEEP_MODELS opts out.
+GATEWAY_HOST = os.environ.get("FXLLA_HOST", "127.0.0.1")
+GATEWAY_PORT = os.environ.get("FXLLA_PORT", "8080")
+KEEP_MODELS = os.environ.get("FXLLA_MEDIA_KEEP_MODELS", "") not in ("", "0", "false")
 
 # Friendly name -> the mflux-cv CLI and defaults. `base_model` is only needed
 # for the multi-model `mflux-generate` binary (FLUX.1). `steps` is a sane
@@ -69,6 +78,28 @@ def _env():
     if hf:
         env["HF_HOME"] = hf
     return env
+
+
+def free_gpu(reason, keep=False):
+    """Ask a running gateway to unload its resident models before a heavy job.
+
+    Best-effort: if no gateway is up (connection refused) or the request fails,
+    there is nothing to free and we proceed. Skipped when the caller opts out
+    via keep=True or FXLLA_MEDIA_KEEP_MODELS."""
+    if keep or KEEP_MODELS:
+        return
+    url = "http://%s:%s/admin/unload" % (GATEWAY_HOST, GATEWAY_PORT)
+    req = urllib.request.Request(url, data=b"{}",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            info = json.loads(r.read() or b"{}")
+    except Exception:
+        return
+    freed = info.get("unloaded") or []
+    if freed:
+        sys.stderr.write("[media] freed gateway models before %s: %s\n"
+                         % (reason, ", ".join(freed)))
 
 
 def build_command(spec, prompt, output, steps=None, seed=None, width=None,
@@ -114,7 +145,7 @@ def validate_output(path):
 
 def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                    height=None, aspect=None, quantize=8, low_ram=False,
-                   metadata=False, output=None):
+                   metadata=False, output=None, keep_models=False):
     if not prompt:
         raise ValueError("prompt is required")
     model = model or DEFAULT_MODEL
@@ -124,6 +155,7 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                          % (model, ", ".join(sorted(MODELS))))
     os.makedirs(OUT_DIR, exist_ok=True)
     output = output or os.path.join(OUT_DIR, "fxlla-%s-%d.png" % (model, int(time.time())))
+    free_gpu("image", keep_models)
     cmd = build_command(spec, prompt, output, steps=steps, seed=seed, width=width,
                         height=height, aspect=aspect, quantize=quantize,
                         low_ram=low_ram, metadata=metadata)
@@ -176,11 +208,13 @@ def validate_video_output(path):
 
 def generate_video(prompt, stage=DEFAULT_STAGE, frames=None,
                    frame_rate=DEFAULT_FRAME_RATE, width=None, height=None,
-                   seed=None, low_ram=False, model=None, output=None):
+                   seed=None, low_ram=False, model=None, output=None,
+                   keep_models=False):
     if not prompt:
         raise ValueError("prompt is required")
     os.makedirs(OUT_DIR, exist_ok=True)
     output = output or os.path.join(OUT_DIR, "fxlla-video-%d.mp4" % int(time.time()))
+    free_gpu("video", keep_models)
     cmd = build_video_command(prompt, output, stage=stage, frames=frames,
                               frame_rate=frame_rate, width=width, height=height,
                               seed=seed, low_ram=low_ram, model=model)
@@ -217,11 +251,13 @@ def validate_wav_output(path):
         raise RuntimeError("output at %s is not a WAV" % path)
 
 
-def generate_speech(text, ref=None, lang=None, model=None, speed=1.0, output=None):
+def generate_speech(text, ref=None, lang=None, model=None, speed=1.0,
+                    output=None, keep_models=False):
     if not text:
         raise ValueError("text is required")
     os.makedirs(OUT_DIR, exist_ok=True)
     output = output or os.path.join(OUT_DIR, "fxlla-voice-%d.wav" % int(time.time()))
+    free_gpu("voice", keep_models)
     cmd = build_voice_command(text, output, ref or VOICE_REF, model=model,
                               lang=lang, speed=speed)
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
@@ -236,7 +272,7 @@ def cmd_image(args):
         args.prompt, model=args.model, steps=args.steps, seed=args.seed,
         width=args.width, height=args.height, aspect=args.aspect,
         quantize=args.quantize, low_ram=args.low_ram, metadata=args.metadata,
-        output=args.output)
+        output=args.output, keep_models=args.keep_models)
     print(path)
 
 
@@ -244,14 +280,14 @@ def cmd_video(args):
     path = generate_video(
         args.prompt, stage=args.stage, frames=args.frames, frame_rate=args.frame_rate,
         width=args.width, height=args.height, seed=args.seed, low_ram=args.low_ram,
-        model=args.model, output=args.output)
+        model=args.model, output=args.output, keep_models=args.keep_models)
     print(path)
 
 
 def cmd_voice(args):
     path = generate_speech(
         args.text, ref=args.ref, lang=args.lang, model=args.model,
-        speed=args.speed, output=args.output)
+        speed=args.speed, output=args.output, keep_models=args.keep_models)
     print(path)
 
 
@@ -297,6 +333,10 @@ def main():
     vo.add_argument("--model", "-m")
     vo.add_argument("--speed", type=float, default=1.0)
     vo.add_argument("--output", "-o")
+
+    for sp in (im, vi, vo):
+        sp.add_argument("--keep-models", action="store_true",
+                        help="do not free the gateway's resident models first")
 
     sub.add_parser("models")
     args = p.parse_args()

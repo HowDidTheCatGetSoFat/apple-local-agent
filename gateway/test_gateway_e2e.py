@@ -107,6 +107,15 @@ class TestGatewayE2E(unittest.TestCase):
         self.assertGreater(s["ram_mb"], 0)   # real RSS of this test process
         self.assertIsNotNone(s["ttft_ms"])
 
+    def test_admin_unload_frees_backends(self):
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/admin/unload" % self.gport,
+            data=b"{}", headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            info = json.loads(r.read())
+        self.assertIn("fake", info["unloaded"])
+        self.assertEqual(gw.MANAGER.status(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

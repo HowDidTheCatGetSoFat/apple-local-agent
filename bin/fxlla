@@ -838,7 +838,8 @@ PY
 # The FXLLA_* config the media toolchains read. Exported once so the direct
 # call, the MCP server, and the opencode registration all forward the same set.
 FXLLA_MEDIA_ENV="FXLLA_STORE FXLLA_MEDIA_HF_HOME FXLLA_MEDIA_MODEL FXLLA_MEDIA_OUT \
-FXLLA_VIDEO_BIN FXLLA_VOICE_PYTHON FXLLA_VOICE_MODEL FXLLA_VOICE_REF FXLLA_VOICE_LANG"
+FXLLA_VIDEO_BIN FXLLA_VOICE_PYTHON FXLLA_VOICE_MODEL FXLLA_VOICE_REF FXLLA_VOICE_LANG \
+FXLLA_HOST FXLLA_PORT FXLLA_MEDIA_KEEP_MODELS"
 
 cmd_media() {
   need python3; require_store
