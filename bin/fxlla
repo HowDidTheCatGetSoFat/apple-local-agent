@@ -1044,7 +1044,10 @@ _graph_python() {
   if [ -n "${FXLLA_GRAPH_PYTHON:-}" ]; then
     GRAPH_PY=("$FXLLA_GRAPH_PYTHON")
   else
-    GRAPH_PY=(uv run --with kuzu --no-project python)
+    # Pinned: KuzuDB upstream was archived after the Oct 2025 Apple acquisition;
+    # 0.11.3 is the final release, so pin it for reproducibility. Override with
+    # FXLLA_GRAPH_PYTHON if a maintained fork/successor is adopted later.
+    GRAPH_PY=(uv run --with "kuzu==0.11.3" --no-project python)
   fi
 }
 

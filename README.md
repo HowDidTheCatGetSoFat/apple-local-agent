@@ -249,10 +249,15 @@ is unavailable, and the results are identical either way.
 Index a Python codebase and navigate it structurally: where a symbol is
 defined, where it is referenced, which functions call it, and the transitive
 blast radius of a change. Symbols are extracted with the standard library `ast`
-and stored in an embedded [KuzuDB](https://kuzudb.com) graph, so change-impact is
-a single Cypher variable-length path. `fxlla graph` runs the backend under
-`uv run --with kuzu` (uv is already required); set `FXLLA_GRAPH_PYTHON` to use
-your own interpreter that has kuzu.
+and stored in an embedded KuzuDB graph, so change-impact is a single Cypher
+variable-length path. `fxlla graph` runs the backend under
+`uv run --with kuzu==0.11.3` (uv is already required); set `FXLLA_GRAPH_PYTHON`
+to use your own interpreter that has kuzu.
+
+KuzuDB is pinned to `0.11.3`: its upstream was archived after the October 2025
+Apple acquisition, and 0.11.3 is the final release. It installs and runs fine;
+the pin keeps it reproducible. Override `FXLLA_GRAPH_PYTHON` if a maintained fork
+or successor is adopted later.
 
 ```sh
 fxlla graph index .                 # index Python files or directories

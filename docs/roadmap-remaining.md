@@ -171,9 +171,13 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
 - Code graph upgrades: Phase A DONE. The store is now an embedded KuzuDB graph
   (Cypher) instead of flat SQLite, and `impact` is a Cypher variable-length path
   over a derived CALLS relationship. `fxlla graph` runs under `uv run --with
-  kuzu` (or FXLLA_GRAPH_PYTHON). Still open (L): Phase B, multi-language parsing
-  via tree-sitter or SCIP (Python-only `ast` today), and routing the graph MCP
-  server through richer Cypher queries.
+  kuzu==0.11.3` (or FXLLA_GRAPH_PYTHON); kuzu is pinned because upstream was
+  archived after the Oct 2025 Apple acquisition. Still open (L): Phase B,
+  multi-language parsing via tree-sitter or SCIP (Python-only `ast` today), and
+  routing the graph MCP server through richer Cypher queries. Known limit: the
+  `_rebuild_calls` join (`qualname`/`file`/`name`, none PK-indexed) rebuilds all
+  CALLS edges on every index; fine at current scale, profile and narrow the join
+  before running over a large monorepo.
 - More media tools: `edit_image` and `upscale_image` are DONE
   (`fxlla media edit` / `upscale`). Still open: wire Wan 2.2 (mlx-video) as a
   second video backend alongside LTX (M).

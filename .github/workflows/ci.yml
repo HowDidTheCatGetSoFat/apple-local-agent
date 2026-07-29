@@ -73,9 +73,17 @@ jobs:
   python:
     name: Python tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - name: Unit tests
         run: FXLLA_STORE=/tmp python3 -m unittest rag.test_rag graph.test_graph gateway.test_gateway gateway.test_metrics gateway.test_gateway_e2e media.test_media -v
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Extension-backed tests (kuzu, sqlite-vec)
+        # Exercise the code-graph and RAG-index tests that self-skip without the
+        # optional extensions, so they run for real in CI instead of skipping.
+        run: FXLLA_STORE=/tmp uv run --with "kuzu==0.11.3" --with sqlite-vec --no-project python -m unittest rag.test_rag graph.test_graph -v

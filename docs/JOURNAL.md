@@ -29,6 +29,21 @@ the CLI, and the MCP tools identical.
   argparse, clamped 1..50) is formatted into the query string.
 - Verified end to end: indexed the repo (290 defs, 1418 refs), def/callers/
   impact/refs/unused/stats/ls/rm, the JSON-RPC MCP path, and re-index idempotency.
+- Dependency risk (raised in review): KuzuDB upstream was archived after the
+  October 2025 Apple acquisition; 0.11.3 is the final release with no further
+  maintenance. Decision: pin `kuzu==0.11.3` in every `uv run --with` invocation
+  (CLI, CI, wire-opencode) for reproducibility, keep `FXLLA_GRAPH_PYTHON` as the
+  escape hatch, and re-evaluate a maintained fork/successor if the pin ever fails
+  to install. It ships pre-bundled algo/fts/json/vector extensions, which also
+  helps Phase B.
+- CI now runs `graph.test_graph` (and `rag.test_rag`) a second time under
+  `uv run --with kuzu==0.11.3 --with sqlite-vec`, so the extension-backed tests
+  that self-skip under system python actually execute in CI instead of skipping.
+- Known scaling limit (raised in review): `_rebuild_calls` joins on
+  `qualname`/`file`/`name`, none primary-key-indexed in Kuzu, and rebuilds all
+  CALLS edges on every index. Fine at the tested scale; profile before running
+  it over a large monorepo and narrow the join surface if it becomes a
+  bottleneck (tracked in docs/roadmap-remaining.md).
 
 ## 2026-07-29: RAG vector index (sqlite-vec), opt-in
 
