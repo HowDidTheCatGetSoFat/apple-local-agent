@@ -148,10 +148,10 @@ in opencode or Claude Code invokes it through tool calling.
       (a zero exit code is not proof of a real render).
 - [ ] More image operations exposed as tools: `edit_image`, `upscale_image`
       (mflux-cv already ships the edit/upscale CLIs).
-- [ ] GPU and memory coordination through `fxlla`. Image and video generation
-      compete with the LLM server for unified memory, so the MCP asks `fxlla`
-      to free the model before a heavy job and reload it after. This is why
-      `fxlla` owns the lifecycle.
+- [x] GPU and memory coordination through `fxlla`. Media generation frees the
+      gateway's resident models before a job (`POST /admin/unload`) so it does
+      not compete with a large LLM for unified memory; the gateway reloads on
+      demand. Opt out with `--keep-models` / `FXLLA_MEDIA_KEEP_MODELS`.
 - [ ] Async job model for heavy work: submit returns a job id; the caller polls
       for status and the output file path. Keeps tool calls fast and lets video
       run in the background.

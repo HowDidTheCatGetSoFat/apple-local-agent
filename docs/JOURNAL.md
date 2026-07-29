@@ -2,6 +2,24 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-28: Media and gateway memory coordination
+
+Closed the one robustness gap from docs/roadmap-remaining.md (Tier 1). Media
+generation and the gateway's resident LLMs share unified memory; a heavy render
+next to a large model could exceed the wired limit and OOM the machine.
+
+- Gateway gained `POST /admin/unload` (Manager.unload_all): terminates every
+  resident backend and clears the registry, keeps serving, reloads on demand.
+- The coordination lives in `media/generate.py` (free_gpu), not the bash CLI, so
+  MCP tool calls get it too - they go through generate.py, not `fxlla media`.
+  Each generator calls it before the heavy subprocess.
+- Best-effort: no gateway (connection refused) means nothing to free, and the
+  request failure is swallowed. Opt out with `--keep-models` /
+  `FXLLA_MEDIA_KEEP_MODELS` for a small job that fits alongside the model.
+- generate.py reaches the gateway via FXLLA_HOST/FXLLA_PORT, added to the media
+  env that cmd_media exports. Verified end to end against a live gateway:
+  /admin/unload returns the freed aliases and /health then shows none resident.
+
 ## 2026-07-28: Local text to speech (voice)
 
 Added `fxlla media voice` and the MCP `generate_speech` tool, completing the

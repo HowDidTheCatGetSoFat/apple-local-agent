@@ -25,7 +25,11 @@ Effort scale: S is under a day, M is a few days, L is a week or more.
 
 ## Tier 1: robustness
 
-### Media and gateway memory coordination
+### Media and gateway memory coordination - DONE
+
+Delivered: media generation frees the gateway's resident models before a job
+(`POST /admin/unload`); the gateway reloads on demand. Opt out with
+`--keep-models` or `FXLLA_MEDIA_KEEP_MODELS`. Original note kept below.
 
 - What: image, video, and speech generation share unified memory with the
   gateway's resident LLMs, and today nothing coordinates them. Running

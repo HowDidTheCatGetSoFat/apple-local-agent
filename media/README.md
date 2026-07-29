@@ -69,6 +69,15 @@ interpreter must have `mlx-audio` installed (a project venv is the usual home).
 - `FXLLA_MEDIA_MODEL` - default image model (default `z-image-turbo`).
 - `FXLLA_MEDIA_OUT` - output directory (default `<FXLLA_STORE>/media`).
 
+## Memory coordination
+
+Media models share unified memory with the gateway's resident LLMs. Before each
+job the wrapper asks a running gateway to unload its models
+(`POST /admin/unload`), so a heavy render does not push past the GPU wired limit
+and OOM; the gateway reloads on the next request. It is best-effort - no gateway
+means nothing to free. Pass `--keep-models` (or set `FXLLA_MEDIA_KEEP_MODELS=1`)
+for a small job that fits alongside the resident model.
+
 ## Notes and limits
 
 - Generation is synchronous and can take tens of seconds (video longer). The MCP
