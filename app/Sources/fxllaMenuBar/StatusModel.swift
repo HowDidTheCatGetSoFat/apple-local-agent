@@ -94,9 +94,18 @@ final class StatusModel: ObservableObject {
         guard !prompt.isEmpty, !generating else { return }
         generating = true
         lastError = nil
+        let kind = mediaKind.rawValue
         Task {
-            let (out, code) = await CLI.run(["media", mediaKind.rawValue, prompt])
+            // Guard against a hung CLI leaving the UI stuck: recover after a
+            // generous ceiling (a real job finishes well within it).
+            let result = await Self.withTimeout(seconds: 900) {
+                await CLI.run(["media", kind, prompt])
+            }
             generating = false
+            guard let (out, code) = result else {
+                lastError = "media \(kind) is taking too long; it may still be running"
+                return
+            }
             let clean = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines)
             if code == 0 {
                 if let last = clean.split(separator: "\n").last.map(String.init), !last.isEmpty {
@@ -106,6 +115,21 @@ final class StatusModel: ObservableObject {
             } else {
                 lastError = clean
             }
+        }
+    }
+
+    // Race an async operation against a timeout; returns nil if the timeout wins.
+    private static func withTimeout<T: Sendable>(
+        seconds: UInt64, _ op: @escaping @Sendable () async -> T) async -> T? {
+        await withTaskGroup(of: T?.self) { group in
+            group.addTask { await op() }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
         }
     }
 

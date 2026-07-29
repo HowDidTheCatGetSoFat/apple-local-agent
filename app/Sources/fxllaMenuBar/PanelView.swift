@@ -90,7 +90,7 @@ struct PanelView: View {
             HStack {
                 Button(L.t("Generate")) { model.generateMedia() }
                     .disabled(model.generating
-                        || model.mediaPrompt.trimmingCharacters(in: .whitespaces).isEmpty)
+                        || model.mediaPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if model.generating { ProgressView().controlSize(.small) }
             }
             .font(.caption)
