@@ -46,6 +46,7 @@ fi
 : "${FXLLA_VOICE_LANG:=en}"    # default speech language code
 : "${FXLLA_MEDIA_KEEP_MODELS:=}"  # set to 1 to keep gateway models during media jobs
 : "${FXLLA_CIVITAI_TOKEN:=}"   # Civitai API token for downloading from civitai.com
+: "${FXLLA_DOWNLOADER:=aria2}"  # default pull transfer: aria2 (bandwidth-capped) or hf
 
 MODELS_DIR="$FXLLA_STORE/models"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/fxlla"

@@ -155,19 +155,23 @@ cmd_pull() {
   case "${1:-}" in
     civitai:*|*civitai.com/*) _pull_civitai "$1"; return ;;
   esac
-  need aria2c; require_store
-  local q="" engine="" quant=""
+  need python3; require_store
+  local q="" engine="" quant="" downloader="${FXLLA_DOWNLOADER:-aria2}"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --gguf)     engine=gguf ;;
-      --mlx)      engine=mlx ;;
-      --quant)    quant="$2"; shift ;;
-      --quant=*)  quant="${1#--quant=}" ;;
-      -*)         die "unknown flag: $1" ;;
-      *)          q="$1" ;;
+      --gguf)         engine=gguf ;;
+      --mlx)          engine=mlx ;;
+      --quant)        quant="$2"; shift ;;
+      --quant=*)      quant="${1#--quant=}" ;;
+      --downloader)   downloader="$2"; shift ;;
+      --downloader=*) downloader="${1#--downloader=}" ;;
+      -*)             die "unknown flag: $1" ;;
+      *)              q="$1" ;;
     esac; shift
   done
-  [ -z "$q" ] && die "Usage: fxlla pull <alias|org/repo|civitai:<id>> [--gguf] [--quant Q4_K_M]"
+  [ -z "$q" ] && die "Usage: fxlla pull <alias|org/repo|civitai:<id>> [--gguf] [--quant Q4_K_M] [--downloader aria2|hf]"
+  case "$downloader" in aria2|hf) ;; *) die "unknown downloader: $downloader (aria2|hf)" ;; esac
+  [ "$downloader" = hf ] || need aria2c
 
   local repo; repo="$(resolve_repo "$q")" || die "Unknown '$q'. See 'fxlla models' or pass an org/repo from HF."
   [ -z "$engine" ] && engine="$(resolve_engine "$q")"
@@ -212,27 +216,41 @@ cmd_pull() {
   gb="$(awk -v b="$total" 'BEGIN{printf "%.2f", b/1073741824}')"
   info "Cap:      ${FXLLA_RATE_MBIT} Mbps | to download: ${gb} GB"
 
-  # build aria2c input
-  local input; input="$(mktemp)"
-  local p d
-  while IFS= read -r p; do
-    [ -z "$p" ] && continue
-    d="$dest"; case "$(dirname "$p")" in .) ;; *) d="$dest/$(dirname "$p")";; esac
-    printf '%s\n  dir=%s\n  out=%s\n' "https://huggingface.co/$repo/resolve/main/$p" "$d" "$(basename "$p")" >> "$input"
-  done <<< "$sel"
+  if [ "$downloader" = hf ]; then
+    # Native Hugging Face downloader via the CLI, run with uvx so no persistent
+    # install is needed (uv is a dependency). Robust for xet-backed and LFS
+    # repos, but it does not honor the bandwidth cap. Opt-in via --downloader hf.
+    need uv
+    info "Downloading via the Hugging Face CLI (uvx; no bandwidth cap)..."
+    local inc=() tokopt=() f
+    while IFS= read -r f; do [ -n "$f" ] && inc+=(--include "$f"); done <<< "$sel"
+    [ -n "${HF_TOKEN:-}" ] && tokopt=(--token "$HF_TOKEN")
+    uvx --from "huggingface_hub[hf_xet]" hf download "$repo" --local-dir "$dest" \
+      ${inc[@]+"${inc[@]}"} ${tokopt[@]+"${tokopt[@]}"} \
+      || die "hf download failed for $repo (typo? gated without HF_TOKEN?)"
+  else
+    # build aria2c input
+    local input; input="$(mktemp)"
+    local p d
+    while IFS= read -r p; do
+      [ -z "$p" ] && continue
+      d="$dest"; case "$(dirname "$p")" in .) ;; *) d="$dest/$(dirname "$p")";; esac
+      printf '%s\n  dir=%s\n  out=%s\n' "https://huggingface.co/$repo/resolve/main/$p" "$d" "$(basename "$p")" >> "$input"
+    done <<< "$sel"
 
-  local auth=(); [ -n "${HF_TOKEN:-}" ] && auth=(--header="Authorization: Bearer $HF_TOKEN")
+    local auth=(); [ -n "${HF_TOKEN:-}" ] && auth=(--header="Authorization: Bearer $HF_TOKEN")
 
-  info "Downloading (resumable; Ctrl-C and re-run the same command to resume)..."
-  aria2c --input-file="$input" \
-    --max-overall-download-limit="$(rate_bytes)" \
-    --continue=true --auto-file-renaming=false \
-    --max-connection-per-server=4 --max-concurrent-downloads=2 --split=4 \
-    --summary-interval=10 --console-log-level=warn ${auth[@]+"${auth[@]}"}
+    info "Downloading (resumable; Ctrl-C and re-run the same command to resume)..."
+    aria2c --input-file="$input" \
+      --max-overall-download-limit="$(rate_bytes)" \
+      --continue=true --auto-file-renaming=false \
+      --max-connection-per-server=4 --max-concurrent-downloads=2 --split=4 \
+      --summary-interval=10 --console-log-level=warn ${auth[@]+"${auth[@]}"}
 
-  rm -f "$input"
-  if find "$dest" -name '*.aria2' -print -quit | grep -q .; then
-    die "Download incomplete (pending .aria2 files). Re-run to resume: fxlla pull $q"
+    rm -f "$input"
+    if find "$dest" -name '*.aria2' -print -quit | grep -q .; then
+      die "Download incomplete (pending .aria2 files). Re-run to resume: fxlla pull $q"
+    fi
   fi
   echo "$repo" > "$dest/.source"
   ok "Done: $dest"

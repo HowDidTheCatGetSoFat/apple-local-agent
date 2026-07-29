@@ -6,6 +6,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- `fxlla pull --downloader hf`: fetch a Hugging Face repo with the official CLI
+  (run via `uvx`, no persistent install) instead of the aria2c tree walk. More
+  robust for xet-backed and LFS repos, but it ignores the bandwidth cap. Default
+  stays aria2 (`FXLLA_DOWNLOADER`).
 - Civitai as a weight source: `fxlla pull civitai:<id>` (or a civitai.com URL)
   downloads a LoRA or checkpoint from civitai.com into `<store>/civitai`,
   bandwidth-capped like every pull, authenticated with `FXLLA_CIVITAI_TOKEN`.
