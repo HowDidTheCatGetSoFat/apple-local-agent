@@ -18,6 +18,8 @@ Usage (normally driven via `fxlla media`):
                               [--low-ram] [--metadata] [-o path]
   generate.py video "<prompt>" [--stage distilled] [--frames N] [--frame-rate R]
                               [--width N] [--height N] [--seed N] [--low-ram] [-o path]
+  generate.py edit "<prompt>" --image path [--seed N] [-q {3,4,5,6,8}] [-o path]
+  generate.py upscale --image path [--scale 2x] [-o path]
   generate.py models          list the supported image models
 """
 import argparse
@@ -32,6 +34,9 @@ STORE = os.environ.get("FXLLA_STORE", "")
 OUT_DIR = os.environ.get("FXLLA_MEDIA_OUT") or os.path.join(STORE, "media")
 DEFAULT_MODEL = os.environ.get("FXLLA_MEDIA_MODEL", "z-image-turbo")
 VIDEO_BIN = os.environ.get("FXLLA_VIDEO_BIN", "ltx-2-mlx")
+# Instruction-based image edit and diffusion upscale are separate mflux-cv CLIs.
+EDIT_BIN = os.environ.get("FXLLA_EDIT_BIN", "mflux-generate-qwen-edit")
+UPSCALE_BIN = os.environ.get("FXLLA_UPSCALE_BIN", "mflux-upscale-seedvr2")
 
 # Media generation and the gateway's resident LLMs share unified memory. Before
 # a job, ask a running gateway to free its models so the render has headroom;
@@ -267,6 +272,73 @@ def generate_speech(text, ref=None, lang=None, model=None, speed=1.0,
     return output
 
 
+def build_edit_command(prompt, image, output, seed=None, quantize=8,
+                       bin_path=None):
+    """Assemble the mflux-cv qwen-edit argument vector for one image edit.
+
+    An input image is required: qwen-edit conditions the edit on it, so an
+    empty path cannot produce anything. The image is passed via --image-paths
+    (the CLI accepts one or more; a single edit uses one)."""
+    if not prompt:
+        raise ValueError("prompt is required")
+    if not image:
+        raise ValueError("an input image is required")
+    cmd = [bin_path or EDIT_BIN, "--prompt", prompt, "--image-paths", image,
+           "--output", output, "--quantize", str(quantize)]
+    if seed is not None:
+        cmd += ["--seed", str(seed)]
+    return cmd
+
+
+def generate_edit(prompt, image, seed=None, quantize=8, output=None,
+                  keep_models=False):
+    if not prompt:
+        raise ValueError("prompt is required")
+    if not image:
+        raise ValueError("an input image is required")
+    if not os.path.exists(image):
+        raise ValueError("input image not found: %s" % image)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    output = output or os.path.join(OUT_DIR, "fxlla-edit-%d.png" % int(time.time()))
+    free_gpu("edit", keep_models)
+    cmd = build_edit_command(prompt, image, output, seed=seed, quantize=quantize)
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr.strip() or "image edit failed")[-800:])
+    validate_output(output)
+    return output
+
+
+def build_upscale_command(image, output, scale=None, bin_path=None):
+    """Assemble the mflux-cv seedvr2 argument vector for one image upscale.
+
+    seedvr2 has no prompt; the input image is the required conditioning. --scale
+    maps to the CLI's --resolution, which accepts a target shortest-edge in
+    pixels or a scale factor such as 2x."""
+    if not image:
+        raise ValueError("an input image is required")
+    cmd = [bin_path or UPSCALE_BIN, "--image-path", image, "--output", output]
+    if scale is not None:
+        cmd += ["--resolution", str(scale)]
+    return cmd
+
+
+def generate_upscale(image, scale=None, output=None, keep_models=False):
+    if not image:
+        raise ValueError("an input image is required")
+    if not os.path.exists(image):
+        raise ValueError("input image not found: %s" % image)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    output = output or os.path.join(OUT_DIR, "fxlla-upscale-%d.png" % int(time.time()))
+    free_gpu("upscale", keep_models)
+    cmd = build_upscale_command(image, output, scale=scale)
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr.strip() or "image upscale failed")[-800:])
+    validate_output(output)
+    return output
+
+
 def cmd_image(args):
     path = generate_image(
         args.prompt, model=args.model, steps=args.steps, seed=args.seed,
@@ -288,6 +360,20 @@ def cmd_voice(args):
     path = generate_speech(
         args.text, ref=args.ref, lang=args.lang, model=args.model,
         speed=args.speed, output=args.output, keep_models=args.keep_models)
+    print(path)
+
+
+def cmd_edit(args):
+    path = generate_edit(
+        args.prompt, args.image, seed=args.seed, quantize=args.quantize,
+        output=args.output, keep_models=args.keep_models)
+    print(path)
+
+
+def cmd_upscale(args):
+    path = generate_upscale(
+        args.image, scale=args.scale, output=args.output,
+        keep_models=args.keep_models)
     print(path)
 
 
@@ -334,14 +420,27 @@ def main():
     vo.add_argument("--speed", type=float, default=1.0)
     vo.add_argument("--output", "-o")
 
-    for sp in (im, vi, vo):
+    ed = sub.add_parser("edit")
+    ed.add_argument("prompt")
+    ed.add_argument("--image", required=True)
+    ed.add_argument("--seed", type=int)
+    ed.add_argument("--quantize", "-q", type=int, default=8)
+    ed.add_argument("--output", "-o")
+
+    up = sub.add_parser("upscale")
+    up.add_argument("--image", required=True)
+    up.add_argument("--scale",
+                    help="target shortest edge in pixels or a factor, e.g. 2x")
+    up.add_argument("--output", "-o")
+
+    for sp in (im, vi, vo, ed, up):
         sp.add_argument("--keep-models", action="store_true",
                         help="do not free the gateway's resident models first")
 
     sub.add_parser("models")
     args = p.parse_args()
     {"image": cmd_image, "video": cmd_video, "voice": cmd_voice,
-     "models": cmd_models}[args.cmd](args)
+     "edit": cmd_edit, "upscale": cmd_upscale, "models": cmd_models}[args.cmd](args)
 
 
 if __name__ == "__main__":

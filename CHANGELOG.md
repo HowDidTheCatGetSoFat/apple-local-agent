@@ -6,6 +6,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- Image editing and upscaling: `fxlla media edit "<prompt>" --image <path>`
+  (mflux-cv qwen-edit) and `fxlla media upscale --image <path>` (mflux-cv
+  seedvr2), exposed over MCP as `edit_image` and `upscale_image`.
 - `fxlla ram persist` / `unpersist`: install or remove a LaunchDaemon that
   re-applies the GPU wired limit at every boot, so `fxlla ram auto` survives a
   reboot.

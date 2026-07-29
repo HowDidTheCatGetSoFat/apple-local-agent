@@ -263,6 +263,8 @@ fxlla media image "a red sailboat at sunset" --seed 42
 fxlla media video "a sailboat at sunset, gentle waves" \
     --frames 49 --width 768 --height 512 --frame-rate 24
 fxlla media voice "Hello from a local voice." --ref reference-voice.wav
+fxlla media edit "make it snow" --image photo.png     # instruction-based edit
+fxlla media upscale --image photo.png --scale 2x      # diffusion super-resolution
 ```
 
 Point `FXLLA_VIDEO_BIN` at your `ltx-2-mlx` binary and `FXLLA_VOICE_PYTHON` at an
@@ -270,8 +272,8 @@ interpreter with `mlx-audio` (both usually live in a project venv), and
 `FXLLA_MEDIA_HF_HOME` at the weight cache. `fxlla doctor` reports which of these
 are ready. Before a job, media generation asks a running gateway to free its
 resident models so a heavy render does not exceed the GPU limit (opt out with
-`--keep-models`). Expose all three as MCP tools (`generate_image`,
-`generate_video`, `generate_speech`):
+`--keep-models`). Expose them as MCP tools (`generate_image`, `generate_video`,
+`generate_speech`, `edit_image`, `upscale_image`):
 
 ```sh
 fxlla media wire-opencode

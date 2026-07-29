@@ -15,11 +15,11 @@ friendly names, sane defaults, and output validation in one place.
   (`FXLLA_VOICE_PYTHON`) that has `mlx-audio` installed, so fxlla itself never
   imports it; it loads Chatterbox and writes a 24 kHz mono WAV.
 - `media_mcp.py` - a minimal stdio MCP server exposing `generate_image`,
-  `generate_video`, and `generate_speech` so opencode and Claude Code can render
+  `generate_video`, `generate_speech`, `edit_image`, and `upscale_image` so opencode and Claude Code can render
   media as a tool call.
 
 Driven through the CLI:
-`fxlla media image|video|voice|models`, `fxlla media mcp`,
+`fxlla media image|video|voice|edit|upscale|models`, `fxlla media mcp`,
 `fxlla media wire-opencode`.
 
 ## Images (mflux-cv)
