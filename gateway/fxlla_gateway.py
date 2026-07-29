@@ -249,14 +249,22 @@ class Manager:
                      "idle_s": int(time.monotonic() - b.last_used)}
                     for b in self.backends.values()]
 
-    def shutdown(self):
+    def unload_all(self):
+        """Terminate every resident backend and clear the registry, freeing
+        their memory. The gateway keeps serving and reloads a model on the next
+        request. Returns the aliases that were unloaded."""
         with self.lock:
+            freed = list(self.backends.keys())
             for b in list(self.backends.values()):
                 try:
                     b.proc.terminate()
                 except Exception:
                     pass
             self.backends.clear()
+        return freed
+
+    def shutdown(self):
+        self.unload_all()
 
 
 MANAGER = Manager()
@@ -291,6 +299,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length) if length else b""
+
+        # Admin: free resident models so a heavy local job (media generation)
+        # has headroom in unified memory. The gateway reloads on demand after.
+        if self.path.rstrip("/") == "/admin/unload":
+            freed = MANAGER.unload_all()
+            if freed:
+                log("unloaded on request: %s" % ", ".join(freed))
+            self._json(200, {"unloaded": freed})
+            return
+
         try:
             body = json.loads(raw or b"{}")
         except Exception:

@@ -72,6 +72,31 @@ class TestEnsureColdLoad(unittest.TestCase):
         self.assertIsNotNone(model_field)
 
 
+class _TermProc:
+    def __init__(self):
+        self.pid = os.getpid()
+        self.terminated = False
+
+    def terminate(self):
+        self.terminated = True
+
+
+class TestUnloadAll(unittest.TestCase):
+    def test_unload_frees_and_reports(self):
+        m = gw.Manager()
+        p1, p2 = _TermProc(), _TermProc()
+        m.backends["a"] = gw.Backend("a", 8100, p1, 10, "a", "gguf")
+        m.backends["b"] = gw.Backend("b", 8101, p2, 10, "b", "gguf")
+        freed = m.unload_all()
+        self.assertEqual(set(freed), {"a", "b"})
+        self.assertEqual(m.backends, {})
+        self.assertTrue(p1.terminated and p2.terminated)
+
+    def test_unload_empty_is_noop(self):
+        m = gw.Manager()
+        self.assertEqual(m.unload_all(), [])
+
+
 class TestRss(unittest.TestCase):
     def test_own_process_has_rss(self):
         self.assertGreater(gw.rss_mb(os.getpid()), 0)
