@@ -27,4 +27,6 @@ fxlla skills install --client opencode  # opencode.json "instructions" list
 fxlla wire-opencode --all            # provider + every MCP server + these skills
 ```
 
-Install is idempotent. Restart the client to pick up the changes.
+Install is idempotent. Restart the client to pick up the changes. Both clients
+install from a copy (`~/.claude/skills` and `~/.local/share/fxlla/skills`), so
+they keep working if this repo is moved or re-cloned elsewhere.

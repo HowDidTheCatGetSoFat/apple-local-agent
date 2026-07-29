@@ -346,7 +346,11 @@ PY
 cmd_wire_opencode() {
   need python3
   local all=0
-  case "${1:-}" in --all|--mcp) all=1 ;; esac
+  case "${1:-}" in
+    --all|--mcp) all=1 ;;
+    "") ;;
+    *) die "unknown flag: $1 (try --all)" ;;
+  esac
   local cfg; cfg="$(_sync_opencode "" "")"
   ok "opencode configured: $cfg"
   info "Provider 'local' -> $BASE_URL (the active model is registered on 'fxlla on')."
@@ -377,6 +381,7 @@ _skills_install() {
     case "$1" in
       --client) client="$2"; shift ;;
       -*) die "unknown flag: $1" ;;
+      *) die "unexpected argument: $1 (use --client <all|opencode|claude>)" ;;
     esac; shift
   done
   case "$client" in all|opencode|claude) ;; *) die "unknown client: $client (all|opencode|claude)" ;; esac
@@ -400,11 +405,19 @@ _skills_install_claude() {
 }
 
 # opencode includes extra guidance via the 'instructions' file list in its
-# config; point it at the skill files in this repo.
+# config. Copy the skills to a stable location first and point opencode there,
+# so the instructions survive the repo being moved or re-cloned elsewhere.
 _skills_install_opencode() {
   local src="$1" cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
-  need python3; mkdir -p "$(dirname "$cfg")"
-  CFG="$cfg" SRC="$src" python3 - <<'PY'
+  local store="${XDG_DATA_HOME:-$HOME/.local/share}/fxlla/skills" d name
+  need python3; mkdir -p "$(dirname "$cfg")" "$store"
+  for d in "$src"/*/; do
+    [ -f "$d/SKILL.md" ] || continue
+    name="$(basename "$d")"
+    mkdir -p "$store/$name"
+    cp "$d/SKILL.md" "$store/$name/SKILL.md"
+  done
+  CFG="$cfg" SRC="$store" python3 - <<'PY'
 import os, json, glob
 cfg = os.environ["CFG"]
 try:
