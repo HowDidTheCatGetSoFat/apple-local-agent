@@ -21,6 +21,8 @@ Built for M-series Macs with large unified memory. Validated on M5 Max
   saturate your connection.
 - Frees RAM on its own after an idle timeout.
 - Adds local models to opencode without touching Claude Code.
+- Ships local tools any client can call over MCP: RAG knowledge bases, a Python
+  code graph, and image, video, and speech generation.
 
 ## Requirements
 
@@ -56,19 +58,27 @@ Then open opencode and pick the `local` provider.
 
 ## Commands
 
-| Command                 | What it does                                    |
-|-------------------------|-------------------------------------------------|
-| `fxlla setup`           | Install and verify dependencies                 |
-| `fxlla models`          | List the catalog                                |
-| `fxlla pull <model>`    | Download a model (bandwidth-capped, resumable)  |
-| `fxlla ls`              | List downloaded models                          |
-| `fxlla on [model]`      | Start the server and register it in opencode    |
-| `fxlla off`             | Stop the server                                 |
-| `fxlla status`          | Server, model, and idle status                  |
-| `fxlla stats [--watch]` | Live tok/s, TTFT, RAM (also --json, --last N)   |
-| `fxlla ram [auto|reset]`| Adjust the GPU memory limit                     |
-| `fxlla wire-opencode`   | Register the local provider in opencode         |
-| `fxlla config`          | Show the effective configuration                |
+| Command                       | What it does                              |
+|-------------------------------|-------------------------------------------|
+| `fxlla setup`                 | Install and verify dependencies           |
+| `fxlla models`                | List the catalog                          |
+| `fxlla pull <model>`          | Download a model (bandwidth-capped, resumable) |
+| `fxlla ls [--json]`           | List downloaded models                    |
+| `fxlla avail <alias>`         | Availability as JSON (cached, size, engine) |
+| `fxlla on [model] [--pull]`   | Start a single model, register in opencode |
+| `fxlla off`                   | Stop the single-model server              |
+| `fxlla serve` / `unserve`     | Multi-model gateway: one endpoint, load on demand |
+| `fxlla status`                | Server, model, and idle status            |
+| `fxlla stats [--watch]`       | Live tok/s, TTFT, RAM (also --json, --last N) |
+| `fxlla ram [auto\|reset]`     | Adjust the GPU memory limit               |
+| `fxlla kb ...`                | Local RAG knowledge bases (MCP: rag_search) |
+| `fxlla graph ...`             | Python code graph (MCP: find_definition, ...) |
+| `fxlla media image\|video\|voice` | Local media generation (MCP: generate_*) |
+| `fxlla doctor`                | Diagnose the environment                  |
+| `fxlla completions <bash\|zsh>` | Print a shell completion script         |
+| `fxlla wire-opencode`         | Register the local provider in opencode   |
+| `fxlla rm <model>`            | Delete a downloaded model                 |
+| `fxlla config`                | Show the effective configuration          |
 
 ## Keys and model cache
 
@@ -244,8 +254,11 @@ fxlla media voice "Hello from a local voice." --ref reference-voice.wav
 
 Point `FXLLA_VIDEO_BIN` at your `ltx-2-mlx` binary and `FXLLA_VOICE_PYTHON` at an
 interpreter with `mlx-audio` (both usually live in a project venv), and
-`FXLLA_MEDIA_HF_HOME` at the weight cache. Expose all three as MCP tools
-(`generate_image`, `generate_video`, `generate_speech`):
+`FXLLA_MEDIA_HF_HOME` at the weight cache. `fxlla doctor` reports which of these
+are ready. Before a job, media generation asks a running gateway to free its
+resident models so a heavy render does not exceed the GPU limit (opt out with
+`--keep-models`). Expose all three as MCP tools (`generate_image`,
+`generate_video`, `generate_speech`):
 
 ```sh
 fxlla media wire-opencode
@@ -255,16 +268,23 @@ fxlla media wire-opencode
 
 `fxlla` is the control plane. It serves an OpenAI-compatible endpoint that
 opencode consumes as a `local` provider, alongside Claude and any other
-provider. Claude Code is not modified. The roadmap extends this with local
-knowledge bases, a code graph, and image and video generation, all exposed as
-MCP tools that any client can call. See `ROADMAP.md`.
+provider. Claude Code is not modified. On top of that it ships local knowledge
+bases, a Python code graph, and image, video, and speech generation, all exposed
+as MCP tools any client can call. See `ROADMAP.md` and `docs/roadmap-remaining.md`
+for what is next.
 
 ## Configuration
 
-All settings live in `~/.config/fxlla/config.env` or the environment:
-`FXLLA_STORE`, `FXLLA_RATE_MBIT`, `FXLLA_HOST`, `FXLLA_PORT`,
-`FXLLA_DEFAULT_MODEL`, `FXLLA_KEEP_WARM`, `FXLLA_CTX`, `FXLLA_NGL`,
-`FXLLA_RAM_RESERVE_MB`, `HF_TOKEN`.
+All settings live in `~/.config/fxlla/config.env` or the environment. See
+`config/config.env.example` for the full list with comments.
+
+- Core: `FXLLA_STORE`, `FXLLA_RATE_MBIT`, `FXLLA_HOST`, `FXLLA_PORT`,
+  `FXLLA_DEFAULT_MODEL`, `FXLLA_KEEP_WARM`, `FXLLA_CTX`, `FXLLA_NGL`,
+  `FXLLA_RAM_RESERVE_MB`, `HF_TOKEN`.
+- Gateway and RAG: `FXLLA_GATEWAY_BUDGET_MB`, `FXLLA_BACKEND_PORT_BASE`,
+  `FXLLA_EMBED_PORT`.
+- Media: `FXLLA_MEDIA_MODEL`, `FXLLA_MEDIA_HF_HOME`, `FXLLA_MEDIA_OUT`,
+  `FXLLA_VIDEO_BIN`, `FXLLA_VOICE_PYTHON`, `FXLLA_VOICE_REF`, `FXLLA_VOICE_LANG`.
 
 ## Catalog
 
