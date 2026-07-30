@@ -2,6 +2,42 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-29: Code graph Phase B (multi-language via tree-sitter)
+
+Extended the code graph beyond Python. `graph/tsextract.py` parses JavaScript,
+TypeScript/TSX, Go, Rust, Java, C/C++, and Ruby with tree-sitter and returns the
+same `(defs, refs)` shape as the ast visitor, so both feed the same KuzuDB
+Def/Ref/CALLS model and queries resolve by name across languages.
+
+- Config-driven walker: a small per-language table maps def node types to a kind,
+  marks class-like scopes (so nested functions become methods), and names the
+  call node types plus the field holding the callee. A generic tree walk builds
+  qualname from the scope stack and caller from the enclosing def, mirroring the
+  ast visitor. Grammars come from `tree-sitter-language-pack` (precompiled).
+- codegraph.py dispatches by extension: `.py` keeps the stdlib `ast` path (best
+  qualname fidelity, no dependency), everything else goes through tsextract. The
+  `import tree_sitter_language_pack` is deferred inside `extract()`, so codegraph
+  and its unit tests still import under a plain system python; the tree-sitter
+  tests self-skip there and run for real in CI under uv.
+- `_graph_python` gained `--with tree-sitter --with tree-sitter-language-pack`
+  next to the pinned `kuzu==0.11.3`; CI runs the extension test step with all
+  three.
+- Verified end to end: indexed a mixed JS/Go/Python/Rust directory; `def helper`
+  spanned all four files and `callers helper` resolved across languages. New
+  tests cover pure tsextract (JS, Go) and the cross-language graph (JS + Python).
+- Scope: a curated language set with a per-language config; adding a language is
+  a new config entry. tree-sitter is error-tolerant (no parse exceptions), so a
+  malformed file yields partial results rather than being skipped like a Python
+  SyntaxError.
+- Self-review caught two robustness bugs (CodeRabbit was usage-limited, no paid
+  account, so I reviewed adversarially instead): (1) two defs sharing
+  file::line::qualname (e.g. a same-line redefinition) produced a duplicate
+  Def.id and a Kuzu primary-key violation that aborted the whole `index` run -
+  fixed by deduping defs by id per file; (2) `_gather` walked dependency/build
+  dirs now that JS/Go/etc. are indexed - added `_SKIP_DIRS` (node_modules,
+  vendor, target, dist, build, .venv, ...) pruned in-place during os.walk. Both
+  have regression tests.
+
 ## 2026-07-29: RAG MCP through the vector index
 
 Follow-up to the RAG vector index: the MCP `rag_search` still ran the brute-force

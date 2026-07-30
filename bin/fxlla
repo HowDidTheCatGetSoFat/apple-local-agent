@@ -1064,10 +1064,12 @@ _graph_python() {
   if [ -n "${FXLLA_GRAPH_PYTHON:-}" ]; then
     GRAPH_PY=("$FXLLA_GRAPH_PYTHON")
   else
-    # Pinned: KuzuDB upstream was archived after the Oct 2025 Apple acquisition;
-    # 0.11.3 is the final release, so pin it for reproducibility. Override with
-    # FXLLA_GRAPH_PYTHON if a maintained fork/successor is adopted later.
-    GRAPH_PY=(uv run --with "kuzu==0.11.3" --no-project python)
+    # kuzu is the graph store; tree-sitter parses non-Python languages. kuzu is
+    # pinned: upstream was archived after the Oct 2025 Apple acquisition and
+    # 0.11.3 is the final release. Override with FXLLA_GRAPH_PYTHON if a
+    # maintained fork/successor is adopted later.
+    GRAPH_PY=(uv run --with "kuzu==0.11.3" --with tree-sitter
+              --with tree-sitter-language-pack --no-project python)
   fi
 }
 

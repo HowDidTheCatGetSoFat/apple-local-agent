@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""fxlla code graph: index Python symbols and references, query the graph.
+"""fxlla code graph: index code symbols and references, query the graph.
 
-Symbols are extracted with the standard library `ast` module and stored in an
-embedded KuzuDB graph under <store>/graph. Definitions (functions, classes,
-methods) and references (calls, with the enclosing scope) become nodes; a CALLS
-relationship between definitions is derived by name so transitive queries like
-change-impact are a single Cypher variable-length path.
+Python is parsed with the standard library `ast`; other languages (JavaScript,
+TypeScript, Go, Rust, Java, C/C++, Ruby, ...) with tree-sitter (see tsextract).
+Both produce the same shape and are stored in an embedded KuzuDB graph under
+<store>/graph. Definitions (functions, classes, methods) and references (calls,
+with the enclosing scope) become nodes; a CALLS relationship between definitions
+is derived by name so transitive queries like change-impact are a single Cypher
+variable-length path.
 
-KuzuDB is not in the standard library. This module is normally run under a python
-that has it (e.g. `uv run --with kuzu`); `fxlla graph` handles that. The kuzu
-import is deferred so the ast extraction and the MCP layer can be imported
-without it.
+KuzuDB and tree-sitter are not in the standard library. This module is normally
+run under a python that has them (e.g. `uv run --with kuzu --with tree-sitter
+--with tree-sitter-language-pack`); `fxlla graph` handles that. Those imports are
+deferred so the ast extraction and the MCP layer can be imported without them.
 
 Usage (normally driven via `fxlla graph`):
   codegraph.py index <path...>   index Python files or directories
@@ -28,6 +30,8 @@ import ast
 import json
 import os
 import sys
+
+import tsextract  # tree-sitter extraction for non-Python files (lazy heavy deps)
 
 STORE = os.environ.get("FXLLA_STORE", "")
 GRAPH_DIR = os.path.join(STORE, "graph")
@@ -106,21 +110,53 @@ class _Visitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _indexable(name):
+    # Python (ast) plus every extension tree-sitter extraction supports.
+    return name.endswith(".py") or os.path.splitext(name)[1].lower() in tsextract.LANG_BY_EXT
+
+
+# Dependency and build directories: not the user's code, and huge, so pruning
+# them keeps the graph relevant and the index fast (important now that JS/TS,
+# Go, Rust, etc. are indexed, e.g. node_modules and target).
+_SKIP_DIRS = {".git", "__pycache__", "node_modules", "vendor", "target",
+              "dist", "build", ".venv", "venv", ".tox", ".mypy_cache"}
+
+
 def _gather(paths):
     files = []
     for p in paths:
         if os.path.isdir(p):
-            for root, _dirs, names in os.walk(p):
-                if (os.sep + ".git" + os.sep) in (root + os.sep) or root.endswith(os.sep + ".git"):
-                    continue
-                if os.path.basename(root) == "__pycache__":
-                    continue
+            for root, dirs, names in os.walk(p):
+                dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
                 for n in names:
-                    if n.endswith(".py"):
+                    if _indexable(n):
                         files.append(os.path.join(root, n))
-        elif os.path.isfile(p) and p.endswith(".py"):
+        elif os.path.isfile(p) and _indexable(p):
             files.append(p)
     return files
+
+
+# Extracts (defs, refs) from one file: Python via the stdlib ast visitor, other
+# languages via tree-sitter. Returns None when the file cannot be parsed or is
+# unsupported, so cmd_index skips it. Matches the (name, qualname, kind, file,
+# line) / (name, file, line, caller) shapes.
+def _extract_file(f):
+    if f.endswith(".py"):
+        try:
+            with open(f, encoding="utf-8", errors="ignore") as fh:
+                tree = ast.parse(fh.read(), filename=f)
+        except (SyntaxError, ValueError):
+            return None
+        v = _Visitor(f)
+        v.visit(tree)
+        return v.defs, v.refs
+    lang = tsextract.LANG_BY_EXT.get(os.path.splitext(f)[1].lower())
+    if not lang:
+        return None
+    try:
+        return tsextract.extract(f, lang)
+    except Exception:
+        return None
 
 
 # Drops and rebuilds the CALLS edges from the current Def/Ref rows. An edge goes
@@ -138,23 +174,25 @@ def _rebuild_calls(con):
 def cmd_index(args):
     files = _gather(args.paths)
     if not files:
-        sys.exit("no Python files found in the given paths")
+        sys.exit("no indexable source files found in the given paths")
     con = _conn()
-    total_defs = total_refs = 0
+    total_defs = total_refs = indexed = 0
     for f in files:
-        try:
-            with open(f, encoding="utf-8", errors="ignore") as fh:
-                tree = ast.parse(fh.read(), filename=f)
-        except (SyntaxError, ValueError):
+        extracted = _extract_file(f)
+        if extracted is None:
             continue
-        v = _Visitor(f)
-        v.visit(tree)
+        file_defs, file_refs = extracted
+        indexed += 1
         con.execute("MATCH (d:Def) WHERE d.file = $f DETACH DELETE d", {"f": f})
         con.execute("MATCH (r:Ref) WHERE r.file = $f DETACH DELETE r", {"f": f})
-        defs = [{"id": f"{fl}::{ln}::{q}", "name": nm, "q": q, "k": k, "f": fl, "l": ln}
-                for (nm, q, k, fl, ln) in v.defs]
+        # Dedup by id: two definitions can share file::line::qualname (e.g. a
+        # same-line redefinition in a tree-sitter language), and Def.id is the
+        # Kuzu primary key, so a duplicate would abort the whole index run.
+        defs = list({f"{fl}::{ln}::{q}": {"id": f"{fl}::{ln}::{q}", "name": nm,
+                                          "q": q, "k": k, "f": fl, "l": ln}
+                     for (nm, q, k, fl, ln) in file_defs}.values())
         refs = [{"id": f"{fl}::{ln}::{i}", "name": nm, "f": fl, "l": ln, "c": c}
-                for i, (nm, fl, ln, c) in enumerate(v.refs)]
+                for i, (nm, fl, ln, c) in enumerate(file_refs)]
         if defs:
             con.execute(
                 "UNWIND $rows AS r CREATE (:Def {id:r.id, name:r.name, "
@@ -163,10 +201,10 @@ def cmd_index(args):
             con.execute(
                 "UNWIND $rows AS r CREATE (:Ref {id:r.id, name:r.name, "
                 "file:r.f, line:r.l, caller:r.c})", {"rows": refs})
-        total_defs += len(v.defs)
-        total_refs += len(v.refs)
+        total_defs += len(defs)
+        total_refs += len(refs)
     _rebuild_calls(con)
-    print(f"indexed {len(files)} files: {total_defs} defs, {total_refs} refs")
+    print(f"indexed {indexed} files: {total_defs} defs, {total_refs} refs")
 
 
 def cmd_unused(args):

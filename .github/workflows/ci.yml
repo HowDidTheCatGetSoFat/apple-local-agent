@@ -86,7 +86,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Extension-backed tests (kuzu, sqlite-vec)
+      - name: Extension-backed tests (kuzu, sqlite-vec, tree-sitter)
         # Exercise the code-graph and RAG-index tests that self-skip without the
         # optional extensions, so they run for real in CI instead of skipping.
-        run: FXLLA_STORE=/tmp uv run --with "kuzu==0.11.3" --with sqlite-vec --no-project python -m unittest rag.test_rag graph.test_graph -v
+        run: FXLLA_STORE=/tmp uv run --with "kuzu==0.11.3" --with sqlite-vec --with tree-sitter --with tree-sitter-language-pack --no-project python -m unittest rag.test_rag graph.test_graph -v
