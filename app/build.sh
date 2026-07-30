@@ -7,6 +7,8 @@
 #   app/build.sh --release       release build
 #   app/build.sh --release --sign   release build, signed with Developer ID
 #
+# Re-exec under bash if started by another shell (for example: zsh app/build.sh).
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 cd "$(dirname "$0")"
 # shellcheck source=app/sign-lib.sh

@@ -32,11 +32,21 @@ enum CLI {
         return bundled ?? "fxlla"
     }()
 
+    // A bundle running from a mounted disk image, or from Gatekeeper's App
+    // Translocation, lives at a path that disappears when the image is ejected or
+    // the app is moved. Linking into it would leave a dangling `fxlla` on PATH,
+    // so the install refuses and asks for a durable location first.
+    static var isTransientLocation: Bool {
+        let path = Bundle.main.bundleURL.resolvingSymlinksInPath().path
+        return path.hasPrefix("/Volumes/") || path.contains("/AppTranslocation/")
+    }
+
     // The view turns these into localized text; CLI stays free of the UI layer.
     enum InstallResult {
         case installed(String)                  // linked at this path
         case alreadyInstalled(String)
         case noBundle                           // dev build, nothing to link
+        case transientLocation                  // running from a .dmg or translocated
         case occupied(String)                   // a real file is already there
         case linksElsewhere(String, String)     // target, where it already points
         case error(String)
@@ -50,6 +60,7 @@ enum CLI {
     static func installOnPath() -> InstallResult {
         let fm = FileManager.default
         guard let source = bundled else { return .noBundle }
+        if isTransientLocation { return .transientLocation }
         let target = linkTarget
         if let existing = try? fm.destinationOfSymbolicLink(atPath: target) {
             return existing == source ? .alreadyInstalled(target)
@@ -60,8 +71,8 @@ enum CLI {
             try fm.createDirectory(atPath: (target as NSString).deletingLastPathComponent,
                                    withIntermediateDirectories: true)
             try fm.createSymbolicLink(atPath: target, withDestinationPath: source)
-        } catch let err {
-            return .error(err.localizedDescription)
+        } catch {
+            return .error(error.localizedDescription)
         }
         return .installed(target)
     }

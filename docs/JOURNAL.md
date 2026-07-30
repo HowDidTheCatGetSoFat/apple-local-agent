@@ -39,6 +39,17 @@ command** action.
 - Verified: strict-concurrency Swift 6 build clean, the bundle contains the CLI
   tree, an audit for the 5 real secret values from the local config.env found
   none in the bundle, and the bundled CLI runs both directly and via symlink.
+- Review round (CodeRabbit, 5 findings, 4 taken): the important one was that a
+  bundle running from a mounted `.dmg` or from Gatekeeper's App Translocation sits
+  at a temporary path, so linking into it would leave a dangling `fxlla` on PATH
+  once the image is ejected. The install now refuses from those locations and asks
+  the user to move the app to Applications first. Also added: the CI check runs the
+  bundled CLI *through a symlink* as well (the direct call would not catch a
+  regression in symlink-based REPO_ROOT resolution), a bash re-exec guard on both
+  app entrypoints, and plainer wording instead of an arrow in the UI note. The
+  fifth finding claimed the es/pt strings violate the English-only rule; declined,
+  because AGENTS.md explicitly allows app localization. Clarified that section to
+  name L.swift as the resource layer so the rule cannot be read as a conflict.
 
 ## 2026-07-30: Background media jobs
 

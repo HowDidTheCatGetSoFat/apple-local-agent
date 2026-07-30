@@ -44,4 +44,13 @@ jobs:
             echo "config.env must never be bundled" >&2; exit 1
           fi
           "$cli/bin/fxlla" help >/dev/null || { echo "bundled CLI does not run" >&2; exit 1; }
+          # The installed command is a symlink into the bundle, so check that
+          # path too: bin/fxlla resolves symlinks to find its own REPO_ROOT, and a
+          # regression there would break the installed CLI while the direct call
+          # above still passed.
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          ln -s "$PWD/$cli/bin/fxlla" "$tmp/fxlla"
+          "$tmp/fxlla" help >/dev/null || { echo "symlinked bundled CLI does not run" >&2; exit 1; }
+          "$tmp/fxlla" media models >/dev/null || { echo "symlinked CLI cannot reach its modules" >&2; exit 1; }
           echo "bundled CLI verified"

@@ -21,6 +21,9 @@ enum L {
             "Add its folder to PATH if your shell cannot find it.":
                 "Agregá su carpeta al PATH si tu shell no lo encuentra.",
             "Left untouched:": "Sin modificar:",
+            "already points to": "ya apunta a",
+            "Move fxlla to Applications and reopen it first, so the command does not break.":
+                "Mové fxlla a Aplicaciones y volvé a abrirlo primero, para que el comando no se rompa.",
         ],
         "pt": [
             "Download": "Baixar", "Load": "Carregar", "Pull": "Baixar",
@@ -39,6 +42,9 @@ enum L {
             "Add its folder to PATH if your shell cannot find it.":
                 "Adicione a pasta ao PATH se o shell não encontrar.",
             "Left untouched:": "Sem alteração:",
+            "already points to": "já aponta para",
+            "Move fxlla to Applications and reopen it first, so the command does not break.":
+                "Mova o fxlla para Aplicativos e abra novamente primeiro, para o comando não quebrar.",
         ],
     ]
 

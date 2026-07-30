@@ -169,10 +169,13 @@ struct PanelView: View {
             cliInstallNote = L.t("Already installed at") + " \(path)"
         case .noBundle:
             cliInstallNote = L.t("This build has no bundled CLI.")
+        case .transientLocation:
+            cliInstallNote = L.t("Move fxlla to Applications and reopen it first, so the command does not break.")
         case .occupied(let path):
             cliInstallNote = L.t("A file is already there, left untouched:") + " \(path)"
         case .linksElsewhere(let path, let destination):
-            cliInstallNote = L.t("Left untouched:") + " \(path) -> \(destination)"
+            cliInstallNote = L.t("Left untouched:") + " \(path) "
+                + L.t("already points to") + " \(destination)"
         case .error(let message):
             cliInstallNote = message
         }
