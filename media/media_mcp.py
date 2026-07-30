@@ -96,10 +96,15 @@ TOOLS = [
 # with media_job_status.
 _ASYNC_DOC = ("Submit as a background job and return a job id immediately "
               "instead of waiting. Poll it with media_job_status.")
+_SKIP_QUALITY_DOC = ("Accept output that fails the content checks (silence, a "
+                     "container with no frames). Use only after a check rejected "
+                     "something you actually wanted.")
 for _tool in TOOLS:
     if _tool["name"].startswith(("generate_", "edit_", "upscale_")):
         _tool["inputSchema"]["properties"]["async"] = {
             "type": "boolean", "description": _ASYNC_DOC}
+        _tool["inputSchema"]["properties"]["skip_quality"] = {
+            "type": "boolean", "description": _SKIP_QUALITY_DOC}
 
 _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
                 ("width", "--width"), ("height", "--height"), ("aspect", "--aspect"),
@@ -130,6 +135,8 @@ def _run(subcmd, positional, flags, args):
             cmd += [flag, str(val)]
     if args.get("async"):
         cmd.append("--async")
+    if args.get("skip_quality"):
+        cmd.append("--skip-quality")
     proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
     if proc.returncode != 0:
         return "error: " + (proc.stderr.strip() or "generation failed")
@@ -185,6 +192,8 @@ def run_upscale(args):
         cmd += ["--scale", str(scale)]
     if args.get("async"):
         cmd.append("--async")
+    if args.get("skip_quality"):
+        cmd.append("--skip-quality")
     proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
     if proc.returncode != 0:
         return "error: " + (proc.stderr.strip() or "upscale failed")

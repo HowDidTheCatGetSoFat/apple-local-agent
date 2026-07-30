@@ -31,6 +31,11 @@ import time
 import urllib.request
 
 import jobs  # background media jobs (submit, poll, cancel)
+import quality  # perceptual checks on the produced file
+
+# Set by --skip-quality. An MCP client cannot set an environment variable on an
+# already-running server, so the flag is the only override available there.
+SKIP_QUALITY = False
 
 STORE = os.environ.get("FXLLA_STORE", "")
 OUT_DIR = os.environ.get("FXLLA_MEDIA_OUT") or os.path.join(STORE, "media")
@@ -135,6 +140,23 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
     return cmd
 
 
+# A structurally valid file can still be garbage: silent speech, a one-frame
+# "video", a blank image. Content checks run after the container checks and are
+# skippable, because a false positive would reject a render the user wanted.
+def _check_quality(kind, path, checker):
+    if SKIP_QUALITY or quality.skip_quality_checks():
+        return
+    try:
+        problems = checker(path)
+    except Exception as exc:  # a checker must never be the reason a render fails
+        print("quality check skipped for %s: %s" % (path, exc), file=sys.stderr)
+        return
+    message = quality.report(kind, path, problems)
+    if message:
+        raise RuntimeError(message + " (pass --skip-quality, or set "
+                           "FXLLA_MEDIA_SKIP_QUALITY=1, to accept it)")
+
+
 def validate_output(path):
     """Fail if the output is missing, not a PNG, or implausibly small.
 
@@ -148,6 +170,7 @@ def validate_output(path):
     with open(path, "rb") as f:
         if f.read(8) != PNG_MAGIC:
             raise RuntimeError("output at %s is not a PNG" % path)
+    _check_quality("image", path, quality.check_png)
 
 
 def generate_image(prompt, model=None, steps=None, seed=None, width=None,
@@ -211,6 +234,7 @@ def validate_video_output(path):
         head = f.read(16)
     if b"ftyp" not in head:
         raise RuntimeError("output at %s is not an MP4" % path)
+    _check_quality("video", path, quality.check_video)
 
 
 def generate_video(prompt, stage=DEFAULT_STAGE, frames=None,
@@ -256,6 +280,7 @@ def validate_wav_output(path):
         head = f.read(12)
     if head[:4] != b"RIFF" or head[8:12] != b"WAVE":
         raise RuntimeError("output at %s is not a WAV" % path)
+    _check_quality("audio", path, quality.check_wav)
 
 
 def generate_speech(text, ref=None, lang=None, model=None, speed=1.0,
@@ -484,6 +509,8 @@ def main():
         # dest is not 'async': that is a Python keyword.
         sp.add_argument("--async", dest="run_async", action="store_true",
                         help="submit as a background job and print its id")
+        sp.add_argument("--skip-quality", action="store_true",
+                        help="accept output that fails the content checks")
 
     sub.add_parser("models")
     jl = sub.add_parser("jobs")
@@ -496,6 +523,8 @@ def main():
     jc = sub.add_parser("cancel")
     jc.add_argument("id")
     args = p.parse_args()
+    global SKIP_QUALITY
+    SKIP_QUALITY = bool(getattr(args, "skip_quality", False))
     if getattr(args, "run_async", False):
         # Reuse the invocation verbatim (minus the flag) as the job's argv, so a
         # background job runs exactly the same generator as the direct call.

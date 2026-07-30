@@ -302,6 +302,17 @@ fxlla media edit "make it snow" --image photo.png     # instruction-based edit
 fxlla media upscale --image photo.png --scale 2x      # diffusion super-resolution
 ```
 
+Generated audio is checked for content, not just for a valid header, because a
+TTS run that emits silence writes a perfectly well-formed WAV. The checks flag
+silence, a constant waveform, a large DC offset, and a clip that is silent for
+almost its whole length; thresholds sit far below real speech (which measures a
+peak near 0.95 against a 0.005 limit), so a render you wanted is not rejected.
+Images are checked only for sane dimensions - a blank but well-formed image is not
+detected. Video is checked for a usable stream when `ffprobe` is installed, and
+not at all otherwise; frame count and length are yours to choose, so a one-frame
+or fraction-of-a-second clip is accepted. If a check ever rejects something you
+wanted, pass `--skip-quality` or set `FXLLA_MEDIA_SKIP_QUALITY=1`.
+
 Point `FXLLA_VIDEO_BIN` at your `ltx-2-mlx` binary and `FXLLA_VOICE_PYTHON` at an
 interpreter with `mlx-audio` (both usually live in a project venv), and
 `FXLLA_MEDIA_HF_HOME` at the weight cache. `fxlla doctor` reports which of these

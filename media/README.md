@@ -68,6 +68,14 @@ interpreter must have `mlx-audio` installed (a project venv is the usual home).
   (exported as `HF_HOME` for the child process).
 - `FXLLA_MEDIA_MODEL` - default image model (default `z-image-turbo`).
 - `FXLLA_MEDIA_OUT` - output directory (default `<FXLLA_STORE>/media`).
+- `FXLLA_MEDIA_SKIP_QUALITY` - set to 1 to accept output that fails the content
+  checks in `quality.py`. Per call, pass `--skip-quality` instead (an MCP client
+  cannot set an environment variable on an already-running server).
+
+`ffprobe` is optional. When it is on PATH, video output is checked for a usable
+stream; without it the video checks are skipped rather than guessed, so the same
+render can be accepted on one machine and flagged on another. `fxlla doctor`
+reports which case you are in.
 
 ## Memory coordination
 

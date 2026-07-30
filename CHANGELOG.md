@@ -41,6 +41,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `<store>/graph/graph.kuzu` location on the next `fxlla graph index`.
 
 ### Added
+- Media output is checked for content, not only for a valid container: a header
+  check passes for eight seconds of silence, which is a real failure mode of these
+  toolchains. `media/quality.py` adds stdlib-only checks (silence, a constant
+  waveform, near-zero signal, a large DC offset, a mostly-silent clip; PNG
+  dimensions; a usable video stream via `ffprobe` when installed) wired into the
+  existing validators. Only unambiguous garbage is flagged - frame count and clip
+  length are caller-controlled, so short clips are accepted, and a file the checks
+  cannot parse gets no verdict rather than a rejection. `--skip-quality` or
+  `FXLLA_MEDIA_SKIP_QUALITY=1` accepts a flagged file, and `fxlla doctor` reports
+  whether `ffprobe` is available.
 - Media weight catalog and pre-fetch: `config/media.conf` maps each media alias to
   its Hugging Face repositories with sizes, `fxlla media weights` shows what is
   cached, and `fxlla pull media:<alias>` fetches ahead of a render into the media
