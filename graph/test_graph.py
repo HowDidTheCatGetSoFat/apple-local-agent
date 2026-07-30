@@ -171,6 +171,15 @@ class TestGraphMultiLang(unittest.TestCase):
         callers = {r["caller"] for r in _run(codegraph.cmd_callers, name="helper")}
         self.assertEqual(callers, {"top", "run"})
 
+    def test_same_line_redefinition_does_not_crash(self):
+        # Two defs sharing file::line::qualname must not violate the Def primary
+        # key (they are deduped), so indexing does not abort.
+        with open(os.path.join(self.tmp, "dup.js"), "w") as f:
+            f.write("function dup(){} function dup(){}\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            codegraph.cmd_index(types.SimpleNamespace(paths=[self.tmp]))
+        self.assertEqual(len(_run(codegraph.cmd_def, name="dup")), 1)
+
 
 class TestMCP(unittest.TestCase):
     def test_initialize(self):

@@ -115,15 +115,19 @@ def _indexable(name):
     return name.endswith(".py") or os.path.splitext(name)[1].lower() in tsextract.LANG_BY_EXT
 
 
+# Dependency and build directories: not the user's code, and huge, so pruning
+# them keeps the graph relevant and the index fast (important now that JS/TS,
+# Go, Rust, etc. are indexed, e.g. node_modules and target).
+_SKIP_DIRS = {".git", "__pycache__", "node_modules", "vendor", "target",
+              "dist", "build", ".venv", "venv", ".tox", ".mypy_cache"}
+
+
 def _gather(paths):
     files = []
     for p in paths:
         if os.path.isdir(p):
-            for root, _dirs, names in os.walk(p):
-                if (os.sep + ".git" + os.sep) in (root + os.sep) or root.endswith(os.sep + ".git"):
-                    continue
-                if os.path.basename(root) == "__pycache__":
-                    continue
+            for root, dirs, names in os.walk(p):
+                dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
                 for n in names:
                     if _indexable(n):
                         files.append(os.path.join(root, n))
@@ -181,8 +185,12 @@ def cmd_index(args):
         indexed += 1
         con.execute("MATCH (d:Def) WHERE d.file = $f DETACH DELETE d", {"f": f})
         con.execute("MATCH (r:Ref) WHERE r.file = $f DETACH DELETE r", {"f": f})
-        defs = [{"id": f"{fl}::{ln}::{q}", "name": nm, "q": q, "k": k, "f": fl, "l": ln}
-                for (nm, q, k, fl, ln) in file_defs]
+        # Dedup by id: two definitions can share file::line::qualname (e.g. a
+        # same-line redefinition in a tree-sitter language), and Def.id is the
+        # Kuzu primary key, so a duplicate would abort the whole index run.
+        defs = list({f"{fl}::{ln}::{q}": {"id": f"{fl}::{ln}::{q}", "name": nm,
+                                          "q": q, "k": k, "f": fl, "l": ln}
+                     for (nm, q, k, fl, ln) in file_defs}.values())
         refs = [{"id": f"{fl}::{ln}::{i}", "name": nm, "f": fl, "l": ln, "c": c}
                 for i, (nm, fl, ln, c) in enumerate(file_refs)]
         if defs:
@@ -193,8 +201,8 @@ def cmd_index(args):
             con.execute(
                 "UNWIND $rows AS r CREATE (:Ref {id:r.id, name:r.name, "
                 "file:r.f, line:r.l, caller:r.c})", {"rows": refs})
-        total_defs += len(file_defs)
-        total_refs += len(file_refs)
+        total_defs += len(defs)
+        total_refs += len(refs)
     _rebuild_calls(con)
     print(f"indexed {indexed} files: {total_defs} defs, {total_refs} refs")
 

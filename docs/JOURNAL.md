@@ -29,6 +29,14 @@ Def/Ref/CALLS model and queries resolve by name across languages.
   a new config entry. tree-sitter is error-tolerant (no parse exceptions), so a
   malformed file yields partial results rather than being skipped like a Python
   SyntaxError.
+- Self-review caught two robustness bugs (CodeRabbit was usage-limited, no paid
+  account, so I reviewed adversarially instead): (1) two defs sharing
+  file::line::qualname (e.g. a same-line redefinition) produced a duplicate
+  Def.id and a Kuzu primary-key violation that aborted the whole `index` run -
+  fixed by deduping defs by id per file; (2) `_gather` walked dependency/build
+  dirs now that JS/Go/etc. are indexed - added `_SKIP_DIRS` (node_modules,
+  vendor, target, dist, build, .venv, ...) pruned in-place during os.walk. Both
+  have regression tests.
 
 ## 2026-07-29: RAG MCP through the vector index
 
