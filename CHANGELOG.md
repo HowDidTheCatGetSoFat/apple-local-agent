@@ -15,6 +15,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `<store>/graph/graph.kuzu` location on the next `fxlla graph index`.
 
 ### Added
+- Media weight catalog and pre-fetch: `config/media.conf` maps each media alias to
+  its Hugging Face repositories with sizes, `fxlla media weights` shows what is
+  cached, and `fxlla pull media:<alias>` fetches ahead of a render into the media
+  HF cache (where the toolchains look them up by repo id, so the bandwidth cap
+  does not apply). `fxlla doctor` reports how many entries are ready. Video
+  correctly pulls both the LTX model and the Gemma text encoder its pipelines load.
 - The app bundles the CLI and can install it on PATH: `app/build.sh` copies the
   CLI tree into `fxlla.app/Contents/Resources/cli` (never `config/config.env`,
   which holds tokens), so a `.dmg` install is self-contained. A new **Install the

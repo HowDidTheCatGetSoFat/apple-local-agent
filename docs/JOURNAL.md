@@ -2,6 +2,49 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-30: Media weight catalog and pre-fetch
+
+Closed the media half of the reproducibility gap. `config/media.conf` maps each
+media alias to the Hugging Face repositories it actually needs, `fxlla media
+weights` shows sizes and cached state, `fxlla pull media:<alias>` pre-fetches, and
+`fxlla doctor` reports the ready count.
+
+- The repo ids were not guessed. A subagent traced mflux's `[project.scripts]` to
+  each model's `ModelConfig.model_name` (every mflux model is self-contained: VAE,
+  transformer, and text encoder all come from subdirectories of one repo), and
+  reading ltx-2-mlx showed its *inference* pipelines default
+  `gemma_model_id = mlx-community/gemma-3-12b-it-4bit` as the text encoder. So the
+  video alias pulls two repos; shipping only the LTX repo would have left a fresh
+  machine unable to render. Sizes come from the HF API, not from guesses.
+- Media weights go to the Hugging Face *cache*, not `FXLLA_STORE`: the toolchains
+  resolve them by repo id through huggingface_hub, so cache layout is what
+  matters. That forces the transfer through the HF CLI, which has no rate limit -
+  documented plainly, because the bandwidth cap is otherwise a core promise. aria2
+  cannot produce a valid cache layout (blobs, snapshots, symlinks), so capping and
+  correctness were mutually exclusive here and correctness won.
+- `HF_HOME` is set only when `FXLLA_MEDIA_HF_HOME` is set, mirroring what
+  `media/generate.py` already does, so a pull and a render always agree on the
+  location. Deliberately did not default it to `<store>/huggingface`: that would
+  have stranded weights already sitting in `~/.cache/huggingface` and triggered
+  tens of gigabytes of silent re-downloading.
+- Full-repo downloads over-fetch badly for repos that ship many variants (the
+  SeedVR2 repo is 60 GB but a render needs ~7 GB), so the catalog carries an
+  `include` column of globs for those cases, and pre-fetching stays optional
+  since a toolchain fetches only what it needs on first use.
+- Cache detection looks for a file over 1 MB under the repo directory rather than
+  trusting the directory to exist: interrupted or listing-only fetches leave a
+  4 KB metadata-only directory that would otherwise read as cached. It uses
+  `find -print -quit` instead of piping into `head`, because a pipe would SIGPIPE
+  `find` under `pipefail` - the same trap this repo hit with `grep -q` before.
+- My own test hit that exact trap: assertions written as `run ... | grep -q`
+  reported false negatives. Fixed by capturing output first and matching with a
+  here-string, and noted in the test so it does not come back.
+- Verified against real caches: detection agrees with `du` (including a
+  metadata-only repo correctly reported missing), and a real 973 MB pull into an
+  empty scratch cache produced a valid layout that the listing then reported as
+  cached. `boogu` shows as missing on this machine, which matches its empty cache
+  directory - the listing is telling the truth.
+
 ## 2026-07-30: Bundled CLI and install-on-PATH from the app
 
 The app resolved `fxlla` from `~/.local/bin`, `/usr/local/bin`, or
