@@ -186,8 +186,12 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
   cosine scan for a `sqlite-vec` KNN index (run via `uv run --with sqlite-vec`,
   rebuilt on demand, falls back to the scan when unavailable). The MCP server and
   its `wire-opencode` registration run under the same interpreter, so `rag_search`
-  uses the index too. Still open (M): optional MLX embeddings and a persistent
-  warm embedding server.
+  uses the index too. Startup cost is fixed too: the health check polled once a
+  second while the server was ready in 0.17s, so every query slept through a server
+  that was already up. A cold search went from 1.11s to about 0.23s, and starting
+  the server is serialized so concurrent searches no longer fail. Still open (M):
+  optional MLX embeddings. A persistent warm daemon is NOT needed - that premise
+  was wrong, and reusing an already-running server covers the warm case.
 - Code graph upgrades: Phase A and Phase B DONE. Phase A: the store is an
   embedded KuzuDB graph (Cypher) instead of flat SQLite, and `impact` is a Cypher
   variable-length path over a derived CALLS relationship. Phase B: multi-language
