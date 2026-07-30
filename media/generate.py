@@ -30,6 +30,8 @@ import sys
 import time
 import urllib.request
 
+import jobs  # background media jobs (submit, poll, cancel)
+
 STORE = os.environ.get("FXLLA_STORE", "")
 OUT_DIR = os.environ.get("FXLLA_MEDIA_OUT") or os.path.join(STORE, "media")
 DEFAULT_MODEL = os.environ.get("FXLLA_MEDIA_MODEL", "z-image-turbo")
@@ -384,6 +386,49 @@ def cmd_models(_args):
         print("%-16s %s%s" % (name, spec["cli"], default))
 
 
+def _summary(args):
+    # Short label for `fxlla media jobs`, whatever the generator's input is.
+    for field in ("prompt", "text", "image"):
+        value = getattr(args, field, None)
+        if value:
+            return value if len(value) <= 60 else value[:57] + "..."
+    return ""
+
+
+def cmd_jobs(args):
+    if getattr(args, "prune", False):
+        print("removed %d finished job(s)" % jobs.prune())
+        return
+    records = jobs.listing()
+    if getattr(args, "json", False):
+        print(json.dumps(records))
+        return
+    if not records:
+        print("(no media jobs)")
+        return
+    for rec in records:
+        print(jobs.describe(rec))
+
+
+def cmd_job(args):
+    rec = jobs.get(args.id)
+    if rec is None:
+        sys.exit("unknown job: %s" % args.id)
+    if getattr(args, "json", False):
+        print(json.dumps(rec))
+        return
+    print(jobs.describe(rec))
+    if rec.get("error"):
+        print(rec["error"])
+
+
+def cmd_cancel(args):
+    rec = jobs.cancel(args.id)
+    if rec is None:
+        sys.exit("unknown job: %s" % args.id)
+    print(jobs.describe(rec))
+
+
 def main():
     p = argparse.ArgumentParser(prog="fxlla-media")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -436,11 +481,30 @@ def main():
     for sp in (im, vi, vo, ed, up):
         sp.add_argument("--keep-models", action="store_true",
                         help="do not free the gateway's resident models first")
+        # dest is not 'async': that is a Python keyword.
+        sp.add_argument("--async", dest="run_async", action="store_true",
+                        help="submit as a background job and print its id")
 
     sub.add_parser("models")
+    jl = sub.add_parser("jobs")
+    jl.add_argument("-j", "--json", action="store_true")
+    jl.add_argument("--prune", action="store_true",
+                    help="delete finished job records and their logs")
+    jg = sub.add_parser("job")
+    jg.add_argument("id")
+    jg.add_argument("-j", "--json", action="store_true")
+    jc = sub.add_parser("cancel")
+    jc.add_argument("id")
     args = p.parse_args()
+    if getattr(args, "run_async", False):
+        # Reuse the invocation verbatim (minus the flag) as the job's argv, so a
+        # background job runs exactly the same generator as the direct call.
+        argv = [a for a in sys.argv[1:] if a != "--async"]
+        print(jobs.submit(args.cmd, argv, _summary(args))["id"])
+        return
     {"image": cmd_image, "video": cmd_video, "voice": cmd_voice,
-     "edit": cmd_edit, "upscale": cmd_upscale, "models": cmd_models}[args.cmd](args)
+     "edit": cmd_edit, "upscale": cmd_upscale, "models": cmd_models,
+     "jobs": cmd_jobs, "job": cmd_job, "cancel": cmd_cancel}[args.cmd](args)
 
 
 if __name__ == "__main__":

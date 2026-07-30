@@ -15,6 +15,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `<store>/graph/graph.kuzu` location on the next `fxlla graph index`.
 
 ### Added
+- Background media jobs: `--async` on any `fxlla media` generator returns a job
+  id immediately instead of blocking, with `fxlla media jobs`, `job <id>`,
+  `cancel <id>`, and `jobs --prune` to follow and clean up. Jobs are serialized
+  (one render at a time) because they share unified memory with the gateway's
+  models. Over MCP, generators take `async: true` and the new `media_job_status`,
+  `list_media_jobs`, and `cancel_media_job` tools poll and manage them.
 - Multi-language code graph: `fxlla graph` now indexes JavaScript, TypeScript,
   Go, Rust, Java, C/C++, and Ruby via tree-sitter in addition to Python (still
   `ast`). All languages share the KuzuDB graph, so `def`/`callers`/`impact`

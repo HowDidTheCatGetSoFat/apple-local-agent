@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Minimal MCP server exposing local image and video generation over stdio.
+"""Minimal MCP server exposing local media generation over stdio.
 
-Newline-delimited JSON-RPC, no dependencies. Two tools, generate_image
-(mflux-cv) and generate_video (ltx-2-mlx), so opencode or Claude Code can render
-media locally. Generation is synchronous and can take tens of seconds (video
-longer); the call blocks until the file is written.
+Newline-delimited JSON-RPC, no dependencies. Image (mflux-cv), video (ltx-2-mlx),
+speech (mlx-audio), edit, and upscale tools, so opencode or Claude Code can
+render media locally.
+
+Generation is synchronous by default and can take tens of seconds (video much
+longer); the call blocks until the file is written. Pass `async: true` to submit a
+background job and get a job id back immediately, then poll `media_job_status`
+(or `list_media_jobs`, `cancel_media_job`). Background jobs run one at a time.
 """
 import json
 import os
@@ -71,7 +75,31 @@ TOOLS = [
          "scale": {"type": "string",
                    "description": "Target shortest edge in pixels or a factor, e.g. 2x."},
      }, "required": ["image"]}},
+    {"name": "media_job_status",
+     "description": "Status of a background media job: queued, running, done, "
+                    "failed, or cancelled, plus the output path once done.",
+     "inputSchema": {"type": "object", "properties": {
+         "job_id": {"type": "string"},
+     }, "required": ["job_id"]}},
+    {"name": "list_media_jobs",
+     "description": "List background media jobs, newest first.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "cancel_media_job",
+     "description": "Cancel a queued or running background media job.",
+     "inputSchema": {"type": "object", "properties": {
+         "job_id": {"type": "string"},
+     }, "required": ["job_id"]}},
 ]
+
+# Every generator tool takes an optional async flag: submitting returns a job id
+# immediately instead of blocking, which matters for video (minutes long). Poll
+# with media_job_status.
+_ASYNC_DOC = ("Submit as a background job and return a job id immediately "
+              "instead of waiting. Poll it with media_job_status.")
+for _tool in TOOLS:
+    if _tool["name"].startswith(("generate_", "edit_", "upscale_")):
+        _tool["inputSchema"]["properties"]["async"] = {
+            "type": "boolean", "description": _ASYNC_DOC}
 
 _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
                 ("width", "--width"), ("height", "--height"), ("aspect", "--aspect"),
@@ -84,6 +112,13 @@ _VOICE_FLAGS = [("ref", "--ref"), ("lang", "--lang"), ("speed", "--speed"),
 _EDIT_FLAGS = [("image", "--image"), ("seed", "--seed"), ("quantize", "--quantize")]
 
 
+def _exec(cmd, failure):
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
+    if proc.returncode != 0:
+        return "error: " + (proc.stderr.strip() or failure)
+    return proc.stdout.strip() or "error: no output"
+
+
 def _run(subcmd, positional, flags, args):
     value = args.get(positional)
     if not value:
@@ -93,10 +128,31 @@ def _run(subcmd, positional, flags, args):
         val = args.get(key)
         if val is not None:
             cmd += [flag, str(val)]
+    if args.get("async"):
+        cmd.append("--async")
     proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
     if proc.returncode != 0:
         return "error: " + (proc.stderr.strip() or "generation failed")
     return proc.stdout.strip() or "error: no output path returned"
+
+
+def run_job_status(args):
+    job_id = args.get("job_id")
+    if not job_id:
+        return "error: job_id is required"
+    return _exec([sys.executable, MEDIA, "job", str(job_id), "--json"],
+                 "unknown job")
+
+
+def run_list_jobs(_args):
+    return _exec([sys.executable, MEDIA, "jobs", "--json"], "could not list jobs")
+
+
+def run_cancel_job(args):
+    job_id = args.get("job_id")
+    if not job_id:
+        return "error: job_id is required"
+    return _exec([sys.executable, MEDIA, "cancel", str(job_id)], "unknown job")
 
 
 def run_generate(args):
@@ -127,6 +183,8 @@ def run_upscale(args):
     scale = args.get("scale")
     if scale is not None:
         cmd += ["--scale", str(scale)]
+    if args.get("async"):
+        cmd.append("--async")
     proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
     if proc.returncode != 0:
         return "error: " + (proc.stderr.strip() or "upscale failed")
@@ -151,7 +209,10 @@ def handle(msg):
                   "generate_video": run_generate_video,
                   "generate_speech": run_generate_speech,
                   "edit_image": run_edit,
-                  "upscale_image": run_upscale}.get(tool)
+                  "upscale_image": run_upscale,
+                  "media_job_status": run_job_status,
+                  "list_media_jobs": run_list_jobs,
+                  "cancel_media_job": run_cancel_job}.get(tool)
         if runner:
             text = runner(params.get("arguments", {}))
             return _ok(mid, {"content": [{"type": "text", "text": text}]})
