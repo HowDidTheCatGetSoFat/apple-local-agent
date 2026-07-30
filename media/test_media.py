@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 media = importlib.import_module("generate")
 media_mcp = importlib.import_module("media_mcp")
 jobs = importlib.import_module("jobs")
+quality = importlib.import_module("quality")
 
 
 def _tiny_png(path):
@@ -292,6 +293,148 @@ class TestMCP(unittest.TestCase):
 
     def test_upscale_requires_image(self):
         self.assertTrue(media_mcp.run_upscale({}).startswith("error"))
+
+
+def _write_wav(path, frames, rate=24000, width=2, channels=1):
+    import array, wave
+    codes = {1: "b", 2: "h", 4: "i"}
+    with wave.open(path, "wb") as w:
+        w.setnchannels(channels); w.setsampwidth(width); w.setframerate(rate)
+        if width == 1:  # 8-bit WAV is unsigned, centered on 128
+            w.writeframes(bytes((f + 128) & 0xFF for f in frames))
+        else:
+            w.writeframes(array.array(codes[width], frames).tobytes())
+
+
+class TestQualityAudio(unittest.TestCase):
+    # Thresholds are deliberately far from real speech (measured peak ~0.95,
+    # rms ~0.13), so these fixtures are unambiguous garbage.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.rate = 24000
+
+    def _path(self, name):
+        return os.path.join(self.tmp, name)
+
+    def _tone(self, seconds, amp=9000, freq=180, offset=0):
+        import math
+        n = int(self.rate * seconds)
+        return [int(amp * math.sin(2 * math.pi * freq * t / self.rate)) + offset
+                for t in range(n)]
+
+    def test_pure_silence_is_rejected(self):
+        p = self._path("s.wav"); _write_wav(p, [0] * self.rate * 2)
+        self.assertTrue(any("silent" in x for x in quality.check_wav(p)))
+
+    def test_click_then_silence_is_rejected(self):
+        # Passes a peak check but is empty to a listener.
+        p = self._path("c.wav"); _write_wav(p, [20000] * 50 + [0] * (self.rate * 3))
+        self.assertTrue(any("silent for" in x for x in quality.check_wav(p)))
+
+    def test_dc_offset_is_rejected(self):
+        p = self._path("dc.wav"); _write_wav(p, self._tone(2, amp=8000, offset=12000))
+        self.assertTrue(any("DC offset" in x for x in quality.check_wav(p)))
+
+    def test_speech_like_signal_passes(self):
+        # 0.4s of tone, 0.3s of silence, repeated: 43 percent pauses.
+        seg = self._tone(0.4)
+        gap = [0] * int(self.rate * 0.3)
+        p = self._path("ok.wav"); _write_wav(p, (seg + gap) * 4)
+        self.assertEqual(quality.check_wav(p), [])
+
+    def test_eight_and_twentyfour_bit_widths(self):
+        for width in (1, 2, 4):
+            p = self._path("w%d.wav" % width)
+            amp = {1: 60, 2: 9000, 4: 500000000}[width]
+            _write_wav(p, self._tone(0.5, amp=amp), width=width)
+            self.assertEqual(quality.check_wav(p), [], "width %d" % width)
+
+    def test_unreadable_file_reports_a_problem(self):
+        p = self._path("bad.wav")
+        with open(p, "wb") as f:
+            f.write(b"RIFF____WAVEnonsense")
+        self.assertTrue(quality.check_wav(p))
+
+    def test_report_joins_problems_or_returns_none(self):
+        self.assertIsNone(quality.report("audio", "/x.wav", []))
+        self.assertIn("/x.wav", quality.report("audio", "/x.wav", ["is silent"]))
+
+
+class TestQualityImageVideo(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _png(self, name, width, height):
+        path = os.path.join(self.tmp, name)
+        _tiny_png(path)
+        with open(path, "r+b") as f:
+            f.seek(16)
+            f.write(struct.pack(">II", width, height))
+        return path
+
+    def test_zero_dimensions_rejected(self):
+        self.assertTrue(any("zero dimensions" in x
+                            for x in quality.check_png(self._png("z.png", 0, 0))))
+
+    def test_small_image_is_accepted(self):
+        # No arbitrary minimum: validate_output's byte floor already catches
+        # truncation, and the repo's own fixtures are 1x1.
+        self.assertEqual(quality.check_png(self._png("t.png", 1, 1)), [])
+
+    def test_normal_image_passes(self):
+        self.assertEqual(quality.check_png(self._png("n.png", 512, 512)), [])
+
+    def test_headerless_file_rejected(self):
+        p = os.path.join(self.tmp, "x.png")
+        with open(p, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+        self.assertTrue(quality.check_png(p))
+
+    def test_video_without_ffprobe_makes_no_claim(self):
+        # No ffprobe means nothing to inspect; guessing would be worse.
+        saved = os.environ.get("PATH", "")
+        os.environ["PATH"] = "/nonexistent"
+        try:
+            self.assertEqual(quality.check_video(os.path.join(self.tmp, "any.mp4")), [])
+        finally:
+            os.environ["PATH"] = saved
+
+
+class TestQualityGate(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.png = os.path.join(self.tmp, "a.png")
+        _tiny_png(self.png)
+
+    def tearDown(self):
+        os.environ.pop("FXLLA_MEDIA_SKIP_QUALITY", None)
+
+    def test_skip_env_disables_the_gate(self):
+        for value in ("1", "true", "yes"):
+            os.environ["FXLLA_MEDIA_SKIP_QUALITY"] = value
+            self.assertTrue(quality.skip_quality_checks(), value)
+        for value in ("", "0", "false"):
+            os.environ["FXLLA_MEDIA_SKIP_QUALITY"] = value
+            self.assertFalse(quality.skip_quality_checks(), value)
+
+    def test_gate_raises_with_the_escape_hatch_in_the_message(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            media._check_quality("image", self.png, lambda p: ["is blank"])
+        self.assertIn("FXLLA_MEDIA_SKIP_QUALITY", str(ctx.exception))
+
+    def test_gate_is_silent_when_there_are_no_problems(self):
+        media._check_quality("image", self.png, lambda p: [])
+
+    def test_a_broken_checker_never_fails_the_render(self):
+        def boom(_path):
+            raise ValueError("checker bug")
+        media._check_quality("image", self.png, boom)  # must not raise
+
+    def test_skipped_gate_does_not_call_the_checker(self):
+        os.environ["FXLLA_MEDIA_SKIP_QUALITY"] = "1"
+        def boom(_path):
+            raise AssertionError("checker must not run when skipped")
+        media._check_quality("image", self.png, boom)
 
 
 class TestJobs(unittest.TestCase):
