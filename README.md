@@ -306,6 +306,25 @@ resident models so a heavy render does not exceed the GPU limit (opt out with
 fxlla media wire-opencode
 ```
 
+### Background jobs
+
+Video can run for minutes. Add `--async` to any generator to get a job id back
+immediately and poll it instead of blocking:
+
+```sh
+fxlla media video "a sailboat at sunset" --async   # prints a job id
+fxlla media jobs                                  # all jobs, newest first
+fxlla media job <id>                              # one job (add --json)
+fxlla media cancel <id>                           # stop a queued or running job
+fxlla media jobs --prune                          # drop finished records
+```
+
+Jobs run **one at a time**: renders share unified memory with the gateway's
+models, so a second submission waits (`queued`) until the current one finishes.
+State lives next to the outputs, in `<media out>/jobs`. Over MCP, pass
+`async: true` to any generator and poll with `media_job_status`, plus
+`list_media_jobs` and `cancel_media_job`.
+
 ## Tools and skills
 
 Wire every local tool into your client at once, and install the skills that tell

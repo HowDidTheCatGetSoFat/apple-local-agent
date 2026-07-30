@@ -2,6 +2,44 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-30: Background media jobs
+
+Video renders run for minutes, which is far too long for an MCP tool call to
+block on. `--async` on any generator now returns a job id immediately and the
+caller polls (`fxlla media jobs|job|cancel`, or `media_job_status` /
+`list_media_jobs` / `cancel_media_job` over MCP).
+
+- No daemon and no dependencies (`media/jobs.py`): submitting writes a JSON
+  record under `<media out>/jobs` and spawns a detached worker with
+  `start_new_session=True`. The worker owns the record for the rest of the job.
+- Jobs are serialized with an exclusive `flock`: renders share unified memory
+  with the gateway's resident models (which `free_gpu` already unloads), so two
+  concurrent renders would thrash or OOM the machine. A job waiting on the lock
+  reports `queued`, which is a normal state, not a failure.
+- The worker re-invokes `generate.py` with the original argv minus `--async`
+  (captured from `sys.argv`), so a background job runs exactly the same code path
+  as the direct call - no duplicated flag plumbing, nothing to drift.
+- `start_new_session` also makes the worker a process-group leader, so `cancel`
+  can `killpg` the worker *and* the generator it spawned. Killing only the worker
+  would have left the real renderer running.
+- Stale jobs: a worker killed with -9 or lost to a reboot would sit in `running`
+  forever, so reads reap any active job whose pid is gone and mark it failed.
+  Records are written atomically (tmp + os.replace) so a concurrent `jobs` listing
+  never sees a half-written file.
+- `--async` cannot use `dest="async"` (Python keyword); job ids from MCP are
+  regex-validated before any path join.
+- Self-review additions: `jobs --prune` (the jobs dir grew unboundedly, one JSON
+  plus one log per job forever) and `describe` showing the *last* line of a
+  captured traceback rather than the first 60 characters of it.
+- Verified end to end with real renders: two submissions serialized correctly
+  (one running, one queued), both produced real PNGs (~190 KB), cancelling the
+  queued one killed its worker without disturbing the running job, and the MCP
+  path returned a job id instantly and then polled it to completion.
+
+Also recorded a maintainer decision for the still-open CLI-on-PATH item: it
+belongs in the app UI as an explicit user action ("Install the fxlla command"),
+the VS Code / Docker Desktop pattern, not as a silent installer step.
+
 ## 2026-07-29: Code graph Phase B (multi-language via tree-sitter)
 
 Extended the code graph beyond Python. `graph/tsextract.py` parses JavaScript,

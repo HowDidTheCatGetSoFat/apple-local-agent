@@ -80,15 +80,21 @@ capped pull integration (the L part below) is still pending. Original note kept.
 - Effort: S for the doctor check, L for full pull integration. Ship the doctor
   check first; it makes the gap visible instead of a cryptic runtime failure.
 
-### CLI on PATH from the installer
+### CLI on PATH, installed from the app
 
 - What: the signed `.dmg` installs the app (drag to /Applications) but does
-  not put the `fxlla` CLI on PATH. The app should offer to symlink it (or a
-  first-run prompt should), the way Docker Desktop and VS Code do.
+  not put the `fxlla` CLI on PATH. Decided (maintainer, 2026-07-30): this is a
+  **user-triggered action in the app UI**, not something the installer does
+  silently - a menu item like "Install the fxlla command in PATH" that symlinks
+  the CLI, exactly how VS Code ("Install 'code' command") and Docker Desktop do
+  it. It should report where it linked and stay idempotent.
 - Why: today the .dmg gives a working app whose underlying CLI is not
   reachable from a terminal, which undercuts "the CLI is the source of truth".
+  Writing outside the app bundle is also the kind of change a user should
+  approve explicitly, which is why the UI asks instead of the installer acting.
 - Effort: S.
-- Acceptance: after installing from the .dmg, a new terminal runs `fxlla`.
+- Acceptance: after clicking the menu item, a new terminal runs `fxlla`;
+  clicking it twice is harmless; the app says what it linked and where.
 
 ### CI for the Swift app - DONE
 
@@ -184,9 +190,11 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
 - More media tools: `edit_image` and `upscale_image` are DONE
   (`fxlla media edit` / `upscale`). Still open: wire Wan 2.2 (mlx-video) as a
   second video backend alongside LTX (M).
-- Async media jobs (M): submit returns a job id, the caller polls for status
-  and the output path. Keeps MCP tool calls fast and lets heavy video runs
-  happen in the background. Pairs naturally with the Tier 1 coordination.
+- Async media jobs: DONE. `--async` on any generator returns a job id;
+  `fxlla media jobs|job|cancel` (and `jobs --prune`) follow it, and the MCP
+  generators take `async: true` with `media_job_status`, `list_media_jobs`, and
+  `cancel_media_job`. A detached worker per job serializes on a lock file, so
+  renders never run two at a time against the gateway's resident models.
 - Evals (L): measure quality and speed per model to choose with data instead
   of catalog notes.
 - Persist the GPU wired limit: DONE - `fxlla ram persist` installs a

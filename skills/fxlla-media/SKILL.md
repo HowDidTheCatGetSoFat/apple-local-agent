@@ -27,8 +27,15 @@ describing it.
 
 ## Notes
 
-- Generation is synchronous and can take from seconds (image) to a minute or
-  more (video). Set expectations before a long job.
+- Generation is synchronous by default and can take from seconds (image) to a
+  minute or more (video). Set expectations before a long job.
+- For video, or any render you expect to be slow, pass `async: true`: the call
+  returns a job id immediately. Poll `media_job_status` with that id (statuses:
+  queued, running, done, failed, cancelled) and report the output path once it is
+  done. `list_media_jobs` shows all of them and `cancel_media_job` stops one.
+  Do not block a long conversation on a synchronous video render.
+- Jobs run one at a time, so a submission may sit in `queued` while another
+  render finishes. That is expected, not a failure.
 - Heavy jobs are memory-hungry; fxlla frees the gateway's resident models first
   unless told to keep them. If a backend is not configured, relay the tool's
   error and point to `fxlla doctor`.

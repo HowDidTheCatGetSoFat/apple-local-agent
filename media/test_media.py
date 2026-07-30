@@ -9,6 +9,7 @@ import zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 media = importlib.import_module("generate")
 media_mcp = importlib.import_module("media_mcp")
+jobs = importlib.import_module("jobs")
 
 
 def _tiny_png(path):
@@ -243,7 +244,23 @@ class TestMCP(unittest.TestCase):
         r = media_mcp.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         self.assertEqual({t["name"] for t in r["result"]["tools"]},
                          {"generate_image", "generate_video", "generate_speech",
-                          "edit_image", "upscale_image"})
+                          "edit_image", "upscale_image", "media_job_status",
+                          "list_media_jobs", "cancel_media_job"})
+
+    def test_generators_expose_async(self):
+        tools = {t["name"]: t for t in
+                 media_mcp.handle({"jsonrpc": "2.0", "id": 10,
+                                   "method": "tools/list"})["result"]["tools"]}
+        for name in ("generate_image", "generate_video", "generate_speech",
+                     "edit_image", "upscale_image"):
+            self.assertIn("async", tools[name]["inputSchema"]["properties"], name)
+        # The job tools are not generators, so they take no async flag.
+        self.assertNotIn("async",
+                         tools["media_job_status"]["inputSchema"]["properties"])
+
+    def test_job_tools_require_id(self):
+        self.assertTrue(media_mcp.run_job_status({}).startswith("error"))
+        self.assertTrue(media_mcp.run_cancel_job({}).startswith("error"))
 
     def test_edit_and_upscale_require_image(self):
         tools = {t["name"]: t for t in
@@ -275,6 +292,102 @@ class TestMCP(unittest.TestCase):
 
     def test_upscale_requires_image(self):
         self.assertTrue(media_mcp.run_upscale({}).startswith("error"))
+
+
+class TestJobs(unittest.TestCase):
+    # Exercises the job lifecycle against a stand-in generator, so no model is
+    # loaded: jobs.run shells out to jobs.GENERATE, which the tests replace.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._saved = (jobs.JOBS_DIR, jobs.GENERATE)
+        jobs.JOBS_DIR = os.path.join(self.tmp, "jobs")
+
+    def tearDown(self):
+        jobs.JOBS_DIR, jobs.GENERATE = self._saved
+
+    def _fake_generator(self, body):
+        path = os.path.join(self.tmp, "fake_gen.py")
+        with open(path, "w") as fh:
+            fh.write(body)
+        jobs.GENERATE = path
+        return path
+
+    def _record(self, **fields):
+        rec = {"id": jobs.new_id(), "kind": "image", "status": "queued",
+               "argv": [], "summary": "", "output": None, "error": None,
+               "pid": None, "created": 1.0, "started": None, "finished": None}
+        rec.update(fields)
+        jobs._write(rec)
+        return rec
+
+    def test_valid_id_rejects_path_traversal(self):
+        # Ids arrive from MCP arguments and are joined into a path.
+        self.assertTrue(jobs.valid_id(jobs.new_id()))
+        for bad in ("../../etc/passwd", "..", "", "abc", "1785376545-XYZ", None):
+            self.assertFalse(jobs.valid_id(bad), bad)
+
+    def test_get_rejects_bad_id(self):
+        self.assertIsNone(jobs.get("../secret"))
+
+    def test_run_writes_output_on_success(self):
+        self._fake_generator("print('/tmp/out.png')\n")
+        rec = self._record()
+        jobs.run(rec["id"])
+        done = jobs._read(rec["id"])
+        self.assertEqual(done["status"], "done")
+        self.assertEqual(done["output"], "/tmp/out.png")
+        self.assertIsNotNone(done["finished"])
+
+    def test_run_records_failure(self):
+        self._fake_generator("import sys; sys.exit('boom')\n")
+        rec = self._record()
+        jobs.run(rec["id"])
+        failed = jobs._read(rec["id"])
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("boom", failed["error"])
+
+    def test_run_fails_when_generator_prints_nothing(self):
+        self._fake_generator("pass\n")
+        rec = self._record()
+        jobs.run(rec["id"])
+        self.assertEqual(jobs._read(rec["id"])["status"], "failed")
+
+    def test_run_skips_a_cancelled_job(self):
+        self._fake_generator("print('/tmp/should-not-run.png')\n")
+        rec = self._record(status="cancelled")
+        jobs.run(rec["id"])
+        self.assertEqual(jobs._read(rec["id"])["status"], "cancelled")
+
+    def test_dead_worker_is_reaped(self):
+        # A pid that cannot be running any more (reaped by the OS long ago).
+        rec = self._record(status="running", pid=999999)
+        self.assertEqual(jobs.get(rec["id"])["status"], "failed")
+        self.assertIn("died", jobs._read(rec["id"])["error"])
+
+    def test_cancel_marks_cancelled(self):
+        rec = self._record(status="queued")
+        self.assertEqual(jobs.cancel(rec["id"])["status"], "cancelled")
+
+    def test_cancel_leaves_finished_jobs_alone(self):
+        rec = self._record(status="done", output="/tmp/x.png")
+        self.assertEqual(jobs.cancel(rec["id"])["status"], "done")
+
+    def test_listing_is_newest_first(self):
+        self._record(created=1.0, kind="image")
+        self._record(created=5.0, kind="video")
+        self.assertEqual([r["kind"] for r in jobs.listing()], ["video", "image"])
+
+    def test_prune_keeps_active_jobs(self):
+        self._record(status="done", created=1.0)
+        self._record(status="failed", created=2.0)
+        active = self._record(status="running", pid=os.getpid(), created=3.0)
+        self.assertEqual(jobs.prune(), 2)
+        self.assertEqual([r["id"] for r in jobs.listing()], [active["id"]])
+
+    def test_describe_shows_last_error_line(self):
+        rec = self._record(status="failed",
+                           error="Traceback...\n  File x\nValueError: bad input")
+        self.assertIn("ValueError: bad input", jobs.describe(rec))
 
 
 class TestBuildVoiceCommand(unittest.TestCase):
