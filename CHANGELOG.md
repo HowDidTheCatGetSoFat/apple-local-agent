@@ -15,6 +15,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `<store>/graph/graph.kuzu` location on the next `fxlla graph index`.
 
 ### Added
+- The app bundles the CLI and can install it on PATH: `app/build.sh` copies the
+  CLI tree into `fxlla.app/Contents/Resources/cli` (never `config/config.env`,
+  which holds tokens), so a `.dmg` install is self-contained. A new **Install the
+  fxlla command** action in the panel symlinks it into `~/.local/bin` - an
+  explicit user action, idempotent, and it refuses to replace a file or a link it
+  did not create (for example a git checkout you develop against).
 - Background media jobs: `--async` on any `fxlla media` generator returns a job
   id immediately instead of blocking, with `fxlla media jobs`, `job <id>`,
   `cancel <id>`, and `jobs --prune` to follow and clean up. Jobs are serialized

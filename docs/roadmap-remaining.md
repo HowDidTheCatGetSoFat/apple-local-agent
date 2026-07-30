@@ -80,7 +80,15 @@ capped pull integration (the L part below) is still pending. Original note kept.
 - Effort: S for the doctor check, L for full pull integration. Ship the doctor
   check first; it makes the gap visible instead of a cryptic runtime failure.
 
-### CLI on PATH, installed from the app
+### CLI on PATH, installed from the app - DONE
+
+Delivered: `app/build.sh` bundles the CLI tree into
+`fxlla.app/Contents/Resources/cli` (config is copied file by file so the
+token-bearing `config/config.env` can never ship), and the panel gained an
+**Install the fxlla command** action that symlinks it into `~/.local/bin`. It is
+idempotent and refuses to replace a real file or a symlink pointing elsewhere
+(such as a git checkout), reporting instead of overwriting. A CI step asserts the
+bundle has the CLI, runs it, and has no `config.env`. Original note kept below.
 
 - What: the signed `.dmg` installs the app (drag to /Applications) but does
   not put the `fxlla` CLI on PATH. Decided (maintainer, 2026-07-30): this is a
@@ -202,12 +210,16 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
 
 ## Suggested order
 
-The Tier 1 gap and most of Tier 2 are done (checkboxes, doctor media checks,
-media in the app, Swift CI). What remains, in order:
+Tier 1 and all of Tier 2 are done, and most of Tier 3 with them: RAG vector
+index, the KuzuDB code graph (both phases), async media jobs, and the bundled CLI
+with its install-on-PATH action. What remains, in order:
 
-1. Model weight sources (Civitai and HF keys, optional native downloaders) -
-   unblocks image LoRAs/checkpoints and gated repos. (Unified MCP install and
-   the tool-usage skills are done.)
-3. CLI on PATH from the installer, then full media-weight pull integration.
-4. Tier 3 backlog as demand appears; async media jobs first if video usage
-   grows, since it builds on the memory coordination already in place.
+1. Full media-weight pull integration, so a fresh machine can render without
+   manual Hugging Face setup (the `doctor` check that makes the gap visible is
+   already in place). This is the last real reproducibility gap.
+2. RAG polish: optional MLX embeddings and a persistent warm embedding server,
+   so `kb search` stops paying llama-server startup per query.
+3. Wan 2.2 as a second video backend - blocked on the correct invocation for
+   `mlx_video.wan_2.generate`, which needs the maintainer's venv.
+4. Evals, as demand appears: measure quality and speed per model to choose with
+   data instead of catalog notes.

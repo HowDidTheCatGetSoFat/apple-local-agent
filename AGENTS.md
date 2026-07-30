@@ -8,7 +8,11 @@ this before opening a pull request.
 - All code, comments, identifiers, commit messages, and documentation are in
   professional English. No other language in the repository.
 - The end-user application may be localized (English, Portuguese, Spanish).
-  Localization lives in resource files, never hardcoded in logic.
+  Localization lives in resource files, never hardcoded in logic. Today that
+  resource layer is `app/Sources/fxllaMenuBar/L.swift`: its English keys map to
+  Portuguese and Spanish values, which are the one place non-English text and
+  accented characters are expected. English remains the base language, and no
+  other file carries translated strings.
 
 ## Shell scripts
 

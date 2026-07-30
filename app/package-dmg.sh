@@ -15,6 +15,8 @@
 #   xcrun notarytool store-credentials <profile> \
 #       --key AuthKey_<KeyID>.p8 --key-id <KeyID> --issuer <IssuerID>
 # Credentials live only in your keychain and are never read from the repo.
+# Re-exec under bash if started by another shell (for example: zsh app/build.sh).
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 cd "$(dirname "$0")"
 # shellcheck source=app/sign-lib.sh
