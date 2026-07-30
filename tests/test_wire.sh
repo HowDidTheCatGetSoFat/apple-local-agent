@@ -5,6 +5,8 @@
 # subprocess) under a sqlite-vec-capable python.
 #
 # Run: bash tests/test_wire.sh
+# Re-exec under bash if started by another shell (BASH_SOURCE below is bash-only).
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
