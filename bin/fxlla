@@ -167,7 +167,6 @@ _pull_media() {
   size="$(_media_field "$alias" 3 || true)"
   kind="$(_media_field "$alias" 4 || true)"
   include="$(_media_field "$alias" 5 || true)"
-  need uv
   local home; home="$(media_hf_home)"
   info "Media:    $alias ($kind), about $size"
   info "Cache:    ${home:-the Hugging Face default (~/.cache/huggingface)}"
@@ -186,6 +185,8 @@ _pull_media() {
       ok "already cached: $repo"
       continue
     fi
+    # Only a real transfer needs uv, so a fully cached alias works without it.
+    need uv
     info "Downloading $repo ..."
     HF_HOME="${home:-$HOME/.cache/huggingface}" \
       uvx --from "huggingface_hub[hf_xet]" hf download "$repo" \
