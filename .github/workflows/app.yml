@@ -52,5 +52,9 @@ jobs:
           trap 'rm -rf "$tmp"' EXIT
           ln -s "$PWD/$cli/bin/fxlla" "$tmp/fxlla"
           "$tmp/fxlla" help >/dev/null || { echo "symlinked bundled CLI does not run" >&2; exit 1; }
-          "$tmp/fxlla" media models >/dev/null || { echo "symlinked CLI cannot reach its modules" >&2; exit 1; }
+          # media models reads the bundled media/generate.py, which needs a store
+          # directory to exist; the runner has none, so point it at the scratch dir.
+          mkdir -p "$tmp/store"
+          FXLLA_STORE="$tmp/store" "$tmp/fxlla" media models >/dev/null \
+            || { echo "symlinked CLI cannot reach its modules" >&2; exit 1; }
           echo "bundled CLI verified"
