@@ -247,6 +247,21 @@ Expose it to your tools as an MCP server so any model can call `rag_search`:
 fxlla kb wire-opencode              # register the RAG MCP in opencode
 ```
 
+A search spawns the embedding server, uses it, and stops it. That costs about
+0.2s. Leave a server running on `FXLLA_EMBED_PORT` and `fxlla kb` reuses it
+instead, which brings a query to roughly 0.09s and is worth doing if an agent
+retrieves often:
+
+```sh
+llama-server --embeddings -m <embed model>.gguf --host 127.0.0.1 \
+  --port 8090 --pooling mean &
+```
+
+fxlla never stops a server it did not start, so use `fxlla kb stop` when you want
+it gone. The server must be for the same embedding model as the base: one for a
+different model returns different dimensions, and `fxlla kb` refuses rather than
+score against them.
+
 Search uses a brute-force cosine scan by default, which is fine up to a few
 thousand chunks. For larger knowledge bases, opt into a vector index:
 

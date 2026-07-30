@@ -219,8 +219,11 @@ Tier 1 and all of Tier 2 are done, and most of Tier 3 with them: RAG vector
 index, the KuzuDB code graph (both phases), async media jobs, and the bundled CLI
 with its install-on-PATH action. What remains, in order:
 
-1. RAG polish: optional MLX embeddings and a persistent warm embedding server,
-   so `kb search` stops paying llama-server startup per query.
+1. RAG polish: optional MLX embeddings. The "persistent warm embedding server"
+   half turned out to be the wrong fix - measuring showed llama-server starts in
+   0.17s and the real cost was a one-second poll interval in fxlla's own health
+   check. That is fixed, and reusing an already-running server covers the warm
+   case without a daemon to supervise.
 2. Wan 2.2 as a second video backend - blocked on the correct invocation for
    `mlx_video.wan_2.generate`, which needs the maintainer's venv.
 3. Evals, as demand appears: measure quality and speed per model to choose with

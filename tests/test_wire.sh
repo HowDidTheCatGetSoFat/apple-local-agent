@@ -56,5 +56,19 @@ case "$cmd_on" in
   *) fail "command targets rag_mcp.py (got $cmd_on)" ;;
 esac
 
+# --- kb stop is reachable ------------------------------------------------
+# Reuse means a server outlives the command that started it, so there has to be a
+# way to stop it. This also catches the subcommand not being wired at all: an
+# unreachable branch falls through to core.py, which rejects the argument.
+out="$(FXLLA_STORE=/tmp XDG_CONFIG_HOME="$CFG" bash "$FXLLA" kb stop 2>&1 || true)"
+if grep -qi "no embedding server" <<< "$out"; then pass "kb stop reports an idle port"
+else fail "kb stop reports an idle port (got: $(tail -1 <<< "$out"))"; fi
+if ! grep -qi "invalid choice" <<< "$out"; then pass "kb stop is wired, not passed to core.py"
+else fail "kb stop is wired, not passed to core.py"; fi
+
+out="$(FXLLA_STORE=/tmp XDG_CONFIG_HOME="$CFG" bash "$FXLLA" __complete kb)"
+if grep -qx stop <<< "$out"; then pass "completions list 'stop'"
+else fail "completions list 'stop'"; fi
+
 if [ "$fails" -ne 0 ]; then printf '\n%d test(s) failed\n' "$fails"; exit 1; fi
 printf '\nall wire tests passed\n'

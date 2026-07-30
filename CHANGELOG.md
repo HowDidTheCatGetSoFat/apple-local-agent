@@ -6,6 +6,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Fixed
+- `fxlla kb search` was five times slower than it needed to be. The embedding
+  server is ready in about 0.17s, but the health check polled once a second, so
+  the first probe missed it and every query slept a full second waiting for a
+  server that was already up. Polling is now 20 ms and a cold query costs about
+  0.2s instead of 1.1s. Reusing an already-running server, and leaving it alone
+  afterwards, already worked before this change - it just also spawned a doomed
+  process that could not bind the port; that is now skipped, and a warm query
+  still costs about 0.09s.
+- Concurrent `fxlla kb` commands no longer fail. Starting the server is now
+  serialized with a lock file, so ten simultaneous searches start one server
+  instead of ten and none of them fail: previously up to four in ten died with a
+  raw traceback after losing the race to bind the port. A search whose borrowed
+  server is stopped mid-request retries once instead of aborting, which matters
+  most to `kb add`, where it used to leave a partial index behind.
+- `fxlla kb` refuses to mix embedding widths. A server for a different model
+  returns a different number of dimensions, and the cosine comparison silently
+  truncated to the shorter vector: searches returned meaningless scores and an add
+  wrote unrankable rows into the base for good. Both now stop with a message
+  naming the two widths, before anything is written.
+- Errors from the embedding port are messages rather than tracebacks. A chat
+  server on `FXLLA_EMBED_PORT` produced a two-kilobyte Python traceback, which the
+  MCP layer forwarded verbatim as a tool result.
+- New `fxlla kb stop` stops the embedding server, since a reused one outlives the
+  command that started it and previously had to be found by pid.
 - `fxlla on <alias>` registered the wrong model in opencode. It read the id from
   the first entry of `/v1/models`, and `mlx_lm` now enumerates the whole Hugging
   Face cache there, so whichever unrelated model sorted first was registered as

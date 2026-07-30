@@ -17,12 +17,14 @@ Usage (normally driven via `fxlla kb`):
   core.py rm <kb>               delete a knowledge base
 """
 import argparse
+import fcntl
 import glob
 import json
 import math
 import os
 import re
 import sqlite3
+import http.client
 import struct
 import subprocess
 import sys
@@ -45,26 +47,80 @@ def _embed_model():
     return ggufs[0] if ggufs else None
 
 
-# Runs a local llama.cpp embedding server for the lifetime of the context.
+# The poll interval is what decides the cost of a query: the server answers in
+# well under a second, so at a one-second interval every search slept through a
+# server that was already up. The deadline is generous instead, because a larger
+# model on an external disk can genuinely take a while to load.
+_READY_TIMEOUT = 180.0
+_POLL_INTERVAL = 0.02
+# A loaded machine can be slow to answer /health. Too short a timeout reports a
+# working server as absent, which then fails the query outright.
+_HEALTH_TIMEOUT = 5.0
+
+
+def _server_healthy(timeout=_HEALTH_TIMEOUT):
+    try:
+        urllib.request.urlopen(
+            f"http://127.0.0.1:{EMBED_PORT}/health", timeout=timeout).read()
+        return True
+    except Exception:
+        return False
+
+
+# Runs a local llama.cpp embedding server for the lifetime of the context, or
+# reuses one that is already listening.
 class Embedder:
     def __enter__(self):
-        model = _embed_model()
-        if not model:
-            sys.exit("embedding model not found. Run: fxlla pull embed --quant Q5_K_M")
-        self.proc = subprocess.Popen(
-            ["llama-server", "--embeddings", "-m", model, "--host", "127.0.0.1",
-             "--port", str(EMBED_PORT), "--pooling", "mean"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for _ in range(120):
-            try:
-                urllib.request.urlopen(f"http://127.0.0.1:{EMBED_PORT}/health", timeout=2).read()
+        # A server someone else started is not ours to stop. Reusing it is also
+        # what makes repeated queries cost milliseconds: leave one running and
+        # searches skip startup entirely.
+        self.proc = None
+        self._lock = None
+        if _server_healthy():
+            return self
+        # Serialize starting one. Without this, concurrent searches each spawn a
+        # server, all but one fail to bind, and the losers have to guess whether
+        # the port is held by a peer or by something unrelated. Holding the lock
+        # makes that unambiguous: nobody else is starting one, so if ours dies the
+        # failure is real.
+        os.makedirs(KB_DIR, exist_ok=True)
+        self._lock = open(os.path.join(KB_DIR, "embed.lock"), "w")
+        try:
+            fcntl.flock(self._lock, fcntl.LOCK_EX)
+            if _server_healthy():  # started while we waited for the lock
                 return self
-            except Exception:
-                time.sleep(1)
-        self.__exit__(None, None, None)
-        sys.exit("embedding server did not become ready")
+            model = _embed_model()
+            if not model:
+                sys.exit("embedding model not found. Run: fxlla pull embed --quant Q5_K_M")
+            self.proc = subprocess.Popen(
+                ["llama-server", "--embeddings", "-m", model, "--host", "127.0.0.1",
+                 "--port", str(EMBED_PORT), "--pooling", "mean"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            deadline = time.time() + _READY_TIMEOUT
+            while time.time() < deadline:
+                if _server_healthy():
+                    return self
+                if self.proc.poll() is not None:
+                    self.proc = None
+                    sys.exit("the embedding server exited on start. Port %d may be "
+                             "held by something else, or the model may be unreadable."
+                             % EMBED_PORT)
+                time.sleep(_POLL_INTERVAL)
+            self.__exit__(None, None, None)
+            sys.exit("embedding server did not become ready")
+        finally:
+            self._release_lock()
 
-    def embed(self, texts):
+    def _release_lock(self):
+        if self._lock is not None:
+            try:
+                fcntl.flock(self._lock, fcntl.LOCK_UN)
+                self._lock.close()
+            except Exception:
+                pass
+            self._lock = None
+
+    def _post(self, texts):
         body = json.dumps({"input": texts}).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings", data=body,
@@ -72,10 +128,33 @@ class Embedder:
         data = json.load(urllib.request.urlopen(req, timeout=300))
         return [d["embedding"] for d in data["data"]]
 
+    def embed(self, texts):
+        try:
+            return self._post(texts)
+        # HTTPError subclasses OSError, so it has to be caught first or the retry
+        # below swallows it - and retrying a rejected request is pointless anyway.
+        except urllib.error.HTTPError as exc:
+            sys.exit("the server on port %d rejected an embedding request (%s). Is "
+                     "it an embedding server, started with --embeddings?"
+                     % (EMBED_PORT, exc))
+        except (http.client.RemoteDisconnected, ConnectionError, OSError) as first:
+            # A borrowed server can be stopped by its owner while our request is
+            # in flight. Re-acquire - starting one if needed - and try once more,
+            # rather than dying with a traceback halfway through an index.
+            self.__enter__()
+            try:
+                return self._post(texts)
+            except Exception:
+                sys.exit("the embedding server on port %d stopped responding (%s)"
+                         % (EMBED_PORT, first))
+
     def __exit__(self, *_a):
+        self._release_lock()
+        if self.proc is None:
+            return  # someone else's server: leave it running
         try:
             self.proc.terminate()
-            self.proc.wait(timeout=10)
+            self.proc.wait(timeout=3)
         except Exception:
             try:
                 self.proc.kill()
@@ -92,6 +171,27 @@ def _db():
     )
     con.execute("CREATE INDEX IF NOT EXISTS chunks_kb ON chunks(kb)")
     return con
+
+
+# Vector width already stored for a knowledge base, or None when it is empty.
+def _kb_dim(con, kb):
+    row = con.execute(
+        "SELECT length(emb) FROM chunks WHERE kb=? LIMIT 1", (kb,)).fetchone()
+    return row[0] // 4 if row else None
+
+
+# Embeddings from a different model are not comparable with the stored ones, and
+# _cosine silently zips to the shorter vector, so a mismatch does not fail - it
+# quietly returns nonsense and, on add, mixes widths into one base permanently.
+# The reachable cause is a server on EMBED_PORT belonging to another model.
+def _require_dim(con, kb, vector):
+    stored = _kb_dim(con, kb)
+    if stored is not None and len(vector) != stored:
+        sys.exit(
+            "the embedding server returned %d dimensions but '%s' holds %d. That "
+            "server is a different model than the one this base was built with. "
+            "Point FXLLA_EMBED_PORT at the right server, or rebuild the base."
+            % (len(vector), kb, stored))
 
 
 def _valid_kb(name):
@@ -185,6 +285,7 @@ def cmd_add(args):
                 continue
             # embed first: on failure the existing chunks are left intact
             vecs = emb.embed(chunks)
+            _require_dim(con, args.name, vecs[0])
             con.execute("DELETE FROM chunks WHERE kb=? AND source=?", (args.name, f))
             con.executemany(
                 "INSERT INTO chunks VALUES (?,?,?,?,?)",
@@ -294,6 +395,7 @@ def cmd_search(args):
         sys.exit(f"knowledge base '{args.name}' is empty")
     with Embedder() as emb:
         qv = emb.embed([args.query])[0]
+    _require_dim(con, args.name, qv)
     vec = _load_vec(con)
     if vec is not None:
         top = _search_indexed(con, vec, args.name, qv, args.k)
