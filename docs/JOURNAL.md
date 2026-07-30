@@ -2,6 +2,52 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-30: MLX embeddings measured against llama.cpp, and declined
+
+The backlog carried "optional MLX embeddings" as RAG polish. MLX is fxlla's default
+engine for chat because it is the fast path on Apple Silicon, so the obvious
+question is why it would not also be the path for embeddings. Measured rather than
+argued, same model both engines (bge-small-en-v1.5, 384 dims, real chunks from this
+repo through `chunk_text`):
+
+| | MLX | llama.cpp |
+|---|---|---|
+| load the model | 7.63s | 0.35s |
+| one query | 0.888s | 0.048s |
+| batch of 16 | 83.8/s | 89.8/s |
+| batch of 64 | 129.6/s | 104.1/s |
+| batch of 256 | 167.9/s | 92.9/s |
+
+So MLX genuinely wins on bulk throughput, about 1.8x at a batch of 256, and loses
+badly on startup (22x) and single-query latency (18x). That settles it against MLX
+here, because the shape of the work is the opposite of what MLX is good at: `fxlla
+kb search` starts a process, embeds one query, and exits. Adopting MLX would make
+the common path go from 0.23s to over 7.6s in order to make bulk indexing 1.8x
+faster - and indexing this whole repo already takes 2.7s, so the prize is about a
+second, once.
+
+The only way to collect that 1.8x is to keep an MLX process alive across queries to
+amortise the 7.63s load, which is the persistent embedding daemon already declined
+on measurement earlier the same day.
+
+Worth recording that an earlier version of this note claimed MLX offered "nothing"
+and that its models were all available in GGUF anyway. The first half was wrong -
+1.8x is not nothing - and the conclusion survived for a different reason than the
+one first given. The second half checked out: EmbeddingGemma and BGE-M3 are both
+published as GGUF, by more publishers than MLX has, since llama.cpp supports
+embeddings natively and ggml-org keeps up.
+
+Maturity also argues against it: `mlx-embeddings` is at 0.1.0, and
+`mlx-community/embeddinggemma-300m-4bit` - the strongest small embedding model of
+2025 - raises `TypeError: Model.__call__() got an unexpected keyword argument
+'input_ids'` even though its architecture (`gemma3_text`) is listed as supported.
+
+What the item was really reaching for is model choice, and that is a separate and
+real gap: `_embed_model()` globs `<store>/models/embed/*.gguf` and takes the first
+match, and the catalog holds exactly one `embed` alias, pinned to nomic-embed-text
+v1.5 from February 2024. Choosing a newer model today means deleting files by hand.
+That is fixable without a second engine.
+
 ## 2026-07-30: Media weight catalog and pre-fetch
 
 Closed the media half of the reproducibility gap. `config/media.conf` maps each

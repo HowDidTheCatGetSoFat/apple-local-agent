@@ -226,17 +226,26 @@ with its install-on-PATH action. What remains, in order:
 1. Evals: measure quality and speed per model, so a choice rests on data rather
    than the catalog's prose. The largest remaining item and the one with the most
    value - today there is no way to say a swap made anything better.
-2. Optional MLX embeddings - NOT worth doing for speed, on measurement. A real
-   `fxlla kb add` indexes 367 chunks in 2.7s (135 chunks/s), so a whole codebase is
-   tens of seconds once, and a query embedding costs 0.007s. An MLX path would add
-   a second implementation and a dependency to optimise something that is not a
-   bottleneck. The one honest reason left is model availability, not performance:
-   revisit only if a clearly better embedding model ships as MLX/safetensors and
-   never as GGUF.
-   (The "persistent warm embedding server" half of this item was also the wrong
-   fix: llama-server starts in 0.17s and the real cost was a one-second poll
-   interval in fxlla's own health check, now fixed.)
-3. Wan 2.2 as a second video backend - DECLINED (maintainer, 2026-07-30). LTX-2.3
+2. Choosable embedding model. `_embed_model()` globs
+   `<store>/models/embed/*.gguf` and takes the first match, and the catalog holds a
+   single `embed` alias pinned to nomic-embed-text v1.5 from February 2024. Trying a
+   newer model means deleting files by hand. Wanted: several embedding models in the
+   catalog, selected by config, plus a path for the re-index a dimension change
+   forces (the guard in `rag/core.py` refuses to mix widths, which is correct but
+   leaves the user to work out what to do). All GGUF, no new engine.
+3. Optional MLX embeddings - DECLINED on measurement (2026-07-30, full numbers in
+   docs/JOURNAL.md). Same model both engines: MLX is about 1.8x faster at a batch of
+   256 but 22x slower to load (7.63s vs 0.35s) and 18x slower for a single query.
+   `fxlla kb search` starts a process, embeds one query, and exits, so MLX would
+   make the common path 30x slower to make bulk indexing 1.8x faster - on an index
+   that already finishes in 2.7s. Collecting that 1.8x needs a resident process,
+   which is the daemon declined separately. `mlx-embeddings` is also at 0.1.0 and
+   crashes on EmbeddingGemma. Revisit only if fxlla ever grows a long-lived
+   embedding service for another reason.
+   (The "persistent warm embedding server" half of the original item was likewise
+   the wrong fix: llama-server starts in 0.17s and the real cost was a one-second
+   poll interval in fxlla's own health check, now fixed.)
+4. Wan 2.2 as a second video backend - DECLINED (maintainer, 2026-07-30). LTX-2.3
    covers video, and a second backend is not worth the surface. For the record the
    invocation was never actually blocked: `mlx_video.wan_2.generate` is the console
    script name, and the module is `mlx_video.models.wan_2.generate`, which imports
