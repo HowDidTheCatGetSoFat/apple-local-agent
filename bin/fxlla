@@ -47,6 +47,8 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla media voice "<text>"    Synthesize speech locally (mlx-audio)
   fxlla media edit "<prompt>" --image p  Edit an image locally (mflux-cv qwen-edit)
   fxlla media upscale --image p          Upscale an image locally (mflux-cv seedvr2)
+  fxlla media weights         Media weight catalog and what is cached
+  fxlla media jobs            Background media jobs (also job <id>, cancel <id>)
   fxlla wire-opencode [--all] Register the local provider (--all: + MCP + skills)
   fxlla skills install        Install the tool-usage skills (opencode + Claude Code)
   fxlla rm <alias>            Delete a downloaded model
@@ -152,10 +154,73 @@ _pull_civitai() {
   ok "Downloaded to $dir"
 }
 
+# Pre-fetch the weights a media alias needs (config/media.conf) into the media
+# Hugging Face cache, so a render does not stop to download mid-job. Media weights
+# go to the HF cache, not FXLLA_STORE: the toolchains resolve them by repo id via
+# huggingface_hub, so the cache layout is what matters. That means the Hugging Face
+# CLI does the transfer and the bandwidth cap does not apply here.
+_pull_media() {
+  local alias="${1#media:}"
+  local repos size kind include
+  repos="$(_media_field "$alias" 2 || true)"
+  [ -z "$repos" ] && die "unknown media weight '$alias'. See: fxlla media weights"
+  size="$(_media_field "$alias" 3 || true)"
+  kind="$(_media_field "$alias" 4 || true)"
+  include="$(_media_field "$alias" 5 || true)"
+  need uv
+  local home; home="$(media_hf_home)"
+  info "Media:    $alias ($kind), about $size"
+  info "Cache:    ${home:-the Hugging Face default (~/.cache/huggingface)}"
+  info "Transfer: Hugging Face CLI (no bandwidth cap)"
+  local repo inc=() tok=() pat
+  [ -n "${HF_TOKEN:-}" ] && tok=(--token "$HF_TOKEN")
+  if [ -n "$include" ] && [ "$include" != "-" ]; then
+    # comma separated globs, so only the needed files are fetched
+    local IFS_SAVE="$IFS"; IFS=','
+    for pat in $include; do inc+=(--include "$pat"); done
+    IFS="$IFS_SAVE"
+  fi
+  IFS=',' read -r -a _repolist <<< "$repos"
+  for repo in "${_repolist[@]}"; do
+    if media_repo_cached "$repo"; then
+      ok "already cached: $repo"
+      continue
+    fi
+    info "Downloading $repo ..."
+    HF_HOME="${home:-$HOME/.cache/huggingface}" \
+      uvx --from "huggingface_hub[hf_xet]" hf download "$repo" \
+      ${inc[@]+"${inc[@]}"} ${tok[@]+"${tok[@]}"} \
+      || die "hf download failed for $repo (gated without HF_TOKEN? typo?)"
+  done
+  ok "media weights ready for '$alias'"
+}
+
+# List the media catalog with what is already cached.
+_media_weights() {
+  local line alias repos size kind repo state
+  printf '%-14s %-8s %-6s %s\n' ALIAS KIND SIZE STATE
+  while IFS= read -r line; do
+    case "$line" in \#*|'') continue;; esac
+    alias="$(echo "$line" | cut -d'|' -f1 | xargs)"
+    repos="$(echo "$line" | cut -d'|' -f2 | xargs)"
+    size="$(echo "$line" | cut -d'|' -f3 | xargs)"
+    kind="$(echo "$line" | cut -d'|' -f4 | xargs)"
+    state=cached
+    IFS=',' read -r -a _rl <<< "$repos"
+    for repo in "${_rl[@]}"; do
+      media_repo_cached "$repo" || { state=missing; break; }
+    done
+    printf '%-14s %-8s %-6s %s\n' "$alias" "$kind" "$size" "$state"
+  done < "$MEDIA_CATALOG"
+  echo
+  info "Pull one with: fxlla pull media:<alias>"
+}
+
 cmd_pull() {
-  # Civitai is a separate source (single files: LoRAs, checkpoints).
+  # Civitai and media weights are separate sources with their own layout.
   case "${1:-}" in
     civitai:*|*civitai.com/*) _pull_civitai "$1"; return ;;
+    media:*)                  _pull_media "$1"; return ;;
   esac
   need python3; require_store
   local q="" engine="" quant="" downloader="${FXLLA_DOWNLOADER:-aria2}"
@@ -171,7 +236,7 @@ cmd_pull() {
       *)              q="$1" ;;
     esac; shift
   done
-  [ -z "$q" ] && die "Usage: fxlla pull <alias|org/repo|civitai:<id>> [--gguf] [--quant Q4_K_M] [--downloader aria2|hf]"
+  [ -z "$q" ] && die "Usage: fxlla pull <alias|org/repo|civitai:<id>|media:<alias>> [--gguf] [--quant Q4_K_M] [--downloader aria2|hf]"
   case "$downloader" in aria2|hf) ;; *) die "unknown downloader: $downloader (aria2|hf)" ;; esac
   [ "$downloader" = hf ] || need aria2c
 
@@ -959,6 +1024,27 @@ cmd_doctor() {
   else
     _chk warn "media weight cache not found: $FXLLA_MEDIA_HF_HOME (is the disk mounted?)"
   fi
+  # Which catalog entries are ready, so a missing render dependency is visible
+  # here instead of surfacing as a surprise download mid-job.
+  if [ -f "$MEDIA_CATALOG" ]; then
+    local mline mrepos mrepo mtotal=0 mcached=0
+    while IFS= read -r mline; do
+      case "$mline" in \#*|'') continue;; esac
+      mrepos="$(echo "$mline" | cut -d'|' -f2 | xargs)"
+      mtotal=$((mtotal + 1))
+      local ok_alias=1
+      IFS=',' read -r -a _dl <<< "$mrepos"
+      for mrepo in "${_dl[@]}"; do
+        media_repo_cached "$mrepo" || { ok_alias=0; break; }
+      done
+      [ "$ok_alias" = 1 ] && mcached=$((mcached + 1))
+    done < "$MEDIA_CATALOG"
+    if [ "$mcached" -eq "$mtotal" ]; then
+      _chk ok "media weights: $mcached/$mtotal cached"
+    else
+      _chk warn "media weights: $mcached/$mtotal cached (see: fxlla media weights)"
+    fi
+  fi
 
   info "Server"
   if server_alive; then
@@ -1135,6 +1221,7 @@ cmd_media() {
   case "${1:-}" in
     mcp)           exec python3 "$REPO_ROOT/media/media_mcp.py" ;;
     wire-opencode) _wire_media_mcp; return ;;
+    weights)       _media_weights; return ;;
   esac
   python3 "$REPO_ROOT/media/generate.py" "$@"
 }
@@ -1223,7 +1310,7 @@ cmd_complete() {
     kb)         printf '%s\n' add search ls rm mcp wire-opencode ;;
     graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
                   mcp wire-opencode ;;
-    media)      printf '%s\n' image video voice edit upscale models jobs job cancel mcp wire-opencode ;;
+    media)      printf '%s\n' image video voice edit upscale models weights jobs job cancel mcp wire-opencode ;;
     skills)     printf '%s\n' install ls ;;
   esac
 }

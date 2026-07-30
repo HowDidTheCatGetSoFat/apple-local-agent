@@ -36,6 +36,12 @@ describing it.
   Do not block a long conversation on a synchronous video render.
 - Jobs run one at a time, so a submission may sit in `queued` while another
   render finishes. That is expected, not a failure.
+- Weights are downloaded on first use and are large (tens of GB per model). If a
+  render is for a model the user has not used before, say so first: `fxlla media
+  weights` lists each model with its size and whether it is cached, and
+  `fxlla pull media:<alias>` fetches it deliberately. Apply the same
+  availability-and-consent rule as model downloads - present the size and let the
+  user agree before starting a large transfer.
 - Heavy jobs are memory-hungry; fxlla frees the gateway's resident models first
   unless told to keep them. If a backend is not configured, relay the tool's
   error and point to `fxlla doctor`.

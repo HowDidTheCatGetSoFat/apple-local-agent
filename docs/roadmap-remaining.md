@@ -63,11 +63,16 @@ Delivered: a Media section (prompt, image/video/voice picker, Generate) that run
 - Effort: M. Depends on the Tier 1 coordination so an app-triggered video job
   does not race the gateway for memory.
 
-### Media weights on a fresh machine - doctor check DONE
+### Media weights on a fresh machine - DONE
 
-Delivered: `fxlla doctor` now has a media section that checks the image/video/
-voice backends and the weight cache, so the gap is visible. Full bandwidth-
-capped pull integration (the L part below) is still pending. Original note kept.
+Delivered in two steps: `fxlla doctor` checks the media backends and the weight
+cache, and `config/media.conf` plus `fxlla media weights` / `fxlla pull
+media:<alias>` now make the weights themselves discoverable and pre-fetchable.
+Weights land in the Hugging Face cache because the toolchains resolve them by
+repository id; the transfer therefore runs through the HF CLI and is not
+bandwidth-capped, which is the one part of the original note not delivered as
+written. Pre-fetching stays optional, since a toolchain fetches only the files it
+needs on first use. Original note kept.
 
 - What: `fxlla pull` only manages LLM catalog models (`config/models.conf`).
   The media backends rely on external Hugging Face caches and venv binaries
@@ -214,12 +219,9 @@ Tier 1 and all of Tier 2 are done, and most of Tier 3 with them: RAG vector
 index, the KuzuDB code graph (both phases), async media jobs, and the bundled CLI
 with its install-on-PATH action. What remains, in order:
 
-1. Full media-weight pull integration, so a fresh machine can render without
-   manual Hugging Face setup (the `doctor` check that makes the gap visible is
-   already in place). This is the last real reproducibility gap.
-2. RAG polish: optional MLX embeddings and a persistent warm embedding server,
+1. RAG polish: optional MLX embeddings and a persistent warm embedding server,
    so `kb search` stops paying llama-server startup per query.
-3. Wan 2.2 as a second video backend - blocked on the correct invocation for
+2. Wan 2.2 as a second video backend - blocked on the correct invocation for
    `mlx_video.wan_2.generate`, which needs the maintainer's venv.
-4. Evals, as demand appears: measure quality and speed per model to choose with
+3. Evals, as demand appears: measure quality and speed per model to choose with
    data instead of catalog notes.

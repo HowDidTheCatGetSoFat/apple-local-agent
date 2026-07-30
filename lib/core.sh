@@ -65,6 +65,7 @@ STATS_FILE="$STATE_DIR/stats.jsonl"
 GATEWAY_PID="$STATE_DIR/gateway.pid"
 GATEWAY_LOG="$STATE_DIR/gateway.log"
 CATALOG="$REPO_ROOT/config/models.conf"
+MEDIA_CATALOG="$REPO_ROOT/config/media.conf"
 SELF="$REPO_ROOT/bin/fxlla"
 BASE_URL="http://$FXLLA_HOST:$FXLLA_PORT/v1"
 
@@ -93,6 +94,44 @@ _catalog_field() {
 }
 
 # alias -> HF repo (or passthrough when it already looks like org/repo)
+# read a field for a given alias from the media weight catalog (config/media.conf)
+_media_field() {
+  local q="$1" n="$2" alias line
+  [ -f "$MEDIA_CATALOG" ] || return 1
+  while IFS= read -r line; do
+    case "$line" in \#*|'') continue;; esac
+    alias="$(echo "$line" | cut -d'|' -f1 | xargs)"
+    [ "$alias" = "$q" ] || continue
+    echo "$line" | cut -d'|' -f"$n" | xargs
+    return 0
+  done < "$MEDIA_CATALOG"
+  return 1
+}
+
+# The Hugging Face cache the media toolchains read. Empty means the HF default
+# (~/.cache/huggingface); media/generate.py applies the same rule, so a pull and a
+# render always agree on where weights live.
+media_hf_home() { printf '%s' "${FXLLA_MEDIA_HF_HOME:-}"; }
+
+# Is a repo present in that cache? A repo directory can exist with only metadata
+# (an interrupted fetch, or a listing that never downloaded), so look for actual
+# weight-sized content rather than trusting the directory. This also keeps the
+# check working across cache layouts: plain downloads fill blobs/, xet-backed ones
+# add trees/, and both keep the real bytes under the repo directory.
+# -print -quit stops at the first hit without a pipe into head, which under
+# `set -o pipefail` would SIGPIPE find and report a false negative.
+media_repo_cached() {
+  local repo="$1" home dir hit
+  home="$(media_hf_home)"
+  [ -n "$home" ] || home="$HOME/.cache/huggingface"
+  # models--<org>--<name>: slashes become double dashes, existing dashes are kept
+  # (verified against a real cache, e.g. models--black-forest-labs--FLUX.1-dev).
+  dir="$home/hub/models--$(printf '%s' "$repo" | sed 's|/|--|g')"
+  [ -d "$dir" ] || return 1
+  hit="$(find "$dir" -type f -size +1M -print -quit 2>/dev/null || true)"
+  [ -n "$hit" ]
+}
+
 resolve_repo() {
   local q="$1"; [ -z "$q" ] && return 1
   local repo; repo="$(_catalog_field "$q" 2 || true)"

@@ -314,6 +314,29 @@ resident models so a heavy render does not exceed the GPU limit (opt out with
 fxlla media wire-opencode
 ```
 
+### Media weights
+
+The toolchains download their weights from Hugging Face on first use, which can
+be tens of gigabytes in the middle of a render. `fxlla media weights` shows the
+catalog (`config/media.conf`) with sizes and what is already cached, and you can
+fetch ahead of time:
+
+```sh
+fxlla media weights                 # alias, kind, size, cached or missing
+fxlla pull media:z-image-turbo      # pre-fetch one (about 33 GB)
+fxlla pull media:ltx                # video: LTX-2.3 plus its Gemma text encoder
+```
+
+Media weights go into the Hugging Face cache (`FXLLA_MEDIA_HF_HOME`, or the HF
+default when unset) rather than `FXLLA_STORE`, because the toolchains resolve
+them by repository id - the cache layout is what they look for. That also means
+the Hugging Face CLI does the transfer, so **the bandwidth cap does not apply to
+media pulls**. `fxlla doctor` reports how many catalog entries are ready.
+
+Pre-fetching is optional. Skipping it is fine: the toolchain then downloads only
+the files it actually needs on first render, which for some repositories is much
+less than the whole thing.
+
 ### Background jobs
 
 Video can run for minutes. Add `--async` to any generator to get a job id back
