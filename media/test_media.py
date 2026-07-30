@@ -1,5 +1,8 @@
+import contextlib
 import importlib
+import io
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -297,11 +300,13 @@ class TestMCP(unittest.TestCase):
 
 def _write_wav(path, frames, rate=24000, width=2, channels=1):
     import array, wave
-    codes = {1: "b", 2: "h", 4: "i"}
+    codes = {2: "h", 4: "i"}
     with wave.open(path, "wb") as w:
         w.setnchannels(channels); w.setsampwidth(width); w.setframerate(rate)
         if width == 1:  # 8-bit WAV is unsigned, centered on 128
             w.writeframes(bytes((f + 128) & 0xFF for f in frames))
+        elif width == 3:  # 24-bit little-endian
+            w.writeframes(b"".join((f & 0xFFFFFF).to_bytes(3, "little") for f in frames))
         else:
             w.writeframes(array.array(codes[width], frames).tobytes())
 
@@ -311,6 +316,7 @@ class TestQualityAudio(unittest.TestCase):
     # rms ~0.13), so these fixtures are unambiguous garbage.
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
         self.rate = 24000
 
     def _path(self, name):
@@ -342,27 +348,81 @@ class TestQualityAudio(unittest.TestCase):
         p = self._path("ok.wav"); _write_wav(p, (seg + gap) * 4)
         self.assertEqual(quality.check_wav(p), [])
 
-    def test_eight_and_twentyfour_bit_widths(self):
-        for width in (1, 2, 4):
+    def test_every_supported_sample_width(self):
+        for width in (1, 2, 3, 4):
             p = self._path("w%d.wav" % width)
-            amp = {1: 60, 2: 9000, 4: 500000000}[width]
+            amp = {1: 60, 2: 9000, 3: 2000000, 4: 500000000}[width]
             _write_wav(p, self._tone(0.5, amp=amp), width=width)
             self.assertEqual(quality.check_wav(p), [], "width %d" % width)
 
-    def test_unreadable_file_reports_a_problem(self):
+    def test_24_bit_sign_extension_round_trips(self):
+        # The only hand-rolled arithmetic in the module: three little-endian
+        # bytes, sign-extended. Check the extremes survive it.
+        extremes = [-8388608, -1, 0, 1, 8388607]
+        p = self._path("s24.wav"); _write_wav(p, extremes, width=3)
+        samples, full_scale, _ch, _rate = quality._samples(p)
+        self.assertEqual(list(samples), extremes)
+        self.assertEqual(full_scale, 8388608.0)
+
+    def test_a_constant_waveform_is_silence_not_distortion(self):
+        # All-zero bytes in an 8-bit file center to -128: full-scale by peak,
+        # which used to be reported as distortion.
+        p = self._path("z8.wav"); _write_wav(p, [-128] * self.rate, width=1)
+        self.assertTrue(any("silent" in x for x in quality.check_wav(p)))
+
+    def test_content_at_the_end_is_not_called_silent(self):
+        # The windowed loop used to drop the trailing partial window, so the
+        # verdict depended on where in the file the content sat.
+        tone = self._tone(0.03, amp=30000)
+        lead = [0] * int(self.rate * 0.20)
+        tail = self._path("tail.wav"); _write_wav(tail, lead + tone)
+        head = self._path("head.wav"); _write_wav(head, tone + lead)
+        self.assertEqual(quality.check_wav(tail), quality.check_wav(head))
+        self.assertEqual(quality.check_wav(tail), [])
+
+    def test_zero_frame_file_is_reported(self):
+        import wave as wavemod
+        p = self._path("empty.wav")
+        with wavemod.open(p, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(self.rate)
+        self.assertEqual(quality.check_wav(p), ["contains no audio frames"])
+
+    def test_unparseable_format_gets_no_verdict(self):
+        # Python's wave reads PCM only. A float32 WAV is valid output this module
+        # cannot measure, and "cannot measure" must never mean "reject".
+        import struct as st
+        n = 2000
+        data = b"".join(st.pack("<f", 0.5) for _ in range(n))
+        header = (b"RIFF" + st.pack("<I", 36 + len(data)) + b"WAVEfmt "
+                  + st.pack("<IHHIIHH", 16, 3, 1, self.rate, self.rate * 4, 4, 32)
+                  + b"data" + st.pack("<I", len(data)))
+        p = self._path("f32.wav")
+        with open(p, "wb") as f:
+            f.write(header + data)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(quality.check_wav(p), [])
+
+    def test_unreadable_file_gets_no_verdict(self):
+        # A file this module cannot parse must not be rejected: the container
+        # checks already passed, and guessing would reject valid output.
         p = self._path("bad.wav")
         with open(p, "wb") as f:
             f.write(b"RIFF____WAVEnonsense")
-        self.assertTrue(quality.check_wav(p))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(quality.check_wav(p), [])
 
     def test_report_joins_problems_or_returns_none(self):
         self.assertIsNone(quality.report("audio", "/x.wav", []))
-        self.assertIn("/x.wav", quality.report("audio", "/x.wav", ["is silent"]))
+        one = quality.report("audio", "/x.wav", ["is silent"])
+        self.assertIn("/x.wav", one)
+        both = quality.report("audio", "/x.wav", ["is silent", "has a DC offset"])
+        self.assertIn("; and ", both)
 
 
 class TestQualityImageVideo(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
 
     def _png(self, name, width, height):
         path = os.path.join(self.tmp, name)
@@ -390,6 +450,31 @@ class TestQualityImageVideo(unittest.TestCase):
             f.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
         self.assertTrue(quality.check_png(p))
 
+    @unittest.skipUnless(shutil.which("ffprobe") and shutil.which("ffmpeg"),
+                         "needs ffmpeg/ffprobe")
+    def test_real_clip_and_user_requested_short_clips_pass(self):
+        # Frame count and duration are caller-controlled, so a one-frame or
+        # fraction-of-a-second clip is a request, not a defect.
+        import subprocess as sp
+        for name, args in (
+            ("clip.mp4", ["-f", "lavfi", "-i", "testsrc=size=64x64:rate=24:duration=1"]),
+            ("one.mp4", ["-f", "lavfi", "-i", "color=c=red:size=64x64:rate=24",
+                         "-frames:v", "1"]),
+        ):
+            path = os.path.join(self.tmp, name)
+            sp.run(["ffmpeg", "-v", "error"] + args + ["-pix_fmt", "yuv420p", path],
+                   check=True, capture_output=True)
+            self.assertEqual(quality.check_video(path), [], name)
+
+    @unittest.skipUnless(shutil.which("ffprobe") and shutil.which("ffmpeg"),
+                         "needs ffmpeg/ffprobe")
+    def test_container_without_video_is_reported(self):
+        import subprocess as sp
+        path = os.path.join(self.tmp, "audio.mp4")
+        sp.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                "sine=frequency=440:duration=1", path], check=True, capture_output=True)
+        self.assertEqual(quality.check_video(path), ["has no video stream"])
+
     def test_video_without_ffprobe_makes_no_claim(self):
         # No ffprobe means nothing to inspect; guessing would be worse.
         saved = os.environ.get("PATH", "")
@@ -403,6 +488,7 @@ class TestQualityImageVideo(unittest.TestCase):
 class TestQualityGate(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
         self.png = os.path.join(self.tmp, "a.png")
         _tiny_png(self.png)
 
@@ -428,7 +514,8 @@ class TestQualityGate(unittest.TestCase):
     def test_a_broken_checker_never_fails_the_render(self):
         def boom(_path):
             raise ValueError("checker bug")
-        media._check_quality("image", self.png, boom)  # must not raise
+        with contextlib.redirect_stderr(io.StringIO()):
+            media._check_quality("image", self.png, boom)  # must not raise
 
     def test_skipped_gate_does_not_call_the_checker(self):
         os.environ["FXLLA_MEDIA_SKIP_QUALITY"] = "1"
@@ -571,14 +658,19 @@ class TestValidateWavOutput(unittest.TestCase):
             os.unlink(path)
 
     def test_valid_wav_passes(self):
-        import wave
+        import array, math, wave
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "ok.wav")
             with wave.open(path, "wb") as w:
                 w.setnchannels(1)
                 w.setsampwidth(2)
                 w.setframerate(24000)
-                w.writeframes(b"\x00\x01" * 2048)
+                # A real tone. The previous fixture was a constant sample value,
+                # which is a DC level carrying no signal, and the content checks
+                # correctly call that silence.
+                tone = array.array("h", (int(9000 * math.sin(2 * math.pi * 180 * t / 24000))
+                                         for t in range(4096)))
+                w.writeframes(tone.tobytes())
             media.validate_wav_output(path)  # must not raise
 
 

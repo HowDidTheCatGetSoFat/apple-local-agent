@@ -1134,6 +1134,11 @@ cmd_doctor() {
   else
     _chk warn "voice interpreter has no mlx-audio: $FXLLA_VOICE_PYTHON (install it in that venv)"
   fi
+  if command -v ffprobe >/dev/null 2>&1; then
+    _chk ok "ffprobe present (video output is checked for frames)"
+  else
+    _chk warn "ffprobe not found (video output gets container checks only)"
+  fi
   if [ -z "$FXLLA_MEDIA_HF_HOME" ]; then
     _chk warn "FXLLA_MEDIA_HF_HOME unset (using the default HF cache; set it to verify a path)"
   elif [ -d "$FXLLA_MEDIA_HF_HOME" ]; then
@@ -1348,7 +1353,7 @@ PY
 # call, the MCP server, and the opencode registration all forward the same set.
 FXLLA_MEDIA_ENV="FXLLA_STORE FXLLA_MEDIA_HF_HOME FXLLA_MEDIA_MODEL FXLLA_MEDIA_OUT \
 FXLLA_VIDEO_BIN FXLLA_VOICE_PYTHON FXLLA_VOICE_MODEL FXLLA_VOICE_REF FXLLA_VOICE_LANG \
-FXLLA_HOST FXLLA_PORT FXLLA_MEDIA_KEEP_MODELS"
+FXLLA_HOST FXLLA_PORT FXLLA_MEDIA_KEEP_MODELS FXLLA_MEDIA_SKIP_QUALITY"
 
 cmd_media() {
   need python3; require_store

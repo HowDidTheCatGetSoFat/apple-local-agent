@@ -2,14 +2,15 @@
 """Perceptual checks on generated media.
 
 A header check tells you a file is a WAV, not that it contains speech. The
-failure modes that actually happen here - a TTS run that emits silence, a render
-that writes a fraction of a second, a clip distorted by a DC offset - all produce
-a structurally valid file that passes magic-byte validation and fails an ear.
+failure modes that actually happen here - a TTS run that emits silence, a clip
+distorted by a DC offset - produce a structurally valid file that passes
+magic-byte validation and fails an ear.
 
-These checks look at the content. They are deliberately conservative: they exist
-to catch obvious garbage, not to judge quality, because a false positive would
-reject a render the user actually wanted. Set FXLLA_MEDIA_SKIP_QUALITY=1 to turn
-them off.
+These checks look at the content, and only flag what is unambiguously broken. A
+false positive rejects a render the user asked for, which is worse than a miss, so
+anything a caller could plausibly have wanted on purpose is accepted: a very short
+clip, a single-frame video, a quiet passage, a tiny image. A file this module
+cannot parse gets no verdict at all rather than a rejection.
 
 Standard library only. `audioop` is not used: it was removed in Python 3.13.
 """
@@ -18,12 +19,15 @@ import json
 import os
 import struct
 import subprocess
+import sys
 import wave
 
-# Read at most this many frames so a long file cannot blow up memory.
-MAX_FRAMES = 48000 * 60  # a minute at 48 kHz
+# Cap on total samples read, so neither a long file nor a many-channel one can
+# blow up memory. Frames are multiplied by channels, hence the division below.
+MAX_SAMPLES = 48000 * 60 * 2  # a stereo minute at 48 kHz
 
-# Fractions of full scale. Chosen well below anything audible as content.
+# Fractions of full scale, all far below anything audible as content. Real
+# generated speech measures a peak near 0.95 and an rms near 0.13.
 SILENT_PEAK = 0.005      # a peak under 0.5 percent of full scale is silence
 QUIET_RMS = 0.0005       # average level this low carries no signal
 DC_OFFSET = 0.10         # a mean this far from zero means the waveform is skewed
@@ -37,23 +41,24 @@ def skip_quality_checks():
 
 
 def _samples(path):
-    """Return (samples, full_scale, channels, rate) or None if unreadable.
+    """Return (samples, full_scale, channels, rate), or None for an unsupported
+    sample width.
 
-    Samples are plain ints, centered on zero regardless of sample width.
+    Samples are centered on zero regardless of width, and always live in an
+    `array` rather than a list: a Python int costs ~46 bytes, which turns a
+    many-channel file into hundreds of megabytes right after the caller freed the
+    gateway's models to make room for the render.
     """
     with wave.open(path, "rb") as w:
         width = w.getsampwidth()
-        channels = w.getnchannels()
+        channels = max(w.getnchannels(), 1)
         rate = w.getframerate()
-        raw = w.readframes(min(w.getnframes(), MAX_FRAMES))
-    if not raw:
-        return None
+        raw = w.readframes(min(w.getnframes(), MAX_SAMPLES // channels))
     if width == 1:
         # 8-bit WAV is unsigned, centered on 128.
-        data = array.array("B", raw)
-        return [s - 128 for s in data], 128.0, channels, rate
+        return array.array("h", (b - 128 for b in raw)), 128.0, channels, rate
     if width == 2:
-        data = array.array("h")
+        data = array.array("h")  # native endianness; little on every target here
         data.frombytes(raw[: len(raw) - (len(raw) % 2)])
         return data, 32768.0, channels, rate
     if width == 4:
@@ -62,11 +67,11 @@ def _samples(path):
         return data, 2147483648.0, channels, rate
     if width == 3:
         # 24-bit: sign-extend three little-endian bytes at a time.
-        out = []
-        for i in range(0, len(raw) - 2, 3):
-            v = raw[i] | (raw[i + 1] << 8) | (raw[i + 2] << 16)
-            out.append(v - 0x1000000 if v & 0x800000 else v)
-        return out, 8388608.0, channels, rate
+        def signed24():
+            for i in range(0, len(raw) - 2, 3):
+                v = raw[i] | (raw[i + 1] << 8) | (raw[i + 2] << 16)
+                yield v - 0x1000000 if v & 0x800000 else v
+        return array.array("i", signed24()), 8388608.0, channels, rate
     return None  # unusual width: no opinion rather than a wrong one
 
 
@@ -74,22 +79,32 @@ def check_wav(path):
     """Problems with a generated WAV, as a list of human-readable strings."""
     try:
         parsed = _samples(path)
-    except Exception as exc:  # wave raises wave.Error, struct.error, EOFError, ...
-        return ["could not read as WAV audio (%s)" % exc]
+    except Exception as exc:
+        # Cannot parse means no opinion, never a rejection: Python's `wave` reads
+        # PCM only, and a float32 WAV (what many TTS stacks write) is perfectly
+        # valid output that this module simply cannot measure.
+        print("audio quality check skipped for %s: %s" % (path, exc), file=sys.stderr)
+        return []
     if parsed is None:
         return []
     samples, full_scale, channels, rate = parsed
     if not samples:
         return ["contains no audio frames"]
 
-    peak = max(max(samples), -min(samples)) / full_scale
+    low, high = min(samples), max(samples)
+    if low == high:
+        # A constant waveform carries nothing, whatever value it sits at. This
+        # also catches an all-zero-bytes 8-bit file, which centers to -128 and
+        # would otherwise look like full-scale distortion.
+        return ["is silent (a constant sample value)"]
+
+    peak = max(high, -low) / full_scale
     mean = sum(samples) / len(samples) / full_scale
     rms = (sum(s * s for s in samples) / len(samples)) ** 0.5 / full_scale
 
     problems = []
     if peak < SILENT_PEAK:
-        problems.append("is silent (peak %.4f of full scale)" % peak)
-        return problems  # everything else follows from silence
+        return ["is silent (peak %.4f of full scale)" % peak]
     if rms < QUIET_RMS:
         problems.append("carries almost no signal (rms %.5f of full scale)" % rms)
     if abs(mean) > DC_OFFSET:
@@ -97,12 +112,14 @@ def check_wav(path):
                         "usually means the waveform is distorted" % mean)
 
     # Windowed energy: a clip that is silent almost everywhere is a failed render
-    # even when a click at one end lifts the peak.
+    # even when a click at one end lifts the peak. The trailing partial window is
+    # included, because dropping it made the verdict depend on where in the file
+    # the content happened to sit.
     per_window = max(int(rate * channels * WINDOW_MS / 1000), 1)
     windows = quiet = 0
-    for start in range(0, len(samples) - per_window + 1, per_window):
-        windows += 1
+    for start in range(0, len(samples), per_window):
         chunk = samples[start:start + per_window]
+        windows += 1
         if (sum(s * s for s in chunk) / len(chunk)) ** 0.5 / full_scale < QUIET_RMS:
             quiet += 1
     if windows >= 4 and quiet / windows > MOSTLY_SILENT:
@@ -112,7 +129,8 @@ def check_wav(path):
 
 
 def check_png(path):
-    """Problems with a generated PNG. Reads IHDR only; no pixel decoding."""
+    """Problems with a generated PNG. Reads IHDR only; no pixel decoding, so a
+    blank-but-well-formed image is not detected."""
     with open(path, "rb") as f:
         head = f.read(33)
     if len(head) < 24 or head[12:16] != b"IHDR":
@@ -126,12 +144,12 @@ def check_png(path):
 def _ffprobe(path):
     """Video stream facts via ffprobe, or None when it is unavailable."""
     cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
-           "-show_entries", "stream=nb_frames,duration,width,height",
-           "-show_entries", "format=duration", "-of", "json", path]
+           "-show_entries", "stream=nb_frames,width,height", "-of", "json", path]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except (FileNotFoundError, subprocess.SubprocessError):
-        return None
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                              stdin=subprocess.DEVNULL)
+    except Exception:
+        return None  # not installed, not permitted, timed out: all mean no data
     if proc.returncode != 0:
         return None
     try:
@@ -143,9 +161,12 @@ def _ffprobe(path):
 def check_video(path):
     """Problems with a generated video.
 
-    Best effort: without ffprobe there is nothing to inspect beyond the container,
-    which validate_video_output already checked, so this returns no problems
-    rather than guessing.
+    Deliberately narrow. Frame count and duration are caller-controlled
+    (`--frames`, `--frame-rate`), so a one-frame or fraction-of-a-second clip is
+    something the user asked for, not a defect. Only a container with no usable
+    video at all is flagged. Without ffprobe there is nothing to inspect beyond
+    what validate_video_output already checked, so this returns no problems rather
+    than guessing.
     """
     info = _ffprobe(path)
     if not info:
@@ -157,22 +178,12 @@ def check_video(path):
     problems = []
     if not stream.get("width") or not stream.get("height"):
         problems.append("has a video stream with no dimensions")
-
-    frames = stream.get("nb_frames")
     try:
-        frames = int(frames)
+        frames = int(stream.get("nb_frames"))
     except (TypeError, ValueError):
-        frames = None
-    if frames is not None and frames <= 1:
-        problems.append("holds %d frame(s), so it is a still image" % frames)
-
-    duration = stream.get("duration") or (info.get("format") or {}).get("duration")
-    try:
-        duration = float(duration)
-    except (TypeError, ValueError):
-        duration = None
-    if duration is not None and duration < 0.1:
-        problems.append("is %.3fs long, which is not a clip" % duration)
+        frames = None  # absent or "N/A": common and not a defect
+    if frames == 0:
+        problems.append("holds no frames")
     return problems
 
 
