@@ -4,6 +4,7 @@ import SwiftUI
 struct PanelView: View {
     @ObservedObject var model: StatusModel
     @State private var pullTarget: CatalogEntry?
+    @State private var cliInstallNote: String?
 
     var body: some View {
         ScrollView {
@@ -118,6 +119,23 @@ struct PanelView: View {
             }
             .disabled(model.busy)
 
+            // Installing the CLI onto PATH writes outside the app bundle, so it
+            // is an explicit user action rather than something the installer did.
+            // Hidden in dev builds, where there is no bundled CLI to link.
+            if CLI.bundled != nil {
+                VStack(alignment: .leading, spacing: 2) {
+                    Button(L.t("Install the fxlla command")) { installCLI() }
+                        .controlSize(.small)
+                    if let note = cliInstallNote {
+                        Text(note)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
             HStack {
                 Text("fxlla " + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""))
                 Spacer()
@@ -138,6 +156,25 @@ struct PanelView: View {
         ) { target in
             Button(L.t("Pull")) { model.pull(target.alias); pullTarget = nil }
             Button("Cancel", role: .cancel) { pullTarget = nil }
+        }
+    }
+
+    // Links the bundled CLI into ~/.local/bin and reports exactly what happened,
+    // including the path, so the user can verify it (or add it to PATH).
+    private func installCLI() {
+        switch CLI.installOnPath() {
+        case .installed(let path):
+            cliInstallNote = L.t("Linked at") + " \(path)\n" + L.t("Add its folder to PATH if your shell cannot find it.")
+        case .alreadyInstalled(let path):
+            cliInstallNote = L.t("Already installed at") + " \(path)"
+        case .noBundle:
+            cliInstallNote = L.t("This build has no bundled CLI.")
+        case .occupied(let path):
+            cliInstallNote = L.t("A file is already there, left untouched:") + " \(path)"
+        case .linksElsewhere(let path, let destination):
+            cliInstallNote = L.t("Left untouched:") + " \(path) -> \(destination)"
+        case .error(let message):
+            cliInstallNote = message
         }
     }
 }

@@ -2,6 +2,44 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-30: Bundled CLI and install-on-PATH from the app
+
+The app resolved `fxlla` from `~/.local/bin`, `/usr/local/bin`, or
+`/opt/homebrew/bin` and bundled nothing, so a `.dmg`-only install had a front end
+with no CLI behind it - and no way for a UI action to link a CLI that did not
+exist. Fixed both halves: `app/build.sh` copies the CLI tree into
+`fxlla.app/Contents/Resources/cli`, and the panel gained an **Install the fxlla
+command** action.
+
+- The maintainer's call (2026-07-30) was that putting the CLI on PATH is a
+  user-triggered UI action, the VS Code / Docker Desktop pattern, not a silent
+  installer step. It writes outside the app bundle, so the user should ask for it.
+- It links into `~/.local/bin`, which is user-writable, so there is no admin
+  prompt at all (the app already has `osascriptAdmin` for the GPU limit; this
+  does not need it).
+- `bin/fxlla` already resolved symlinks before computing `REPO_ROOT`, so a link
+  into the bundle Just Works: the bundled CLI uses the bundle's own lib/, config/,
+  and python modules. Verified by running it through a scratch symlink.
+- Resolution order puts an installed CLI ahead of the bundled one, so a git
+  checkout stays in charge during development.
+- Secret hazard, handled deliberately: `config/` is copied file by file
+  (`models.conf` and `config.env.example` only) because `config/config.env` is
+  git-ignored and holds the user's Apple app-specific password and HF/Civitai
+  tokens. Copying `config/` wholesale would have shipped them inside a
+  distributable `.dmg`. build.sh also hard-fails if that file ever appears in the
+  bundle, and a CI step re-checks it.
+- Self-review caught a destructive bug before it shipped: the first version
+  replaced whatever sat at `~/.local/bin/fxlla`. On this machine that link points
+  at the git checkout, so clicking Install would have silently repointed it at the
+  app bundle and broken live editing. It now reports and leaves alone anything it
+  did not create - a real file, or a symlink pointing elsewhere.
+- Dropped an "is it on PATH?" check I had written: a GUI app inherits a minimal
+  PATH that does not reflect the user's shell, so it would have been wrong more
+  often than right. The UI states where it linked instead.
+- Verified: strict-concurrency Swift 6 build clean, the bundle contains the CLI
+  tree, an audit for the 5 real secret values from the local config.env found
+  none in the bundle, and the bundled CLI runs both directly and via symlink.
+
 ## 2026-07-30: Background media jobs
 
 Video renders run for minutes, which is far too long for an MCP tool call to

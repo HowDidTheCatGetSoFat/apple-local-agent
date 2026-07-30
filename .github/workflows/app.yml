@@ -30,3 +30,18 @@ jobs:
 
       - name: Build (unsigned)
         run: app/build.sh
+
+      - name: Bundle contents
+        # The app ships the CLI so an install from the .dmg is self-contained,
+        # and must never ship config/config.env, which holds the user's tokens.
+        run: |
+          cli="app/fxlla.app/Contents/Resources/cli"
+          for d in bin lib config gateway rag graph media skills; do
+            test -d "$cli/$d" || { echo "missing $d in the bundled CLI" >&2; exit 1; }
+          done
+          test -x "$cli/bin/fxlla" || { echo "bundled fxlla is not executable" >&2; exit 1; }
+          if [ -e "$cli/config/config.env" ]; then
+            echo "config.env must never be bundled" >&2; exit 1
+          fi
+          "$cli/bin/fxlla" help >/dev/null || { echo "bundled CLI does not run" >&2; exit 1; }
+          echo "bundled CLI verified"

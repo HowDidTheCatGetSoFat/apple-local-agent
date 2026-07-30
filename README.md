@@ -213,6 +213,14 @@ Distribution builds are signed with a Developer ID and notarized. Create the
 Store Connect API key); `app/package-dmg.sh` reads it from the keychain and
 never from the repo. See `app/package-dmg.sh` for the exact commands.
 
+The app ships the CLI inside its bundle, so installing the `.dmg` alone gives a
+working `fxlla`. To use it from a terminal, click **Install the fxlla command**
+in the panel: it symlinks the bundled CLI into `~/.local/bin` (no admin prompt)
+and tells you where. That is a deliberate user action, not something the
+installer does silently, and it never replaces a file or a link it did not
+create - if you already run `fxlla` from a git checkout, it says so and leaves
+your setup alone.
+
 ## Knowledge bases (RAG)
 
 Index your files into a local knowledge base and search them semantically. It
