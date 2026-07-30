@@ -249,13 +249,15 @@ registration.
 
 ## Code graph
 
-Index a Python codebase and navigate it structurally: where a symbol is
-defined, where it is referenced, which functions call it, and the transitive
-blast radius of a change. Symbols are extracted with the standard library `ast`
-and stored in an embedded KuzuDB graph, so change-impact is a single Cypher
-variable-length path. `fxlla graph` runs the backend under
-`uv run --with kuzu==0.11.3` (uv is already required); set `FXLLA_GRAPH_PYTHON`
-to use your own interpreter that has kuzu.
+Index a codebase and navigate it structurally: where a symbol is defined, where
+it is referenced, which functions call it, and the transitive blast radius of a
+change. Python is parsed with the standard library `ast`; JavaScript, TypeScript,
+Go, Rust, Java, C/C++, and Ruby with tree-sitter. Symbols are stored in an
+embedded KuzuDB graph, so change-impact is a single Cypher variable-length path,
+and `def`/`callers`/`impact` resolve by name across languages. `fxlla graph` runs
+the backend under `uv run --with kuzu==0.11.3 --with tree-sitter --with
+tree-sitter-language-pack` (uv is already required); set `FXLLA_GRAPH_PYTHON` to
+use your own interpreter that has those packages.
 
 KuzuDB is pinned to `0.11.3`: its upstream was archived after the October 2025
 Apple acquisition, and 0.11.3 is the final release. It installs and runs fine;
@@ -263,7 +265,7 @@ the pin keeps it reproducible. Override `FXLLA_GRAPH_PYTHON` if a maintained for
 or successor is adopted later.
 
 ```sh
-fxlla graph index .                 # index Python files or directories
+fxlla graph index .                 # index a directory (Python, JS/TS, Go, ...)
 fxlla graph def _db                 # where a symbol is defined
 fxlla graph callers _db             # which functions call it
 fxlla graph refs chunk_text         # where it is referenced

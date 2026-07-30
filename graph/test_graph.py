@@ -19,6 +19,12 @@ try:
 except Exception:
     _HAVE_KUZU = False
 
+try:
+    import tree_sitter_language_pack  # noqa: F401
+    _HAVE_TS = True
+except Exception:
+    _HAVE_TS = False
+
 SNIPPET = """
 class A:
     def m(self):
@@ -104,6 +110,66 @@ class TestGraphKuzu(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             codegraph.cmd_index(types.SimpleNamespace(paths=[self.py]))
         self.assertEqual(len(_run(codegraph.cmd_def, name="helper")), 1)
+
+
+@unittest.skipUnless(_HAVE_TS, "tree-sitter-language-pack not installed")
+class TestTsExtract(unittest.TestCase):
+    # Pure extraction (no graph store): tree-sitter produces the same shape as
+    # the ast visitor for non-Python languages.
+    def _extract(self, name, body):
+        tsextract = importlib.import_module("tsextract")
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, name)
+        with open(p, "w") as f:
+            f.write(body)
+        lang = tsextract.LANG_BY_EXT[os.path.splitext(name)[1]]
+        return tsextract.extract(p, lang)
+
+    def test_javascript(self):
+        defs, refs = self._extract("a.js",
+                                   "class A { m() { helper(); } }\n"
+                                   "function helper() {}\n")
+        kinds = {nm: k for nm, _q, k, _f, _l in defs}
+        self.assertEqual(kinds.get("A"), "class")
+        self.assertEqual(kinds.get("m"), "method")
+        self.assertEqual(kinds.get("helper"), "function")
+        callers = {nm: c for nm, _f, _l, c in refs}
+        self.assertEqual(callers.get("helper"), "A.m")
+
+    def test_go(self):
+        defs, refs = self._extract("b.go",
+                                   "package main\nfunc helper() {}\n"
+                                   "func top() { helper() }\n")
+        self.assertIn("helper", {nm for nm, *_ in defs})
+        self.assertEqual({nm: c for nm, _f, _l, c in refs}.get("helper"), "top")
+
+
+@unittest.skipUnless(_HAVE_KUZU and _HAVE_TS, "kuzu and tree-sitter required")
+class TestGraphMultiLang(unittest.TestCase):
+    # End to end: a JS file and a Python file share the graph and resolve across
+    # languages by name.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        with open(os.path.join(self.tmp, "a.js"), "w") as f:
+            f.write("function helper() {}\nfunction top() { helper(); }\n")
+        with open(os.path.join(self.tmp, "b.py"), "w") as f:
+            f.write("def helper():\n    pass\n\ndef run():\n    helper()\n")
+        codegraph.GRAPH_DIR = self.tmp
+        codegraph.DB_PATH = os.path.join(self.tmp, "graph.kuzu")
+        codegraph._CONN = None
+        with contextlib.redirect_stdout(io.StringIO()):
+            codegraph.cmd_index(types.SimpleNamespace(paths=[self.tmp]))
+
+    def tearDown(self):
+        codegraph._CONN = None
+
+    def test_def_spans_languages(self):
+        files = {os.path.splitext(r["file"])[1] for r in _run(codegraph.cmd_def, name="helper")}
+        self.assertEqual(files, {".js", ".py"})
+
+    def test_callers_across_languages(self):
+        callers = {r["caller"] for r in _run(codegraph.cmd_callers, name="helper")}
+        self.assertEqual(callers, {"top", "run"})
 
 
 class TestMCP(unittest.TestCase):

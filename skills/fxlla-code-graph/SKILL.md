@@ -1,13 +1,15 @@
 ---
 name: fxlla-code-graph
-description: Navigate a Python codebase structurally with the fxlla code graph before editing or reasoning about impact. Use to find where a symbol is defined, who references or calls it, the blast radius of a change, and dead code.
+description: Navigate a codebase structurally with the fxlla code graph before editing or reasoning about impact. Use to find where a symbol is defined, who references or calls it, the blast radius of a change, and dead code. Covers Python, JavaScript, TypeScript, Go, Rust, Java, C/C++, and Ruby.
 ---
 
-# Use the code graph before editing Python
+# Use the code graph before editing
 
-fxlla exposes a structural view of a Python codebase over an MCP server:
+fxlla exposes a structural view of a codebase over an MCP server:
 `find_definition`, `find_references`, `find_callers`, `find_impact`, and
-`list_unused`. Use it to reason about code with facts instead of guesses.
+`list_unused`. Use it to reason about code with facts instead of guesses. It
+covers Python, JavaScript, TypeScript, Go, Rust, Java, C/C++, and Ruby, and
+resolves symbols by name across languages.
 
 ## When to use
 
@@ -27,8 +29,9 @@ fxlla exposes a structural view of a Python codebase over an MCP server:
 
 ## Notes
 
-- Python only: symbols are extracted with the standard library `ast` and stored
-  in an embedded KuzuDB graph. `fxlla graph` runs the backend under
-  `uv run --with kuzu`, so no manual install is needed.
+- Python is parsed with the standard library `ast`; other languages with
+  tree-sitter. Symbols are stored in an embedded KuzuDB graph. `fxlla graph` runs
+  the backend under `uv run --with kuzu==0.11.3 --with tree-sitter --with
+  tree-sitter-language-pack`, so no manual install is needed.
 - The graph must be indexed first: `fxlla graph index <paths...>`. If a query
   returns nothing, suggest indexing.

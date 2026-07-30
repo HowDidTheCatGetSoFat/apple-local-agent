@@ -15,6 +15,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `<store>/graph/graph.kuzu` location on the next `fxlla graph index`.
 
 ### Added
+- Multi-language code graph: `fxlla graph` now indexes JavaScript, TypeScript,
+  Go, Rust, Java, C/C++, and Ruby via tree-sitter in addition to Python (still
+  `ast`). All languages share the KuzuDB graph, so `def`/`callers`/`impact`
+  resolve by name across them. Runs under `uv run --with kuzu==0.11.3 --with
+  tree-sitter --with tree-sitter-language-pack`.
 - Optional sqlite-vec KNN index for `fxlla kb search`: set `FXLLA_KB_INDEX=1` to
   replace the brute-force cosine scan with a vector index rebuilt on demand from
   the chunks table. It runs `rag/core.py` under `uv run --with sqlite-vec`

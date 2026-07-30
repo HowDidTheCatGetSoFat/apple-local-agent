@@ -169,16 +169,18 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
   its `wire-opencode` registration run under the same interpreter, so `rag_search`
   uses the index too. Still open (M): optional MLX embeddings and a persistent
   warm embedding server.
-- Code graph upgrades: Phase A DONE. The store is now an embedded KuzuDB graph
-  (Cypher) instead of flat SQLite, and `impact` is a Cypher variable-length path
-  over a derived CALLS relationship. `fxlla graph` runs under `uv run --with
-  kuzu==0.11.3` (or FXLLA_GRAPH_PYTHON); kuzu is pinned because upstream was
-  archived after the Oct 2025 Apple acquisition. Still open (L): Phase B,
-  multi-language parsing via tree-sitter or SCIP (Python-only `ast` today), and
-  routing the graph MCP server through richer Cypher queries. Known limit: the
-  `_rebuild_calls` join (`qualname`/`file`/`name`, none PK-indexed) rebuilds all
-  CALLS edges on every index; fine at current scale, profile and narrow the join
-  before running over a large monorepo.
+- Code graph upgrades: Phase A and Phase B DONE. Phase A: the store is an
+  embedded KuzuDB graph (Cypher) instead of flat SQLite, and `impact` is a Cypher
+  variable-length path over a derived CALLS relationship. Phase B: multi-language
+  extraction via tree-sitter (JavaScript, TypeScript, Go, Rust, Java, C/C++,
+  Ruby) alongside Python `ast`, feeding the same graph. `fxlla graph` runs under
+  `uv run --with kuzu==0.11.3 --with tree-sitter --with tree-sitter-language-pack`
+  (or FXLLA_GRAPH_PYTHON); kuzu is pinned because upstream was archived after the
+  Oct 2025 Apple acquisition. Still open: more languages via the same config
+  table, and routing the graph MCP server through richer Cypher queries. Known
+  limit: the `_rebuild_calls` join (`qualname`/`file`/`name`, none PK-indexed)
+  rebuilds all CALLS edges on every index; fine at current scale, profile and
+  narrow the join before running over a large monorepo.
 - More media tools: `edit_image` and `upscale_image` are DONE
   (`fxlla media edit` / `upscale`). Still open: wire Wan 2.2 (mlx-video) as a
   second video backend alongside LTX (M).
