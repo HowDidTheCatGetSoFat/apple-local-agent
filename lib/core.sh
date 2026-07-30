@@ -48,6 +48,8 @@ fi
 : "${FXLLA_VOICE_LANG:=en}"    # default speech language code
 : "${FXLLA_MEDIA_KEEP_MODELS:=}"  # set to 1 to keep gateway models during media jobs
 : "${FXLLA_MEDIA_SKIP_QUALITY:=}"  # set to 1 to accept output that fails the content checks
+: "${FXLLA_ASSUME_YES:=}"      # set to 1 to authorize large downloads without asking
+: "${FXLLA_CONFIRM_ABOVE_GB:=5}"  # confirm before transferring more than this many GB
 : "${FXLLA_CIVITAI_TOKEN:=}"   # Civitai API token for downloading from civitai.com
 : "${FXLLA_DOWNLOADER:=aria2}"  # default pull transfer: aria2 (bandwidth-capped) or hf
 : "${FXLLA_KB_INDEX:=}"        # set to 1 for the sqlite-vec KNN index (kb search)
@@ -74,6 +76,57 @@ mkdir -p "$STATE_DIR"
 
 # bytes/s for aria2c from the configured megabits
 rate_bytes() { echo $(( FXLLA_RATE_MBIT * 1000000 / 8 )); }
+
+# Consent for a large download.
+#
+# The load-bearing case is a transfer nobody asked for: an agent, a script, an MCP
+# call, or the weights a media render fetches on first use. Those get refused with
+# instructions, because there is no one to ask. A human at a terminal is offered
+# the size and can decline, which is a courtesy - they already typed the command.
+# Callers that obtained consent some other way (the app shows a size dialog before
+# it calls pull) pass --yes and skip all of this.
+#
+# Call this BEFORE creating directories or writing marker files, so a refusal
+# really does leave nothing behind.
+require_download_consent() {
+  local gb="$1" what="$2" reply
+  is_true "${FXLLA_ASSUME_YES:-}" && return 0
+  # Fail closed on a size we cannot read: better to ask about a transfer that
+  # turns out to be small than to skip the question on a 60 GB one.
+  case "$gb" in
+    ''|*[!0-9.]*|*.*.*) gb="" ;;
+  esac
+  if [ -n "$gb" ] \
+     && awk -v g="$gb" -v t="${FXLLA_CONFIRM_ABOVE_GB:-5}" 'BEGIN{exit !(g+0 <= t+0)}'; then
+    return 0
+  fi
+  local shown="${gb:-an unknown number of}"
+  # Two separate questions. Is a human driving? That is stdin being a terminal;
+  # a script, an agent, or an MCP call has it redirected and must get the refusal
+  # immediately rather than wait on a prompt nobody will answer. And where does
+  # the question go? /dev/tty, not stdout, which is often redirected - a prompt
+  # written there is invisible while the read blocks. /dev/tty can also exist and
+  # still fail to open, so probe it by opening it.
+  if [ -t 0 ] && (exec </dev/tty >/dev/tty) 2>/dev/null; then
+    # Prompt on the terminal itself, not on stdout: stdout is often redirected,
+    # and a prompt written there is invisible while the read blocks forever.
+    # Ignoring SIGTTIN makes the read fail instead of stopping a background job.
+    printf '%sDownload %s GB for %s? [y/N] %s' \
+      "$(_c '0;33')" "$shown" "$what" "$(_c 0)" > /dev/tty 2>/dev/null || true
+    trap '' TTIN 2>/dev/null || true
+    reply=""
+    read -r -t 60 reply < /dev/tty 2>/dev/null || reply=""
+    trap - TTIN 2>/dev/null || true
+    case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+      y|yes) return 0 ;;
+      "")    die "no answer, so nothing was downloaded" ;;
+      *)     die "cancelled" ;;
+    esac
+  fi
+  die "this would transfer about ${shown} GB for ${what}, and nothing here asked a human first.
+  Nothing was downloaded. Present the size to the user, and once they agree re-run
+  with --yes. FXLLA_CONFIRM_ABOVE_GB raises the threshold if you want fewer stops."
+}
 
 # is the store mounted / present?
 require_store() {

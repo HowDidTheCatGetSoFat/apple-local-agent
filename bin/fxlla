@@ -134,10 +134,34 @@ _civitai_version_id() {
 }
 
 # Download a single file from Civitai (LoRA, checkpoint) to <store>/civitai.
+# Total size of a Civitai model-version, in GB, or empty when unknown. A Civitai
+# "single file" is routinely a 2-24 GB checkpoint, so this is worth asking about;
+# an unreadable size fails closed inside require_download_consent.
+_civitai_size_gb() {
+  VID="$1" python3 -c 'import json,os,urllib.request
+try:
+    u="https://civitai.com/api/v1/model-versions/%s"%os.environ["VID"]
+    d=json.load(urllib.request.urlopen(urllib.request.Request(u,headers={"User-Agent":"fxlla"}),timeout=20))
+    kb=sum((f.get("sizeKB") or 0) for f in (d.get("files") or []))
+    print("%.2f"%(kb/1048576.0) if kb else "")
+except Exception:
+    print("")' 2>/dev/null || true
+}
+
 _pull_civitai() {
   need aria2c; require_store
-  local vid; vid="$(_civitai_version_id "$1")" \
+  local assume=0 ref="" arg
+  for arg in "$@"; do
+    case "$arg" in
+      --yes|-y) assume=1 ;;
+      -*)       die "unknown flag: $arg" ;;
+      *)        ref="$arg" ;;
+    esac
+  done
+  local vid; vid="$(_civitai_version_id "$ref")" \
     || die "civitai needs a numeric model-version id (civitai:<id> or a civitai.com URL)"
+  [ "$assume" = 1 ] || require_download_consent "$(_civitai_size_gb "$vid")" \
+    "civitai model-version $vid"
   local dir="$FXLLA_STORE/civitai"; mkdir -p "$dir"
   local url="https://civitai.com/api/download/models/$vid"
   # Civitai authenticates with a token query parameter (its documented method).
@@ -160,7 +184,16 @@ _pull_civitai() {
 # huggingface_hub, so the cache layout is what matters. That means the Hugging Face
 # CLI does the transfer and the bandwidth cap does not apply here.
 _pull_media() {
-  local alias="${1#media:}"
+  local alias="" assume=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --yes|-y) assume=1 ;;
+      -*)       die "unknown flag: $arg" ;;
+      *)        [ -n "$alias" ] && die "give one media alias, not '$alias' and '${arg#media:}'"
+                alias="${arg#media:}" ;;
+    esac
+  done
+  [ -n "$alias" ] || die "usage: fxlla pull media:<alias> [--yes]"
   local repos size kind include
   repos="$(_media_field "$alias" 2 || true)"
   [ -z "$repos" ] && die "unknown media weight '$alias'. See: fxlla media weights"
@@ -180,11 +213,24 @@ _pull_media() {
     IFS="$IFS_SAVE"
   fi
   IFS=',' read -r -a _repolist <<< "$repos"
+  # Work out what is missing before asking, so a fully cached alias never stops.
+  local pending=() cached=0
   for repo in "${_repolist[@]}"; do
-    if media_repo_cached "$repo"; then
-      ok "already cached: $repo"
-      continue
-    fi
+    if media_repo_cached "$repo"; then ok "already cached: $repo"; cached=1
+    else pending+=("$repo"); fi
+  done
+  if [ "${#pending[@]}" -eq 0 ]; then
+    ok "media weights ready for '$alias'"
+    return 0
+  fi
+  # The catalog carries one size per alias, so when part of a multi-repo alias is
+  # already cached the real remainder is smaller. Say "up to" rather than print a
+  # number that contradicts the "already cached" lines above.
+  local label="media weights '$alias'"
+  [ "$cached" = 1 ] && label="the rest of media weights '$alias' (up to the full size)"
+  [ "$assume" = 1 ] || require_download_consent \
+    "$(printf '%s' "$size" | tr -cd '0-9.')" "$label"
+  for repo in "${pending[@]}"; do
     # Only a real transfer needs uv, so a fully cached alias works without it.
     need uv
     info "Downloading $repo ..."
@@ -220,11 +266,11 @@ _media_weights() {
 cmd_pull() {
   # Civitai and media weights are separate sources with their own layout.
   case "${1:-}" in
-    civitai:*|*civitai.com/*) _pull_civitai "$1"; return ;;
-    media:*)                  _pull_media "$1"; return ;;
+    civitai:*|*civitai.com/*) _pull_civitai "$@"; return ;;
+    media:*)                  _pull_media "$@"; return ;;
   esac
   need python3; require_store
-  local q="" engine="" quant="" downloader="${FXLLA_DOWNLOADER:-aria2}"
+  local q="" engine="" quant="" assume=0 downloader="${FXLLA_DOWNLOADER:-aria2}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --gguf)         engine=gguf ;;
@@ -233,11 +279,12 @@ cmd_pull() {
       --quant=*)      quant="${1#--quant=}" ;;
       --downloader)   downloader="$2"; shift ;;
       --downloader=*) downloader="${1#--downloader=}" ;;
+      --yes|-y)       assume=1 ;;
       -*)             die "unknown flag: $1" ;;
       *)              q="$1" ;;
     esac; shift
   done
-  [ -z "$q" ] && die "Usage: fxlla pull <alias|org/repo|civitai:<id>|media:<alias>> [--gguf] [--quant Q4_K_M] [--downloader aria2|hf]"
+  [ -z "$q" ] && die "Usage: fxlla pull <alias|org/repo|civitai:<id>|media:<alias>> [--gguf] [--quant Q4_K_M] [--downloader aria2|hf] [--yes|-y]"
   case "$downloader" in aria2|hf) ;; *) die "unknown downloader: $downloader (aria2|hf)" ;; esac
   [ "$downloader" = hf ] || need aria2c
 
@@ -245,7 +292,7 @@ cmd_pull() {
   [ -z "$engine" ] && engine="$(resolve_engine "$q")"
   [ -z "$engine" ] && engine=mlx
   local name; name="$(local_name "$q")"
-  local dest="$MODELS_DIR/$name"; mkdir -p "$dest"
+  local dest="$MODELS_DIR/$name"
 
   info "Model:    $repo"
   info "Engine:   $engine"
@@ -271,18 +318,42 @@ cmd_pull() {
     fi
     local entry; entry="$(echo "$sel" | grep -- '-00001-of-' | head -1 || true)"
     [ -z "$entry" ] && entry="$(echo "$sel" | head -1)"
-    echo "gguf" > "$dest/.engine"; basename "$entry" > "$dest/.entry"
   else
     sel="$(echo "$listing" | awk -F'\t' '{print $2}')"
-    echo "mlx" > "$dest/.engine"
   fi
 
   # total size of the selection
   local total gb
   total="$(awk -F'\t' 'NR==FNR{w[$1]=1;next} ($2 in w){s+=$1} END{printf "%d", s+0}' \
       <(echo "$sel") <(echo "$listing"))"
-  gb="$(awk -v b="$total" 'BEGIN{printf "%.2f", b/1073741824}')"
-  info "Cap:      ${FXLLA_RATE_MBIT} Mbps | to download: ${gb} GB"
+  # Discount whatever is already on disk, so resuming an interrupted pull asks
+  # about the remainder instead of the original size.
+  local have remaining
+  have="$(awk -F'\t' -v d="$dest" '
+      NR==FNR { w[$1]=1; next }
+      ($2 in w) {
+        cmd = "stat -f%z \"" d "/" $2 "\" 2>/dev/null || echo 0"
+        cmd | getline local_size; close(cmd)
+        s += (local_size+0 > $1+0 ? $1 : local_size)
+      }
+      END { printf "%d", s+0 }' <(echo "$sel") <(echo "$listing"))"
+  remaining=$(( total - have ))
+  [ "$remaining" -lt 0 ] && remaining=0
+  gb="$(awk -v b="$remaining" 'BEGIN{printf "%.2f", b/1073741824}')"
+  if [ "$have" -gt 0 ]; then
+    info "Cap:      ${FXLLA_RATE_MBIT} Mbps | remaining: ${gb} GB (resuming)"
+  else
+    info "Cap:      ${FXLLA_RATE_MBIT} Mbps | to download: ${gb} GB"
+  fi
+  [ "$assume" = 1 ] || require_download_consent "$gb" "$repo"
+
+  # Only now touch the filesystem: a refusal above must leave nothing behind.
+  mkdir -p "$dest"
+  if [ "$engine" = gguf ]; then
+    echo "gguf" > "$dest/.engine"; basename "$entry" > "$dest/.entry"
+  else
+    echo "mlx" > "$dest/.engine"
+  fi
 
   if [ "$downloader" = hf ]; then
     # Native Hugging Face downloader via the CLI, run with uvx so no persistent
@@ -816,12 +887,13 @@ cmd_backend() {
 # --------------------------------------------------------------------------
 cmd_on() {
   require_store
-  local q="" force_engine="" do_pull=0
+  local q="" force_engine="" do_pull=0 assume=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --mlx) force_engine=mlx ;;
       --gguf) force_engine=gguf ;;
       --pull) do_pull=1 ;;
+      --yes|-y) assume=1 ;;
       -*) die "unknown flag: $1" ;;
       *) q="$1" ;;
     esac; shift
@@ -833,7 +905,9 @@ cmd_on() {
     # Fail fast by default; only download when the caller opts in with --pull.
     if [ "$do_pull" = 1 ]; then
       info "'$name' is not cached; pulling (opt-in via --pull)..."
-      cmd_pull "$q" || die "pull failed for '$q'"
+      local pull_args=("$q")
+      [ "$assume" = 1 ] && pull_args+=(--yes)
+      cmd_pull "${pull_args[@]}" || die "pull failed for '$q'"
     else
       die "'$name' is not downloaded. Run: fxlla pull $q   (or: fxlla on $q --pull)"
     fi
@@ -872,10 +946,19 @@ cmd_on() {
     echo $! > "$PID_FILE"
   fi
 
+  # The id to register is the one this server accepts for the model we just
+  # loaded, and it differs by engine: llama-server is started with
+  # --alias "$name", while mlx_lm.server takes the model path. Do not read it
+  # from /v1/models: mlx_lm enumerates the whole Hugging Face cache there, so the
+  # first entry is whatever unrelated model happens to sort first - which
+  # silently registered a diffusion model as the local chat model in opencode.
   local id
+  case "$engine" in
+    gguf) id="$name" ;;
+    *)    id="$dest" ;;
+  esac
   for _ in $(seq 1 90); do
     if curl -sf "$BASE_URL/models" >/dev/null 2>&1; then
-      id="$(curl -s "$BASE_URL/models" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])' 2>/dev/null || echo "$name")"
       echo "$name|$id|$engine" > "$CURRENT_FILE"
       touch "$ACT_FILE"
       _sync_opencode "$id" "$name (local)" >/dev/null
@@ -1353,7 +1436,8 @@ PY
 # call, the MCP server, and the opencode registration all forward the same set.
 FXLLA_MEDIA_ENV="FXLLA_STORE FXLLA_MEDIA_HF_HOME FXLLA_MEDIA_MODEL FXLLA_MEDIA_OUT \
 FXLLA_VIDEO_BIN FXLLA_VOICE_PYTHON FXLLA_VOICE_MODEL FXLLA_VOICE_REF FXLLA_VOICE_LANG \
-FXLLA_HOST FXLLA_PORT FXLLA_MEDIA_KEEP_MODELS FXLLA_MEDIA_SKIP_QUALITY"
+FXLLA_HOST FXLLA_PORT FXLLA_MEDIA_KEEP_MODELS FXLLA_MEDIA_SKIP_QUALITY \
+FXLLA_ASSUME_YES"
 
 cmd_media() {
   need python3; require_store

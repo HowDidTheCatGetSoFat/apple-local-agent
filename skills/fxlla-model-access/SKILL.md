@@ -18,9 +18,14 @@ the offer-and-consent flow.
 3. If it is not cached, do not pull silently. Tell the user the size and the
    rough time at the current bandwidth cap, and offer any cheaper cached
    alternative that would do.
-4. Only after the user agrees, download: `fxlla pull <alias>` (or
-   `fxlla on <alias> --pull` to pull and start). Downloads are bandwidth-capped
-   and resumable.
+4. Only after the user agrees, download: `fxlla pull <alias> --yes` (or
+   `fxlla on <alias> --pull --yes`). Downloads are bandwidth-capped and resumable.
+
+`--yes` is required, not decoration. You have no terminal, so a transfer over the
+threshold refuses without it. Treat that refusal as the flow working: relay the
+size, get agreement, then re-run with `--yes`. Do not set `FXLLA_ASSUME_YES` to
+get around the question. The same applies to a render whose weights are missing:
+it refuses and names the `fxlla pull media:<alias>` command to fetch them.
 
 ## Thresholds
 

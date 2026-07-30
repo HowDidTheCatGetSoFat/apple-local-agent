@@ -72,6 +72,13 @@ interpreter must have `mlx-audio` installed (a project venv is the usual home).
   checks in `quality.py`. Per call, pass `--skip-quality` instead (an MCP client
   cannot set an environment variable on an already-running server).
 
+A generator downloads its weights from Hugging Face on first use, which is tens of
+gigabytes. `media/weights.py` checks the catalog against the cache before the
+toolchain starts and refuses unless the transfer was authorized with `--yes` or
+`FXLLA_ASSUME_YES=1`; `fxlla pull media:<alias>` fetches them deliberately. The
+check lives in `generate.py` rather than in `bin/fxlla` because a background job
+and an MCP tool call both re-invoke it directly.
+
 `ffprobe` is optional. When it is on PATH, video output is checked for a usable
 stream; without it the video checks are skipped rather than guessed, so the same
 render can be accepted on one machine and flagged on another. `fxlla doctor`

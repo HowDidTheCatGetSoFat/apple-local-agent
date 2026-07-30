@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Fixed
+- `fxlla on <alias>` registered the wrong model in opencode. It read the id from
+  the first entry of `/v1/models`, and `mlx_lm` now enumerates the whole Hugging
+  Face cache there, so whichever unrelated model sorted first was registered as
+  the local chat model. On a machine with diffusion weights cached that meant
+  opencode's `local` provider pointed at an image model. The id is now derived
+  from what was actually launched, per engine.
 - `fxlla skills install` no longer leaves stale skills behind. It never removed
   anything, so a renamed or deleted skill kept living in `~/.claude/skills` (and
   its path stayed in opencode's `instructions`) telling the model to reach for a
@@ -41,6 +47,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `<store>/graph/graph.kuzu` location on the next `fxlla graph index`.
 
 ### Added
+- Large downloads need consent. Any transfer over `FXLLA_CONFIRM_ABOVE_GB` (5 GB
+  by default) prompts at a terminal and refuses everywhere else, naming the size
+  and how to proceed. This covers all four routes that move bytes: catalog models
+  (both downloaders), `media:<alias>` weights, Civitai files, and the weights a
+  render fetches on first use. That last one was the widest hole: a first
+  `fxlla media image` pulled tens of gigabytes mid-render with nothing asked, and
+  because a background job and an MCP tool call both re-invoke `media/generate.py`
+  the check lives there rather than in the shell wrapper. `--yes` and
+  `FXLLA_ASSUME_YES=1` authorize; the menu bar app passes `--yes` because its own
+  dialog already showed the size. A size that cannot be read is treated as large,
+  a resumed pull asks about the remainder, and a refusal leaves no directories or
+  marker files behind.
 - Media output is checked for content, not only for a valid container: a header
   check passes for eight seconds of silence, which is a real failure mode of these
   toolchains. `media/quality.py` adds stdlib-only checks (silence, a constant

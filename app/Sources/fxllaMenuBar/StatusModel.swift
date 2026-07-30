@@ -80,7 +80,10 @@ final class StatusModel: ObservableObject {
     func pull(_ alias: String) {
         pulling.insert(alias)
         Task {
-            let (out, code) = await CLI.run(["pull", alias])
+            // The panel shows a confirmation dialog with the size before this
+            // runs, so the consent already happened; --yes says so. Without it the
+            // CLI would refuse, since a Process pipe has no terminal to ask on.
+            let (out, code) = await CLI.run(["pull", alias, "--yes"])
             pulling.remove(alias)
             if code != 0 { lastError = out.strippingANSI().trimmingCharacters(in: .whitespacesAndNewlines) }
             refresh()

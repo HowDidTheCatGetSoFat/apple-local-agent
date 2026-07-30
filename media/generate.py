@@ -32,6 +32,7 @@ import urllib.request
 
 import jobs  # background media jobs (submit, poll, cancel)
 import quality  # perceptual checks on the produced file
+import weights  # consent for the weights a render would download
 
 # Set by --skip-quality. An MCP client cannot set an environment variable on an
 # already-running server, so the flag is the only override available there.
@@ -511,6 +512,8 @@ def main():
                         help="submit as a background job and print its id")
         sp.add_argument("--skip-quality", action="store_true",
                         help="accept output that fails the content checks")
+        sp.add_argument("--yes", "-y", dest="yes", action="store_true",
+                        help="authorize downloading any missing weights")
 
     sub.add_parser("models")
     jl = sub.add_parser("jobs")
@@ -525,6 +528,13 @@ def main():
     args = p.parse_args()
     global SKIP_QUALITY
     SKIP_QUALITY = bool(getattr(args, "skip_quality", False))
+    # A generator downloads its weights on first use. Ask before that happens,
+    # here rather than in the shell wrapper, because a background job and an MCP
+    # tool call both re-invoke this module directly.
+    if args.cmd in ("image", "video", "voice", "edit", "upscale"):
+        if not getattr(args, "yes", False):
+            weights.require(args.cmd, getattr(args, "model", None) or DEFAULT_MODEL
+                            if args.cmd == "image" else None)
     if getattr(args, "run_async", False):
         # Reuse the invocation verbatim (minus the flag) as the job's argv, so a
         # background job runs exactly the same generator as the direct call.

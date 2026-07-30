@@ -127,8 +127,15 @@ fxlla avail qwen3-coder
 ```
 
 `fxlla on <alias>` fails fast when the model is not cached; pass `--pull` to
-download first. This is what lets an agent offer a download (with size and time)
-and only pull after you agree, instead of blocking on a silent large download.
+download first.
+
+Any transfer over `FXLLA_CONFIRM_ABOVE_GB` (5 GB by default) needs consent. At a
+terminal you get a prompt with the size. Everywhere else (a script, an agent, an
+MCP call, or the weights a render would fetch on first use) it refuses and says to
+re-run with `--yes`, so tens of gigabytes never start unattended. `--yes` or
+`FXLLA_ASSUME_YES=1` authorizes, and a size the CLI cannot read is treated as
+large rather than waved through. Resuming an interrupted pull asks about the
+remainder, not the original size.
 
 ## MLX vs GGUF
 
