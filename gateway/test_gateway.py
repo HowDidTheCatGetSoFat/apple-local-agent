@@ -2,6 +2,7 @@ import importlib
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -47,6 +48,43 @@ class _FakeProc:
         pass
 
 
+class TestWaitReady(unittest.TestCase):
+    """A model switch waits on this loop, so its poll interval is the floor on
+    switching, and a backend that dies must not hold the whole timeout."""
+
+    def _manager(self):
+        return gw.Manager.__new__(gw.Manager)
+
+    def test_poll_interval_does_not_round_up_to_a_second(self):
+        # At a one-second interval a backend ready at 1.01s was reported at 2.0s.
+        self.assertLessEqual(gw.READY_POLL_INTERVAL, 0.2)
+
+    def test_a_dead_backend_fails_at_once(self):
+        class _Dead:
+            def poll(self):
+                return 1
+
+        start = time.monotonic()
+        self.assertFalse(self._manager()._wait_ready(9, timeout=5, proc=_Dead()))
+        self.assertLess(time.monotonic() - start, 1.0,
+                        "burned the timeout on a backend that had already exited")
+
+    def test_a_live_but_silent_backend_waits_out_the_budget(self):
+        # The opposite case: still loading, so the loop must keep waiting.
+        class _Alive:
+            def poll(self):
+                return None
+
+        start = time.monotonic()
+        self.assertFalse(self._manager()._wait_ready(9, timeout=0.5, proc=_Alive()))
+        self.assertGreaterEqual(time.monotonic() - start, 0.5)
+
+    def test_no_proc_behaves_as_before(self):
+        start = time.monotonic()
+        self.assertFalse(self._manager()._wait_ready(9, timeout=0.4))
+        self.assertGreaterEqual(time.monotonic() - start, 0.4)
+
+
 class TestEnsureColdLoad(unittest.TestCase):
     """The loader path must return a real model_field, not the None sentinel,
     on the very first request to a freshly-loaded model."""
@@ -57,7 +95,7 @@ class TestEnsureColdLoad(unittest.TestCase):
         try:
             gw.downloaded_models = lambda: {alias: {"size_mb": 1}}
             gw.subprocess.Popen = lambda *a, **k: _FakeProc()
-            gw.Manager._wait_ready = lambda self, port, timeout=180: True
+            gw.Manager._wait_ready = lambda self, port, timeout=180, proc=None: True
             return m.ensure(alias)
         finally:
             gw.downloaded_models, gw.subprocess.Popen, gw.Manager._wait_ready = saved
@@ -78,7 +116,7 @@ class TestEnsureColdLoad(unittest.TestCase):
             gw.downloaded_models = lambda: {"gguf-model": {"size_mb": 1}}
             gw.subprocess.Popen = lambda *a, **k: _FakeProc()
 
-            def wait_ready(self, port, timeout=180):
+            def wait_ready(self, port, timeout=180, proc=None):
                 self.epoch += 1   # an unload_all races this load
                 return True
             gw.Manager._wait_ready = wait_ready

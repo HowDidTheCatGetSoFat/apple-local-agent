@@ -32,6 +32,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import metrics  # noqa: E402  (local module, added to sys.path above)
 
+# Poll interval while waiting for a backend to answer. Small enough that a fast
+# model load is not rounded up to the next whole second.
+READY_POLL_INTERVAL = 0.05
 HOST = os.environ.get("FXLLA_HOST", "127.0.0.1")
 PORT = int(os.environ.get("FXLLA_PORT", "8080"))
 STORE = os.environ.get("FXLLA_STORE", "")
@@ -149,7 +152,13 @@ class Manager:
     def _resident_mb(self):
         return sum(b.size_mb for b in self.backends.values())
 
-    def _wait_ready(self, port, timeout=180):
+    # Waits for a freshly spawned backend to answer. The poll interval decides the
+    # floor on a model switch: a small model answers in about a second, and at a
+    # one-second interval the first probe missed it and the loop reported ready at
+    # two - a full second of sleep on every load. Watching the process as well
+    # turns a backend that dies on start into an immediate failure instead of
+    # burning the whole timeout.
+    def _wait_ready(self, port, timeout=180, proc=None):
         url = "http://127.0.0.1:%d/v1/models" % port
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -158,7 +167,10 @@ class Manager:
                     r.read()
                     return True
             except Exception:
-                time.sleep(1)
+                pass
+            if proc is not None and proc.poll() is not None:
+                return False  # it exited instead of listening
+            time.sleep(READY_POLL_INTERVAL)
         return False
 
     def _evict_one(self):
@@ -224,7 +236,7 @@ class Manager:
             log("loading %s on :%d (%d MB)" % (alias, port, size_mb))
             proc = subprocess.Popen([FXLLA_BIN, "_backend", alias, str(port)],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            ready = self._wait_ready(port)
+            ready = self._wait_ready(port, proc=proc)
         finally:
             with self.lock:
                 self.loading.pop(alias, None)

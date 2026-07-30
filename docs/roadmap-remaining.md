@@ -224,7 +224,11 @@ with its install-on-PATH action. What remains, in order:
    0.17s and the real cost was a one-second poll interval in fxlla's own health
    check. That is fixed, and reusing an already-running server covers the warm
    case without a daemon to supervise.
-2. Wan 2.2 as a second video backend - blocked on the correct invocation for
-   `mlx_video.wan_2.generate`, which needs the maintainer's venv.
+2. Wan 2.2 as a second video backend - DECLINED (maintainer, 2026-07-30). LTX-2.3
+   covers video, and a second backend is not worth the surface. For the record the
+   invocation was never actually blocked: `mlx_video.wan_2.generate` is the console
+   script name, and the module is `mlx_video.models.wan_2.generate`, which imports
+   and has its own CLI. It needs `--model-dir` pointing at MLX-converted weights,
+   which the ComfyUI-repackaged weights in the cache are not.
 3. Evals, as demand appears: measure quality and speed per model to choose with
    data instead of catalog notes.

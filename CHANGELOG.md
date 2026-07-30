@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Fixed
+- A gateway model switch no longer rounds up to the next whole second, and a
+  backend that dies on start fails immediately instead of holding the 180s
+  timeout. The wait loop polled once a second and never looked at the process it
+  was waiting for. Measured: a switch to a small model went from 1.28s to about
+  1.01s (four runs each), and a backend that had already exited went from burning
+  the entire budget to 0.01s.
 - `fxlla kb search` was five times slower than it needed to be. The embedding
   server is ready in about 0.17s, but the health check polled once a second, so
   the first probe missed it and every query slept a full second waiting for a
