@@ -223,16 +223,23 @@ Tier 1 and all of Tier 2 are done, and most of Tier 3 with them: RAG vector
 index, the KuzuDB code graph (both phases), async media jobs, and the bundled CLI
 with its install-on-PATH action. What remains, in order:
 
-1. RAG polish: optional MLX embeddings. The "persistent warm embedding server"
-   half turned out to be the wrong fix - measuring showed llama-server starts in
-   0.17s and the real cost was a one-second poll interval in fxlla's own health
-   check. That is fixed, and reusing an already-running server covers the warm
-   case without a daemon to supervise.
-2. Wan 2.2 as a second video backend - DECLINED (maintainer, 2026-07-30). LTX-2.3
+1. Evals: measure quality and speed per model, so a choice rests on data rather
+   than the catalog's prose. The largest remaining item and the one with the most
+   value - today there is no way to say a swap made anything better.
+2. Optional MLX embeddings - NOT worth doing for speed, on measurement. A real
+   `fxlla kb add` indexes 367 chunks in 2.7s (135 chunks/s), so a whole codebase is
+   tens of seconds once, and a query embedding costs 0.007s. An MLX path would add
+   a second implementation and a dependency to optimise something that is not a
+   bottleneck. The one honest reason left is model availability, not performance:
+   revisit only if a clearly better embedding model ships as MLX/safetensors and
+   never as GGUF.
+   (The "persistent warm embedding server" half of this item was also the wrong
+   fix: llama-server starts in 0.17s and the real cost was a one-second poll
+   interval in fxlla's own health check, now fixed.)
+3. Wan 2.2 as a second video backend - DECLINED (maintainer, 2026-07-30). LTX-2.3
    covers video, and a second backend is not worth the surface. For the record the
    invocation was never actually blocked: `mlx_video.wan_2.generate` is the console
    script name, and the module is `mlx_video.models.wan_2.generate`, which imports
    and has its own CLI. It needs `--model-dir` pointing at MLX-converted weights,
    which the ComfyUI-repackaged weights in the cache are not.
-3. Evals, as demand appears: measure quality and speed per model to choose with
-   data instead of catalog notes.
+
