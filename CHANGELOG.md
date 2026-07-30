@@ -17,7 +17,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   against `uv.lock`/`requirements*.txt`, neither of which exists here (this repo
   gets dependencies from `uv run --with`), so the cache never invalidated.
 - `ludeeus/action-shellcheck` is pinned to a release SHA instead of tracking
-  that repository's `master`.
+  that repository's `master`, and `github/codeql-action` moved to v4 (v3 warned
+  on every run that it is deprecated in December 2026). Every workflow now runs
+  warning-free.
 
 ### Changed
 - Code graph now uses an embedded KuzuDB graph (Cypher) instead of a flat SQLite
