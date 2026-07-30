@@ -5,6 +5,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Fixed
+- CodeQL analyzes the Python sources again. It was narrowed to workflow files
+  early on, when the repo had no Python and CodeQL failed the run for a language
+  with no source; there are now ~6,700 lines across `gateway`, `rag`, `graph`,
+  and `media` that were never scanned, and the green check only covered the
+  workflows. It now runs a matrix of `actions` plus `python`, on pull requests
+  and on pushes to `main` (so the default branch has a baseline).
+- CI stopped warning on every run: `actions/checkout` and `astral-sh/setup-uv`
+  were on majors that target the deprecated Node 20, and `setup-uv` cached
+  against `uv.lock`/`requirements*.txt`, neither of which exists here (this repo
+  gets dependencies from `uv run --with`), so the cache never invalidated.
+- `ludeeus/action-shellcheck` is pinned to a release SHA instead of tracking
+  that repository's `master`.
+
 ### Changed
 - Code graph now uses an embedded KuzuDB graph (Cypher) instead of a flat SQLite
   store. `fxlla graph impact` is a Cypher variable-length path over a derived

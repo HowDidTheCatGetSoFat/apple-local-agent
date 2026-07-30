@@ -36,13 +36,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Syntax check
         run: bash -n bin/fxlla lib/core.sh tests/test_config.sh tests/test_completions.sh tests/test_avail.sh tests/test_skills.sh tests/test_civitai.sh tests/test_pull.sh tests/test_ram.sh tests/test_wire.sh tests/test_media_weights.sh
 
       - name: ShellCheck
-        uses: ludeeus/action-shellcheck@master
+        # Pinned to a release SHA: @master runs whatever that repo's tip is.
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
         with:
           scandir: "."
           additional_files: "fxlla"
@@ -81,13 +82,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Unit tests
         run: FXLLA_STORE=/tmp python3 -m unittest rag.test_rag graph.test_graph gateway.test_gateway gateway.test_metrics gateway.test_gateway_e2e media.test_media -v
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v9
+        with:
+          # No uv.lock or requirements file in this repo (dependencies come from
+          # `uv run --with`), so a cache key would never invalidate.
+          enable-cache: false
 
       - name: Extension-backed tests (kuzu, sqlite-vec, tree-sitter)
         # Exercise the code-graph and RAG-index tests that self-skip without the

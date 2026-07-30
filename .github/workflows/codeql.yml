@@ -1,10 +1,20 @@
 name: CodeQL
 
-# Runs only when workflow files change, since that is the only analyzable
-# source today. Python and Swift are added when their source lands.
+# Analyzes the Python sources (gateway, rag, graph, media) and the workflow
+# files. Python was dropped early on because the repo had none yet and CodeQL
+# fails the run when a configured language has no source; it does now, so it is
+# back. Swift is deliberately absent: CodeQL needs a real build for it, which
+# would spend macOS runner minutes on every change (app.yml is path-filtered to
+# avoid exactly that).
 on:
+  push:
+    branches: [main]
+    paths:
+      - "**.py"
+      - ".github/workflows/**"
   pull_request:
     paths:
+      - "**.py"
       - ".github/workflows/**"
 
 concurrency:
@@ -17,19 +27,23 @@ permissions:
 
 jobs:
   analyze:
-    name: Analyze (actions)
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, python]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: actions
+          languages: ${{ matrix.language }}
           queries: security-and-quality
 
       - name: Analyze
         uses: github/codeql-action/analyze@v3
         with:
-          category: "/language:actions"
+          category: "/language:${{ matrix.language }}"
