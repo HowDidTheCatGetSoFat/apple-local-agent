@@ -2,6 +2,21 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-29: RAG MCP through the vector index
+
+Follow-up to the RAG vector index: the MCP `rag_search` still ran the brute-force
+scan because the server spawned system python3. Fixed with the same trick used
+for the code graph MCP: `fxlla kb mcp` now launches `rag_mcp.py` under the kb
+python (`uv run --with sqlite-vec` when `FXLLA_KB_INDEX` is on), so the server's
+`sys.executable` re-invocation of `core.py` inherits sqlite-vec. `rag_mcp.py` is
+unchanged. `wire-opencode` registers the resolved interpreter as the command and
+forwards `FXLLA_STORE`/`FXLLA_EMBED_PORT`/`FXLLA_KB_INDEX`, so re-running it after
+toggling the index refreshes the registration. A CI shell test
+(`tests/test_wire.sh`) pins the command/env selection for both states; the MCP
+path was verified end to end against the live embedder. `core.py` still falls
+back to the scan when the extension will not load, so nothing breaks with the
+index off.
+
 ## 2026-07-29: Code graph on KuzuDB (Phase A)
 
 Second step of the RAG/KuzuDB priority. Swapped the code graph's flat SQLite

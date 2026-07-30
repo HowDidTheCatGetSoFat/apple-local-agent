@@ -242,7 +242,10 @@ fxlla kb search docs "how does eviction work"
 
 With the index on, `fxlla kb` runs under `uv run --with sqlite-vec` (no
 persistent install); it falls back to the scan automatically when the extension
-is unavailable, and the results are identical either way.
+is unavailable, and the results are identical either way. The MCP server picks up
+the same setting, so `rag_search` uses the index too; re-run
+`fxlla kb wire-opencode` after changing `FXLLA_KB_INDEX` to refresh the
+registration.
 
 ## Code graph
 

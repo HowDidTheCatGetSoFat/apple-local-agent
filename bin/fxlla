@@ -987,25 +987,37 @@ cmd_rm() {
 # python that can load sqlite extensions; the system python often cannot, so with
 # FXLLA_KB_INDEX on we run under `uv run --with sqlite-vec` (uv is a hard dep).
 # FXLLA_KB_PYTHON overrides with an explicit interpreter for advanced setups.
+# Pure resolution: it never checks for uv, so wire-opencode can register the uv
+# command on a machine where uv is only present at run time. Callers that execute
+# KB_PY guard it with `_need_kb_uv`.
 _kb_python() {
   if [ -n "${FXLLA_KB_PYTHON:-}" ]; then
     KB_PY=("$FXLLA_KB_PYTHON")
   elif is_true "${FXLLA_KB_INDEX:-}"; then
-    need uv
     KB_PY=(uv run --with sqlite-vec --no-project python)
   else
     KB_PY=(python3)
   fi
 }
 
+# Requires uv only when KB_PY actually runs under it (index on, no override).
+_need_kb_uv() { [ "${KB_PY[0]}" = uv ] && need uv || true; }
+
 # RAG knowledge bases (delegates to rag/core.py; MCP server for opencode/Claude)
 cmd_kb() {
   need python3; require_store
+  local KB_PY; _kb_python
   case "${1:-}" in
-    mcp)           exec env FXLLA_STORE="$FXLLA_STORE" python3 "$REPO_ROOT/rag/rag_mcp.py" ;;
+    # Run the MCP server under the kb python so its own core.py subprocess
+    # (spawned via sys.executable) inherits sqlite-vec when the index is on.
+    mcp)           _need_kb_uv
+                   exec env FXLLA_STORE="$FXLLA_STORE" \
+                     FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
+                     FXLLA_KB_INDEX="${FXLLA_KB_INDEX:-}" \
+                     "${KB_PY[@]}" "$REPO_ROOT/rag/rag_mcp.py" ;;
     wire-opencode) _wire_rag_mcp; return ;;
   esac
-  local KB_PY; _kb_python
+  _need_kb_uv
   FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
   FXLLA_KB_INDEX="${FXLLA_KB_INDEX:-}" \
     "${KB_PY[@]}" "$REPO_ROOT/rag/core.py" "$@"
@@ -1015,7 +1027,11 @@ cmd_kb() {
 _wire_rag_mcp() {
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   mkdir -p "$(dirname "$cfg")"
-  CFG="$cfg" MCP="$REPO_ROOT/rag/rag_mcp.py" STORE="$FXLLA_STORE" python3 - <<'PY'
+  local KB_PY; _kb_python
+  CFG="$cfg" MCP="$REPO_ROOT/rag/rag_mcp.py" STORE="$FXLLA_STORE" \
+  EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" KB_INDEX="${FXLLA_KB_INDEX:-}" \
+  KB_PY_JSON="$(printf '%s\n' "${KB_PY[@]}" | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin]))')" \
+  python3 - <<'PY'
 import os, json
 cfg = os.environ["CFG"]
 try:
@@ -1026,8 +1042,12 @@ data.setdefault("$schema", "https://opencode.ai/config.json")
 mcp = data.setdefault("mcp", {})
 mcp["fxlla-rag"] = {
     "type": "local",
-    "command": ["python3", os.environ["MCP"]],
-    "environment": {"FXLLA_STORE": os.environ["STORE"]},
+    "command": json.loads(os.environ["KB_PY_JSON"]) + [os.environ["MCP"]],
+    "environment": {
+        "FXLLA_STORE": os.environ["STORE"],
+        "FXLLA_EMBED_PORT": os.environ["EMBED_PORT"],
+        "FXLLA_KB_INDEX": os.environ["KB_INDEX"],
+    },
     "enabled": True,
 }
 with open(cfg, "w") as f: json.dump(data, f, indent=2)
