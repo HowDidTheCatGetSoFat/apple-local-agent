@@ -6,6 +6,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Fixed
+- `fxlla skills install` no longer leaves stale skills behind. It never removed
+  anything, so a renamed or deleted skill kept living in `~/.claude/skills` (and
+  its path stayed in opencode's `instructions`) telling the model to reach for a
+  tool that had changed. Install now prunes skills it previously installed that
+  the repo no longer ships, identified by a marker file so directories it did not
+  create - other tools' skills, and your own `instructions` entries - are left
+  untouched. It also validates each skill's frontmatter first and aborts the whole
+  run if one is malformed, rather than half-installing a pack a client will
+  silently ignore. New `fxlla skills status` reports each installed copy as
+  current, drifted, or missing, and `fxlla doctor` summarises it.
 - CodeQL analyzes the Python sources again. It was narrowed to workflow files
   early on, when the repo had no Python and CodeQL failed the run for a language
   with no source; there are now ~6,700 lines across `gateway`, `rag`, `graph`,
