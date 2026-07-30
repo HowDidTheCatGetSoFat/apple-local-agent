@@ -544,8 +544,38 @@ cmd_skills() {
     ls|list)
       local d
       for d in "$REPO_ROOT/skills"/*/; do [ -d "$d" ] && basename "$d"; done ;;
-    *) die "usage: fxlla skills install [--client all|opencode|claude]" ;;
+    status) _skills_status ;;
+    *) die "usage: fxlla skills install [--client all|opencode|claude] | ls | status" ;;
   esac
+}
+
+# Compares each installed copy against the repo. An installed copy that drifted
+# is worse than a missing one: the model keeps following stale guidance.
+_skills_status() {
+  local src="$REPO_ROOT/skills" d name
+  local claude="$HOME/.claude/skills"
+  local store="${XDG_DATA_HOME:-$HOME/.local/share}/fxlla/skills"
+  printf '%-22s %-14s %s\n' SKILL CLAUDE OPENCODE
+  for d in "$src"/*/; do
+    [ -f "$d/SKILL.md" ] || continue
+    name="$(basename "$d")"
+    printf '%-22s %-14s %s\n' "$name" \
+      "$(_skill_state "$d/SKILL.md" "$claude/$name/SKILL.md")" \
+      "$(_skill_state "$d/SKILL.md" "$store/$name/SKILL.md")"
+  done
+  echo
+  info "Refresh with: fxlla skills install"
+}
+
+# current | differs | missing, by content hash
+_skill_state() {
+  local repo="$1" installed="$2"
+  [ -f "$installed" ] || { printf 'missing'; return; }
+  if [ "$(shasum -a 256 < "$repo" | cut -d' ' -f1)" = "$(shasum -a 256 < "$installed" | cut -d' ' -f1)" ]; then
+    printf 'current'
+  else
+    printf 'differs'
+  fi
 }
 
 _skills_install() {
@@ -560,19 +590,99 @@ _skills_install() {
   case "$client" in all|opencode|claude) ;; *) die "unknown client: $client (all|opencode|claude)" ;; esac
   local src="$REPO_ROOT/skills"
   [ -d "$src" ] || die "no skills directory at $src"
+  # Validate every skill before writing anything, so a bad one cannot leave a
+  # half-installed pack behind.
+  _skills_validate "$src" || die "fix the skill(s) above and re-run"
   [ "$client" = opencode ] || _skills_install_claude "$src"
   [ "$client" = claude ] || _skills_install_opencode "$src"
+}
+
+# A client silently ignores a skill whose frontmatter is malformed, and the
+# symptom is "the model just never uses the tool", which is near-undebuggable.
+# Check the three things that actually break loading.
+_skills_validate() {
+  need python3
+  SRC="$1" python3 - <<'PY'
+import os, re, sys, glob
+
+NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+problems = []
+for path in sorted(glob.glob(os.path.join(os.environ["SRC"], "*", "SKILL.md"))):
+    directory = os.path.basename(os.path.dirname(path))
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    if not text.startswith("---\n"):
+        problems.append(f"{directory}: no YAML frontmatter (must start with ---)")
+        continue
+    end = text.find("\n---", 3)
+    if end == -1:
+        problems.append(f"{directory}: frontmatter is not closed with ---")
+        continue
+    fields = {}
+    for line in text[4:end].splitlines():
+        if line.startswith((" ", "\t")) or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        fields[key.strip()] = value.strip()
+    name = fields.get("name", "")
+    description = fields.get("description", "")
+    if not NAME_RE.match(name):
+        problems.append(f"{directory}: name '{name}' must be lowercase words joined by -")
+    elif len(name) > 64:
+        problems.append(f"{directory}: name is longer than 64 characters")
+    elif name != directory:
+        problems.append(f"{directory}: frontmatter name '{name}' must match the directory")
+    if not description:
+        problems.append(f"{directory}: description is empty")
+    elif len(description) > 1024:
+        problems.append(f"{directory}: description is longer than 1024 characters")
+
+for p in problems:
+    print("  invalid skill: " + p, file=sys.stderr)
+sys.exit(1 if problems else 0)
+PY
+}
+
+# Marker written into every skill directory fxlla installs. ~/.claude/skills is
+# shared with other tools, so only directories carrying this file may be removed.
+SKILL_MARKER=".fxlla-managed"
+
+# Removes managed skill directories under $1 that the repo no longer ships, so a
+# renamed or deleted skill stops telling the model to use a tool that changed.
+_skills_prune() {
+  local dest="$1" src="$2" d name removed=0
+  [ -d "$dest" ] || return 0
+  for d in "$dest"/*/; do
+    [ -d "$d" ] || continue
+    name="$(basename "$d")"
+    [ -f "$d/$SKILL_MARKER" ] || continue   # not ours: leave it alone
+    [ -f "$src/$name/SKILL.md" ] && continue
+    rm -rf "$d"
+    removed=$((removed + 1))
+    info "removed stale skill: $name"
+  done
+  return 0
+}
+
+# Copies one skill directory wholesale (SKILL.md plus any references/ or
+# scripts/), replacing the destination so a file dropped upstream does not linger.
+_skills_copy_one() {
+  local from="$1" to="$2"
+  rm -rf "$to"
+  mkdir -p "$to"
+  cp -R "$from/." "$to/"
+  printf 'installed by fxlla; safe to delete\n' > "$to/$SKILL_MARKER"
 }
 
 # Claude Code reads skills from ~/.claude/skills/<name>/SKILL.md.
 _skills_install_claude() {
   local src="$1" dest="$HOME/.claude/skills" d name
   mkdir -p "$dest"
+  _skills_prune "$dest" "$src"
   for d in "$src"/*/; do
     [ -f "$d/SKILL.md" ] || continue
     name="$(basename "$d")"
-    mkdir -p "$dest/$name"
-    cp "$d/SKILL.md" "$dest/$name/SKILL.md"
+    _skills_copy_one "$d" "$dest/$name"
   done
   ok "Claude Code skills installed: $dest"
 }
@@ -584,11 +694,11 @@ _skills_install_opencode() {
   local src="$1" cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   local store="${XDG_DATA_HOME:-$HOME/.local/share}/fxlla/skills" d name
   need python3; mkdir -p "$(dirname "$cfg")" "$store"
+  _skills_prune "$store" "$src"
   for d in "$src"/*/; do
     [ -f "$d/SKILL.md" ] || continue
     name="$(basename "$d")"
-    mkdir -p "$store/$name"
-    cp "$d/SKILL.md" "$store/$name/SKILL.md"
+    _skills_copy_one "$d" "$store/$name"
   done
   CFG="$cfg" SRC="$store" python3 - <<'PY'
 import os, json, glob
@@ -598,11 +708,17 @@ try:
 except Exception:
     data = {}
 data.setdefault("$schema", "https://opencode.ai/config.json")
-paths = sorted(glob.glob(os.path.join(os.environ["SRC"], "*", "SKILL.md")))
+store = os.environ["SRC"]
+paths = sorted(glob.glob(os.path.join(store, "*", "SKILL.md")))
 instr = data.setdefault("instructions", [])
+# Drop entries under fxlla's own store that no longer exist (a renamed or removed
+# skill), and leave every other entry the user configured untouched.
+prefix = store.rstrip(os.sep) + os.sep
+kept = [i for i in instr if not (isinstance(i, str) and i.startswith(prefix)) or i in paths]
 for p in paths:
-    if p not in instr:
-        instr.append(p)
+    if p not in kept:
+        kept.append(p)
+data["instructions"] = kept
 with open(cfg, "w") as f: json.dump(data, f, indent=2)
 print(cfg)
 PY
@@ -1047,6 +1163,25 @@ cmd_doctor() {
     fi
   fi
 
+  # An installed skill that drifted from the repo keeps steering the model with
+  # stale guidance, which is invisible unless something checks.
+  info "Skills"
+  local sdir stotal=0 scurrent=0 sname
+  for sdir in "$REPO_ROOT/skills"/*/; do
+    [ -f "$sdir/SKILL.md" ] || continue
+    sname="$(basename "$sdir")"
+    stotal=$((stotal + 1))
+    [ "$(_skill_state "$sdir/SKILL.md" "$HOME/.claude/skills/$sname/SKILL.md")" = current ] \
+      && scurrent=$((scurrent + 1))
+  done
+  if [ "$stotal" -eq 0 ]; then
+    _chk warn "no skills found in $REPO_ROOT/skills"
+  elif [ "$scurrent" -eq "$stotal" ]; then
+    _chk ok "skills: $scurrent/$stotal installed and current (Claude Code)"
+  else
+    _chk warn "skills: $scurrent/$stotal current for Claude Code (run: fxlla skills install)"
+  fi
+
   info "Server"
   if server_alive; then
     if curl -sf "$BASE_URL/models" >/dev/null 2>&1; then _chk ok "server up and responding ($BASE_URL)"; else _chk warn "server process alive but not responding yet"; fi
@@ -1312,7 +1447,7 @@ cmd_complete() {
     graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
                   mcp wire-opencode ;;
     media)      printf '%s\n' image video voice edit upscale models weights jobs job cancel mcp wire-opencode ;;
-    skills)     printf '%s\n' install ls ;;
+    skills)     printf '%s\n' install ls status ;;
   esac
 }
 

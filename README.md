@@ -364,6 +364,7 @@ a model when to use them:
 ```sh
 fxlla wire-opencode --all     # provider + rag, graph, and media MCP servers + skills
 fxlla skills install          # the skill pack for opencode and Claude Code
+fxlla skills status           # is each installed copy current, drifted, or missing
 ```
 
 The skill pack (`skills/`) is guidance, not code: retrieve from a knowledge base
@@ -371,6 +372,14 @@ before answering, walk the code graph before editing, offer media generation,
 and check availability and consent before a download. Registering a tool makes
 it callable; the skills make a model reach for it at the right time. Install is
 idempotent; restart the client to load them.
+
+Install validates each skill's frontmatter first and refuses the whole run if one
+is malformed, since a client silently ignores a broken skill and the only symptom
+is a model that never reaches for the tool. It also removes skills it previously
+installed that the repo no longer ships, so a renamed one stops advertising a tool
+that changed - and it only ever touches directories it created, leaving skills
+from other tools (and your own `instructions` entries) alone. `fxlla doctor`
+reports whether the installed copies are current.
 
 ## How it fits together
 
