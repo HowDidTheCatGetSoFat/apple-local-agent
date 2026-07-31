@@ -856,6 +856,18 @@ class TestIdeogramCaption(unittest.TestCase):
                      "desc": "chrome lighter, lid open, tall flame"}]}})
         self.assertEqual(media.check_ideogram_caption(caption), [])
 
+    def test_the_documented_example_passes_its_own_validator(self):
+        # The schema handed to a model through list_media_models must agree
+        # with the one enforced here, or fxlla teaches a format it rejects.
+        example = json.dumps(media.IDEOGRAM_PROMPT_FORMAT["example"])
+        self.assertEqual(media.check_ideogram_caption(example), [])
+
+    def test_the_documented_schema_states_the_traps(self):
+        fmt = media.IDEOGRAM_PROMPT_FORMAT
+        self.assertIn("Y FIRST", fmt["element"]["bbox"])
+        self.assertIn("0..1000", fmt["element"]["bbox"])
+        self.assertIn("UPPERCASE", fmt["colors"])
+
     def test_a_missing_composition_section_is_flagged(self):
         problems = media.check_ideogram_caption(
             json.dumps({"high_level_description": "just a description"}))

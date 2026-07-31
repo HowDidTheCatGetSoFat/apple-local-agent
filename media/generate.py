@@ -861,6 +861,46 @@ def cmd_upscale(args):
 LORA_STYLES = ("couple", "font", "home", "identity", "illustration",
                "portrait", "ppt", "sandstorm", "sparklers", "storyboard")
 
+# What a caller needs to BUILD an Ideogram 4 caption, not just to be told one
+# exists. Without this a model has to guess the key names and the bbox
+# convention, and the axis order is not guessable: Y comes first.
+IDEOGRAM_PROMPT_FORMAT = {
+    "when": "Pass this JSON object as the prompt for ideogram4. Plain prose "
+            "also works; use JSON when you need text or objects placed.",
+    "keys": {
+        "high_level_description": "one sentence describing the whole image",
+        "style_description": "object with aesthetics, lighting, medium, and "
+                             "either art_style or photo, plus an optional "
+                             "color_palette of up to 16 colors",
+        "compositional_deconstruction": "object with background (a string) and "
+                                        "elements (a list)",
+    },
+    "element": {
+        "type": "obj or text",
+        "bbox": "[y_min, x_min, y_max, x_max] - Y FIRST - integers in a "
+                "0..1000 space, y_min <= y_max and x_min <= x_max",
+        "text": "the literal characters to render (required when type is text)",
+        "desc": "what it looks like",
+        "color_palette": "up to 5 colors for this element",
+    },
+    "colors": "UPPERCASE #RRGGBB, e.g. #F2B134 (lowercase is rejected)",
+    "example": {
+        "high_level_description": "A vintage poster of a chrome lighter.",
+        "style_description": {
+            "aesthetics": "mid-century travel poster, flat vector shapes",
+            "lighting": "warm rim light, soft vignette",
+            "medium": "screen print",
+            "art_style": "retro Swiss design",
+            "color_palette": ["#0D3B45", "#F2B134"]},
+        "compositional_deconstruction": {
+            "background": "flat deep teal field",
+            "elements": [
+                {"type": "text", "bbox": [80, 120, 240, 880], "text": "ZIPPO",
+                 "desc": "condensed display type", "color_palette": ["#E8E3D3"]},
+                {"type": "obj", "bbox": [300, 330, 760, 670],
+                 "desc": "chrome lighter, lid open, tall flame"}]}},
+}
+
 
 def cmd_models(args):
     if getattr(args, "json", False):
@@ -870,6 +910,7 @@ def cmd_models(args):
                            "caps": sorted(s["caps"]), "note": s["note"]}
                        for n, s in MODELS.items()},
             "lora_styles": list(LORA_STYLES),
+            "prompt_formats": {"ideogram4": IDEOGRAM_PROMPT_FORMAT},
         }, indent=1))
         return
     print("%-14s %-9s %s" % ("MODEL", "STEPS", "NOTE"))

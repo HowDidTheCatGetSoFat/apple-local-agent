@@ -25,8 +25,10 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "prompt": {"type": "string"},
          "model": {"type": "string",
-                   "description": "Model name (default z-image-turbo). "
-                                  "See 'fxlla media models'."},
+                   "description": "Model name (default z-image-turbo). Call "
+                                  "list_media_models for the list, what each "
+                                  "supports, and the JSON caption schema that "
+                                  "ideogram4 accepts as its prompt."},
          "steps": {"type": "integer"},
          "seed": {"type": "integer"},
          "width": {"type": "integer"},
@@ -148,9 +150,11 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "list_media_models",
      "description": "Image models available locally, each with the options it "
-                    "supports (negative prompt, LoRA, dimensions, ...), plus "
-                    "the built-in LoRA styles and which model is the default. "
-                    "Call this instead of guessing model names or flags.",
+                    "supports (negative prompt, LoRA, dimensions, ...), the "
+                    "built-in LoRA styles, which model is the default, and "
+                    "prompt_formats: the JSON caption schema for models that "
+                    "take one (ideogram4), with an example. Call this instead "
+                    "of guessing model names, flags, or prompt structure.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "list_media_jobs",
      "description": "List background media jobs, newest first.",
