@@ -670,6 +670,46 @@ class TestJobs(unittest.TestCase):
         self.assertIn("ValueError: bad input", jobs.describe(rec))
 
 
+class TestVideoImageAnchors(unittest.TestCase):
+    # Image-to-video. Asked for "a video transitioning between these two
+    # images", a model instead described them in the prompt and produced an
+    # unrelated clip: without anchors the stills are never used at all.
+    def _img(self):
+        import tempfile
+        p = os.path.join(tempfile.mkdtemp(), "ref.png")
+        open(p, "wb").write(media.PNG_MAGIC + b"0" * 64)
+        return p
+
+    def test_a_bare_path_anchors_the_opening_frame(self):
+        p = self._img()
+        cmd = media.build_video_command("x", "/o.mp4", images=[p])
+        self.assertEqual(cmd[cmd.index("--image") + 1], p)
+
+    def test_two_anchors_repeat_the_flag(self):
+        a, b = self._img(), self._img()
+        cmd = media.build_video_command("x", "/o.mp4",
+                                        images=[[a, "0", "1.0"], [b, "96", "1.0"]])
+        self.assertEqual(cmd.count("--image"), 2)
+        first = cmd.index("--image")
+        self.assertEqual(cmd[first + 1:first + 4], [a, "0", "1.0"])
+
+    def test_a_missing_reference_is_named(self):
+        # Otherwise it surfaces as a generic backend failure minutes later.
+        with self.assertRaises(ValueError) as ctx:
+            media.build_video_command("x", "/o.mp4", images=["/no/such.png"])
+        self.assertIn("/no/such.png", str(ctx.exception))
+
+    def test_no_images_leaves_the_flag_out(self):
+        self.assertNotIn("--image", media.build_video_command("x", "/o.mp4"))
+
+    def test_the_flag_is_the_one_the_backend_accepts(self):
+        # A model invented --images (plural); neither generate.py nor ltx has
+        # it, so every call would have died in argparse.
+        p = self._img()
+        cmd = media.build_video_command("x", "/o.mp4", images=[p])
+        self.assertNotIn("--images", cmd)
+
+
 class TestResolveOutput(unittest.TestCase):
     # Passing a directory ("put it in ~/Downloads") used to reach the backend
     # as a filename and fail deep inside it. A real model hit exactly that and

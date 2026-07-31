@@ -54,8 +54,12 @@ TOOLS = [
          "height": {"type": "integer"},
          "seed": {"type": "integer"},
          "images": {"type": "array", "items": {"type": "string"},
-                    "description": "Reference images for I2V video generation. "
-                                   "Form: [path, path, ...]"},
+                    "description": "Reference image paths for image-to-video. "
+                                   "One anchors the opening frame; two anchor "
+                                   "both ends, which is how a transition "
+                                   "between two stills is produced. Describing "
+                                   "the images in the prompt instead makes a "
+                                   "different video that merely resembles them."},
      }, "required": ["prompt"]}},
     {"name": "generate_speech",
      "description": "Synthesize speech from text using the local mlx-audio "
@@ -122,7 +126,9 @@ _VIDEO_FLAGS = [("stage", "--stage"), ("seconds", "--seconds"),
                 ("frames", "--frames"),
                 ("frame_rate", "--frame-rate"), ("width", "--width"),
                 ("height", "--height"), ("seed", "--seed"), ("model", "--model"),
-                ("images", "--images")]
+                # generate.py takes --image (singular, repeatable), mirroring
+                # ltx's own flag. --images does not exist in either.
+                ("images", "--image")]
 _VOICE_FLAGS = [("ref", "--ref"), ("lang", "--lang"), ("speed", "--speed"),
                 ("model", "--model")]
 _EDIT_FLAGS = [("image", "--image"), ("seed", "--seed"), ("quantize", "--quantize")]
@@ -142,12 +148,15 @@ def _run(subcmd, positional, flags, args):
     cmd = [sys.executable, MEDIA, subcmd, str(value)]
     for key, flag in flags:
         val = args.get(key)
-        if val is not None:
-            if key == "images" and isinstance(val, list):
-                for img in val:
-                    cmd += [flag, str(img)]
-            else:
-                cmd += [flag, str(val)]
+        if val is None:
+            continue
+        # A list argument repeats its flag rather than being stringified: one
+        # --image per reference, which is what anchoring several frames needs.
+        if isinstance(val, list):
+            for item in val:
+                cmd += [flag, str(item)]
+        else:
+            cmd += [flag, str(val)]
     if args.get("async"):
         cmd.append("--async")
     if args.get("skip_quality"):

@@ -300,6 +300,16 @@ def build_video_command(prompt, output, stage=DEFAULT_STAGE, frames=None,
     cmd = [bin_path or VIDEO_BIN, "generate", "--%s" % stage,
            "--prompt", prompt, "--output", output,
            "--frame-rate", str(frame_rate if frame_rate is not None else DEFAULT_FRAME_RATE)]
+    # Image-to-video anchors. ltx takes `--image PATH [FRAME_IDX STRENGTH]`,
+    # repeatable: one image anchors the opening frame, two anchor both ends,
+    # which is how a transition between two stills is actually produced. A
+    # missing file would otherwise surface as a generic backend failure.
+    for ref in images or []:
+        parts = ref if isinstance(ref, (list, tuple)) else [ref]
+        path = str(parts[0])
+        if not os.path.isfile(path):
+            raise ValueError("reference image not found: %s" % path)
+        cmd += ["--image"] + [str(p) for p in parts]
     if model:
         cmd += ["--model", model]
     if frames:
@@ -312,9 +322,6 @@ def build_video_command(prompt, output, stage=DEFAULT_STAGE, frames=None,
         cmd += ["--seed", str(seed)]
     if low_ram:
         cmd += ["--low-ram"]
-    if images:
-        for img in images:
-            cmd += ["--image", img]
     return cmd
 
 
@@ -482,7 +489,8 @@ def cmd_video(args):
     path = generate_video(
         args.prompt, stage=args.stage, frames=frames, frame_rate=args.frame_rate,
         width=args.width, height=args.height, seed=args.seed, low_ram=args.low_ram,
-        model=args.model, output=args.output, keep_models=args.keep_models)
+        model=args.model, output=args.output, keep_models=args.keep_models,
+        images=args.images)
     print(path)
     # The measured result, not the request: a caller reading back its own
     # --frames has no way to know what the backend actually produced, and one
@@ -595,6 +603,13 @@ def main():
     vi.add_argument("--height", type=int)
     vi.add_argument("--seed", type=int)
     vi.add_argument("--model", "-m")
+    # Image-to-video: PATH alone anchors the opening frame; PATH FRAME STRENGTH
+    # anchors any frame. Repeat it to anchor both ends, which is what a
+    # transition between two stills actually needs - describing the two images
+    # in the prompt produces a different video that merely resembles them.
+    vi.add_argument("--image", action="append", nargs="+", dest="images",
+                    metavar="PATH [FRAME STRENGTH]",
+                    help="reference image for I2V; repeatable")
     vi.add_argument("--low-ram", action="store_true")
     vi.add_argument("--output", "-o")
 

@@ -6,6 +6,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- Image-to-video: `fxlla media video --image PATH [FRAME STRENGTH]`, repeatable,
+  and `images` on the `generate_video` MCP tool. One reference anchors the
+  opening frame, two anchor both ends, which is how a transition between two
+  stills is actually produced - describing the images in the prompt instead
+  yields a different video that merely resembles them, which is exactly what a
+  model did when asked for one. A reference path that does not exist is named
+  up front rather than surfacing as a backend failure minutes later.
+
+### Added
 - `fxlla setup --media` installs the media backends the way everything else
   gets installed: as uv tools at pinned versions (mflux-cv, mlx-audio from
   PyPI; ltx-2-mlx has no PyPI release, so its pin is a commit on the public
