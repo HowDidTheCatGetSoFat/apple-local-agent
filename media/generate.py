@@ -59,6 +59,7 @@ SKIP_QUALITY = False
 STORE = os.environ.get("FXLLA_STORE", "")
 OUT_DIR = os.environ.get("FXLLA_MEDIA_OUT") or os.path.join(STORE, "media")
 DEFAULT_MODEL = os.environ.get("FXLLA_MEDIA_MODEL", "z-image-turbo")
+DEFAULT_QUANTIZE = 8
 VIDEO_BIN = os.environ.get("FXLLA_VIDEO_BIN", "ltx-2-mlx")
 # Instruction-based image edit and diffusion upscale are separate mflux-cv CLIs.
 # One directory for the whole mflux family (image models, edit, upscale):
@@ -89,6 +90,21 @@ def resolve_output(output, kind, ext):
     return output
 
 
+def split_ref(ref):
+    """A reference and its numeric modifiers, as a list of strings.
+
+    Accepts "path,0.8" or ["path", "0.8"]. The comma form is what the CLI and
+    the MCP use, for two reasons: argparse `nargs="+"` swallows the following
+    positional (`--lora x "a cat"` ate the prompt), and a JSON array of plain
+    strings cannot express a pair, so a scale sent through MCP would have
+    arrived as a second, bogus reference."""
+    if isinstance(ref, (list, tuple)):
+        parts = [str(p) for p in ref]
+    else:
+        parts = [p.strip() for p in str(ref).split(",")]
+    return [p for p in parts if p]
+
+
 def mflux_cli(name):
     """Resolve one mflux-family CLI: FXLLA_MFLUX_BIN_DIR when set, PATH
     otherwise. A set directory missing the binary is an error worth naming -
@@ -114,16 +130,62 @@ KEEP_MODELS = os.environ.get("FXLLA_MEDIA_KEEP_MODELS", "") not in ("", "0", "fa
 # Friendly name -> the mflux-cv CLI and defaults. `base_model` is only needed
 # for the multi-model `mflux-generate` binary (FLUX.1). `steps` is a sane
 # default for the fast distilled models; None leaves the CLI's own default.
-MODELS = {
-    "z-image-turbo": {"cli": "mflux-generate-z-image-turbo", "steps": 8},
-    "z-image":       {"cli": "mflux-generate-z-image", "steps": None},
-    "boogu":         {"cli": "mflux-generate-boogu", "steps": 8},
-    "flux2-klein":   {"cli": "mflux-generate-flux2", "steps": None},
-    "qwen":          {"cli": "mflux-generate-qwen", "steps": None},
-    "krea2":         {"cli": "mflux-generate-krea2", "steps": None},
-    "schnell":       {"cli": "mflux-generate", "base_model": "schnell", "steps": 4},
-    "dev":           {"cli": "mflux-generate", "base_model": "dev", "steps": None},
-}
+MODELS_CONF = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "config", "media-models.conf")
+
+
+def load_models(path=None):
+    """Image models from the catalog: alias -> {cli, base_model, steps, caps}.
+
+    `caps` is what the CLI actually accepts, recorded from its own --help when
+    the catalog was written. It is load-bearing rather than documentation: a
+    flag a model does not support is refused by name here instead of being
+    passed through to fail deep inside the backend, and the models genuinely
+    differ (mage-flow has no LoRA at all).
+    """
+    models = {}
+    try:
+        with open(path or MODELS_CONF, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) < 5:
+                    continue
+                alias, cli, base, steps, caps = parts[:5]
+                models[alias] = {
+                    "cli": cli,
+                    "base_model": base or None,
+                    "steps": int(steps) if steps.isdigit() else None,
+                    # Each token stripped: a catalog line written "lora, negative"
+                    # would otherwise carry a leading space and match
+                    # nothing, silently disabling the flag.
+                    "caps": set(c.strip() for c in caps.split(",") if c.strip()),
+                    "note": parts[5] if len(parts) > 5 else "",
+                }
+    except OSError:
+        pass
+    return models
+
+
+MODELS = load_models()
+
+
+def _require_cap(spec, cap, flag, model_name=""):
+    """Refuse a flag the chosen model cannot take, naming both.
+
+    The alternative is passing it anyway: mflux exits with its own usage error
+    after the caller has already waited, and nothing says which model was the
+    problem or which models would have worked."""
+    if cap in spec.get("caps", ()):
+        return
+    able = sorted(a for a, s in MODELS.items() if cap in s.get("caps", ()))
+    raise ValueError(
+        "model '%s' does not support %s. Models that do: %s"
+        % (model_name or spec.get("cli", "?"), flag,
+           ", ".join(able) if able else "(none)"))
 
 # LTX-2.3 `generate` requires exactly one quality stage; distilled is the fast,
 # verified default. frame-rate is mandatory (the model was trained at 24).
@@ -197,16 +259,79 @@ def free_gpu(reason, keep=False):
 
 
 def build_command(spec, prompt, output, steps=None, seed=None, width=None,
-                  height=None, aspect=None, quantize=8, low_ram=False, metadata=False):
-    """Assemble the mflux-cv argument vector for one image generation."""
+                  height=None, aspect=None, quantize=None, low_ram=False,
+                  metadata=False, negative=None, prompt_file=None, loras=None,
+                  lora_style=None, init_image=None, model_name=""):
+    """Assemble the mflux-cv argument vector for one image generation.
+
+    Optional flags are checked against the model's declared capabilities
+    first, so an unsupported one is refused by name rather than handed to a
+    backend that will reject it minutes later with its own usage text."""
     cmd = [mflux_cli(spec["cli"])]
     if spec.get("base_model"):
         cmd += ["--base-model", spec["base_model"]]
-    cmd += ["--prompt", prompt, "--output", output, "--quantize", str(quantize)]
-    eff_steps = steps if steps is not None else spec.get("steps")
-    if eff_steps is not None:
-        cmd += ["--steps", str(eff_steps)]
+    cmd += ["--prompt", prompt, "--output", output]
+    # Every optional flag goes through the capability gate, not just the ones
+    # added most recently: a model whose CLI lacks --seed or a fixed quantize
+    # is exactly what this catalog exists to express, and forwarding the flag
+    # anyway is the deep-backend failure the gate prevents everywhere else.
+    # A DEFAULT is adapted, an explicit request is validated. Erroring on a
+    # flag the caller never named would make an unsupported default look like
+    # their mistake; silently dropping one they DID name is the deep-backend
+    # failure this gate exists to prevent.
+    if quantize is not None:
+        _require_cap(spec, "quantize", "--quantize", model_name)
+        cmd += ["--quantize", str(quantize)]
+    elif "quantize" in spec.get("caps", ()):
+        cmd += ["--quantize", str(DEFAULT_QUANTIZE)]
+    if negative:
+        _require_cap(spec, "negative", "--negative-prompt", model_name)
+        cmd += ["--negative-prompt", negative]
+    if prompt_file:
+        _require_cap(spec, "prompt-file", "--prompt-file", model_name)
+        if not os.path.isfile(prompt_file):
+            raise ValueError("prompt file not found: %s" % prompt_file)
+        cmd += ["--prompt-file", prompt_file]
+    if init_image:
+        _require_cap(spec, "init-image", "--init-image", model_name)
+        if not os.path.isfile(init_image):
+            raise ValueError("init image not found: %s" % init_image)
+        cmd += ["--image-path", init_image]
+    # LoRAs: `--lora PATH [SCALE]`, repeatable. Until now `fxlla pull
+    # civitai:<id>` could download these and nothing could apply them.
+    for ref in loras or []:
+        _require_cap(spec, "lora", "--lora", model_name)
+        parts = split_ref(ref)
+        if not parts:
+            raise ValueError("empty --lora value")
+        # mflux accepts a local file OR a HuggingFace repo id (org/name), and
+        # a repo id contains a slash too - so "has a slash" cannot be the
+        # test. Something that names a file (extension, absolute, or an
+        # explicitly relative path) must exist; anything else is left for
+        # mflux to resolve.
+        path = parts[0]
+        looks_local = (path.endswith((".safetensors", ".ckpt"))
+                       or os.path.isabs(path)
+                       or path.startswith(("./", "../", "~")))
+        if looks_local:
+            # Expand for the check AND for the argv: validating the expanded
+            # path while passing the literal "~" told the caller the file was
+            # fine and then handed mflux a path it cannot resolve, since
+            # nothing runs through a shell.
+            parts[0] = os.path.expanduser(path)
+            if not os.path.isfile(parts[0]):
+                raise ValueError("LoRA not found: %s" % path)
+        cmd += ["--lora"] + parts
+    if lora_style:
+        _require_cap(spec, "lora-style", "--lora-style", model_name)
+        cmd += ["--lora-style", lora_style]
+    if steps is not None:
+        _require_cap(spec, "steps", "--steps", model_name)
+        cmd += ["--steps", str(steps)]
+    elif spec.get("steps") is not None and "steps" in spec.get("caps", ()):
+        cmd += ["--steps", str(spec["steps"])]
     if seed is not None:
+        _require_cap(spec, "seed", "--seed", model_name)
         cmd += ["--seed", str(seed)]
     # Both would be a contradiction the CLI resolves by ignoring one, silently:
     # a request for 512x512 with aspect 1:1 produced a 1024x1024 file and
@@ -217,8 +342,11 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
             "give either --aspect or --width/--height, not both: aspect %s "
             "would override the requested %sx%s" % (aspect, width or "?", height or "?"))
     if aspect:
+        _require_cap(spec, "aspect", "--aspect", model_name)
         cmd += ["--aspect", aspect]
     else:
+        if width or height:
+            _require_cap(spec, "dimensions", "--width/--height", model_name)
         if width:
             cmd += ["--width", str(width)]
         if height:
@@ -264,8 +392,10 @@ def validate_output(path):
 
 
 def generate_image(prompt, model=None, steps=None, seed=None, width=None,
-                   height=None, aspect=None, quantize=8, low_ram=False,
-                   metadata=False, output=None, keep_models=False):
+                   height=None, aspect=None, quantize=None, low_ram=False,
+                   metadata=False, output=None, keep_models=False,
+                   negative=None, prompt_file=None, loras=None,
+                   lora_style=None, init_image=None):
     if not prompt:
         raise ValueError("prompt is required")
     model = model or DEFAULT_MODEL
@@ -276,9 +406,13 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
     os.makedirs(OUT_DIR, exist_ok=True)
     output = resolve_output(output, model, "png")
     free_gpu("image", keep_models)
-    cmd = build_command(spec, prompt, output, steps=steps, seed=seed, width=width,
-                        height=height, aspect=aspect, quantize=quantize,
-                        low_ram=low_ram, metadata=metadata)
+    cmd = build_command(spec, prompt, output, steps=steps, seed=seed,
+                        width=width, height=height, aspect=aspect,
+                        quantize=quantize, low_ram=low_ram,
+                        metadata=metadata, negative=negative,
+                        prompt_file=prompt_file, loras=loras,
+                        lora_style=lora_style, init_image=init_image,
+                        model_name=model)
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "%s failed" % spec["cli"])[-800:])
@@ -305,11 +439,13 @@ def build_video_command(prompt, output, stage=DEFAULT_STAGE, frames=None,
     # which is how a transition between two stills is actually produced. A
     # missing file would otherwise surface as a generic backend failure.
     for ref in images or []:
-        parts = ref if isinstance(ref, (list, tuple)) else [ref]
-        path = str(parts[0])
-        if not os.path.isfile(path):
-            raise ValueError("reference image not found: %s" % path)
-        cmd += ["--image"] + [str(p) for p in parts]
+        parts = split_ref(ref)
+        if not parts:
+            raise ValueError("empty --image value")
+        parts[0] = os.path.expanduser(parts[0])
+        if not os.path.isfile(parts[0]):
+            raise ValueError("reference image not found: %s" % parts[0])
+        cmd += ["--image"] + parts
     if model:
         cmd += ["--model", model]
     if frames:
@@ -475,8 +611,16 @@ def cmd_image(args):
         args.prompt, model=args.model, steps=args.steps, seed=args.seed,
         width=args.width, height=args.height, aspect=args.aspect,
         quantize=args.quantize, low_ram=args.low_ram, metadata=args.metadata,
-        output=args.output, keep_models=args.keep_models)
+        output=args.output, keep_models=args.keep_models,
+        negative=args.negative, prompt_file=args.prompt_file,
+        loras=args.loras, lora_style=args.lora_style,
+        init_image=args.init_image)
     print(path)
+    facts = quality.image_facts(path)
+    if facts.get("width"):
+        print("size: %dx%d, %d KB" % (facts["width"], facts["height"],
+                                      facts.get("bytes", 0) // 1024),
+              file=sys.stderr)
 
 
 def cmd_video(args):
@@ -523,11 +667,50 @@ def cmd_upscale(args):
     print(path)
 
 
-def cmd_models(_args):
+LORA_STYLES = ("couple", "font", "home", "identity", "illustration",
+               "portrait", "ppt", "sandstorm", "sparklers", "storyboard")
+
+
+def cmd_models(args):
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "default": DEFAULT_MODEL,
+            "models": {n: {"cli": s["cli"], "steps": s["steps"],
+                           "caps": sorted(s["caps"]), "note": s["note"]}
+                       for n, s in MODELS.items()},
+            "lora_styles": list(LORA_STYLES),
+        }, indent=1))
+        return
+    print("%-14s %-9s %s" % ("MODEL", "STEPS", "NOTE"))
     for name in sorted(MODELS):
         spec = MODELS[name]
-        default = " (default)" if name == DEFAULT_MODEL else ""
-        print("%-16s %s%s" % (name, spec["cli"], default))
+        default = " *" if name == DEFAULT_MODEL else "  "
+        print("%-14s%s%-9s %s" % (name, default,
+                                  spec["steps"] if spec["steps"] else "cli",
+                                  spec["note"]))
+    print("\n* default (FXLLA_MEDIA_MODEL). Capabilities per model: "
+          "fxlla media models --json")
+
+
+def cmd_loras(_args):
+    """What can actually be applied: the LoRAs civitai pulls have downloaded,
+    plus mflux's built-in styles. Downloading one and having no way to find it
+    again is how they stayed unusable."""
+    root = os.path.join(STORE, "civitai")
+    found = []
+    for base, _dirs, names in os.walk(root):
+        for n in names:
+            if n.endswith((".safetensors", ".ckpt")):
+                p = os.path.join(base, n)
+                found.append((p, os.path.getsize(p) // (1024 * 1024)))
+    if found:
+        print("Downloaded (use: --lora <path> [scale])")
+        for p, mb in sorted(found):
+            print("  %-58s %d MB" % (p, mb))
+    else:
+        print("No LoRAs downloaded yet. Get one: fxlla pull civitai:<id>")
+    print("\nBuilt-in styles (use: --lora-style <name>)")
+    print("  " + ", ".join(LORA_STYLES))
 
 
 def _summary(args):
@@ -555,7 +738,8 @@ def cmd_jobs(args):
 
 
 def cmd_job(args):
-    rec = jobs.get(args.id)
+    wait_s = getattr(args, "wait", None)
+    rec = jobs.wait(args.id, wait_s) if wait_s else jobs.get(args.id)
     if rec is None:
         sys.exit("unknown job: %s" % args.id)
     if getattr(args, "json", False):
@@ -584,7 +768,22 @@ def main():
     im.add_argument("--width", type=int)
     im.add_argument("--height", type=int)
     im.add_argument("--aspect")
-    im.add_argument("--quantize", "-q", type=int, default=8)
+    im.add_argument("--quantize", "-q", type=int)  # None: adapt to the model
+    im.add_argument("--negative", "--negative-prompt", dest="negative",
+                    help="what the image must NOT contain")
+    im.add_argument("--prompt-file", dest="prompt_file",
+                    help="read the prompt from a file (re-read per seed)")
+    im.add_argument("--init-image", dest="init_image",
+                    help="start from an existing image (img2img)")
+    # `fxlla pull civitai:<id>` has been able to download LoRAs since it
+    # shipped, with nothing able to apply one. PATH may be a local file or a
+    # HuggingFace repo id; SCALE is optional.
+    im.add_argument("--lora", action="append", dest="loras",
+                    metavar="PATH[,SCALE]",
+                    help="apply a LoRA; repeatable. Comma form, not spaces: "
+                         "a multi-value flag would swallow the prompt.")
+    im.add_argument("--lora-style", dest="lora_style",
+                    help="one of mflux's built-in LoRA styles (see: fxlla media loras)")
     im.add_argument("--low-ram", action="store_true")
     im.add_argument("--metadata", action="store_true")
     im.add_argument("--output", "-o")
@@ -607,9 +806,9 @@ def main():
     # anchors any frame. Repeat it to anchor both ends, which is what a
     # transition between two stills actually needs - describing the two images
     # in the prompt produces a different video that merely resembles them.
-    vi.add_argument("--image", action="append", nargs="+", dest="images",
-                    metavar="PATH [FRAME STRENGTH]",
-                    help="reference image for I2V; repeatable")
+    vi.add_argument("--image", action="append", dest="images",
+                    metavar="PATH[,FRAME[,STRENGTH]]",
+                    help="reference image for image-to-video; repeatable")
     vi.add_argument("--low-ram", action="store_true")
     vi.add_argument("--output", "-o")
 
@@ -645,7 +844,9 @@ def main():
         sp.add_argument("--yes", "-y", dest="yes", action="store_true",
                         help="authorize downloading any missing weights")
 
-    sub.add_parser("models")
+    ml = sub.add_parser("models")
+    ml.add_argument("-j", "--json", action="store_true")
+    sub.add_parser("loras")
     # Introspection for doctor and setup: the ONE place voice-interpreter
     # resolution lives, so shell never re-implements it.
     sub.add_parser("voice-python")
@@ -656,6 +857,10 @@ def main():
     jg = sub.add_parser("job")
     jg.add_argument("id")
     jg.add_argument("-j", "--json", action="store_true")
+    # Awaiting a render beats polling it: without this an agent issues one
+    # status call per second and looks like a runaway loop.
+    jg.add_argument("--wait", type=float, metavar="SECONDS",
+                    help="block until the job finishes or this many seconds pass")
     jc = sub.add_parser("cancel")
     jc.add_argument("id")
     args = p.parse_args()
@@ -675,7 +880,7 @@ def main():
         print(jobs.submit(args.cmd, argv, _summary(args))["id"])
         return
     {"image": cmd_image, "video": cmd_video, "voice": cmd_voice,
-     "edit": cmd_edit, "upscale": cmd_upscale, "models": cmd_models,
+     "edit": cmd_edit, "upscale": cmd_upscale, "models": cmd_models, "loras": cmd_loras,
      "voice-python": lambda _a: print(resolved_voice_python()),
      "jobs": cmd_jobs, "job": cmd_job, "cancel": cmd_cancel}[args.cmd](args)
 

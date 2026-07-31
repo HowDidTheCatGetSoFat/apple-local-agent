@@ -6,6 +6,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- Image models are a declarative catalog (`config/media-models.conf`) instead
+  of a hardcoded table, and the list grew from 8 to 12 with ideogram4, fibo,
+  ernie and ernie-turbo. Each row records what its CLI actually accepts, read
+  from the CLI's own `--help` rather than assumed, and that column is
+  load-bearing: an option a model cannot take is refused by name, listing the
+  models that can, instead of being forwarded to fail deep in the backend.
+  Defaults adapt to the model, only explicit requests are validated. The new
+  models carry weight-catalog rows too, so naming one cannot trigger an
+  ungated multi-gigabyte download - the four are 26 to 32 GB each.
+- LoRA support, which makes `fxlla pull civitai:<id>` useful for the first
+  time: it could download LoRAs from the day it shipped and nothing could
+  apply one. `--lora PATH[,SCALE]` (repeatable, local file or HuggingFace repo
+  id), `--lora-style` for mflux's built-ins, and `fxlla media loras` listing
+  what is downloaded plus the styles.
+- `--negative`, `--prompt-file` and `--init-image` for image generation, each
+  gated by the model's capabilities, and all of them on the MCP tool too.
+- `media_job_status` takes `wait_s` and blocks instead of making a caller
+  poll: a real session issued 47 status calls waiting on one video, which is
+  both wasteful and indistinguishable from a runaway loop.
+- `list_media_models` on the MCP, and `fxlla media models --json`. Without it
+  a model opened generate.py and media_mcp.py ten times in one session to
+  learn what it could do.
+- Image generation reports the size of what it produced, like video reports
+  its measured duration.
 - Image-to-video: `fxlla media video --image PATH [FRAME STRENGTH]`, repeatable,
   and `images` on the `generate_video` MCP tool. One reference anchors the
   opening frame, two anchor both ends, which is how a transition between two

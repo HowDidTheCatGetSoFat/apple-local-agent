@@ -160,6 +160,23 @@ def _ffprobe(path):
         return None
 
 
+def image_facts(path):
+    """{width, height, bytes} from the PNG header, or {} when unreadable.
+
+    Returned alongside the path so a caller does not have to shell out to
+    inspect what it just asked for - which a real model did, repeatedly."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            head = fh.read(24)
+    except OSError:
+        return {}
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+        return {"bytes": size}
+    width, height = struct.unpack(">II", head[16:24])
+    return {"width": width, "height": height, "bytes": size}
+
+
 def video_facts(path):
     """What the produced video actually IS: {duration_s, frames, fps, width,
     height}, with whatever ffprobe could not answer left out.

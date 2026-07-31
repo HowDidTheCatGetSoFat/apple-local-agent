@@ -252,7 +252,21 @@ class TestMCP(unittest.TestCase):
         self.assertEqual({t["name"] for t in r["result"]["tools"]},
                          {"generate_image", "generate_video", "generate_speech",
                           "edit_image", "upscale_image", "media_job_status",
-                          "list_media_jobs", "cancel_media_job"})
+                          "list_media_models", "list_media_jobs",
+                          "cancel_media_job"})
+
+    def test_discovery_and_waiting_exist(self):
+        # Both come from watching a real session: the model read the source
+        # ten times to learn what it could do, and polled a job 47 times.
+        tools = {t["name"]: t for t in
+                 media_mcp.handle({"jsonrpc": "2.0", "id": 1,
+                                   "method": "tools/list"})["result"]["tools"]}
+        self.assertIn("list_media_models", tools)
+        self.assertIn("wait_s",
+                      tools["media_job_status"]["inputSchema"]["properties"])
+        image = tools["generate_image"]["inputSchema"]["properties"]
+        for opt in ("negative", "loras", "lora_style", "init_image"):
+            self.assertIn(opt, image)
 
     def test_generators_expose_async(self):
         tools = {t["name"]: t for t in
@@ -670,6 +684,217 @@ class TestJobs(unittest.TestCase):
         self.assertIn("ValueError: bad input", jobs.describe(rec))
 
 
+class TestModelCatalog(unittest.TestCase):
+    # The catalog replaced a hardcoded dict so per-model differences stop being
+    # special cases. Capabilities came from probing each CLI's --help.
+    def test_the_shipped_catalog_parses_and_has_the_default(self):
+        models = media.load_models()
+        self.assertIn(media.DEFAULT_MODEL, models)
+        self.assertGreaterEqual(len(models), 8)
+        for name, spec in models.items():
+            self.assertTrue(spec["cli"].startswith("mflux-"), name)
+            self.assertIsInstance(spec["caps"], set)
+
+    def test_capabilities_are_not_uniform(self):
+        # If every model had the same caps the mechanism would be pointless.
+        # Verified against the installed CLIs: ideogram4 and boogu take no
+        # init image, everything else does.
+        models = media.load_models()
+        with_init = {n for n, s in models.items() if "init-image" in s["caps"]}
+        self.assertTrue(with_init)
+        self.assertNotEqual(with_init, set(models))
+
+    def test_comments_and_short_lines_are_skipped(self):
+        import tempfile
+        p = os.path.join(tempfile.mkdtemp(), "m.conf")
+        open(p, "w").write("# a comment\n\nbroken|line\n"
+                           "ok | mflux-generate-x |  | 4 | lora,negative | note\n")
+        models = media.load_models(p)
+        self.assertEqual(list(models), ["ok"])
+        self.assertEqual(models["ok"]["steps"], 4)
+        self.assertEqual(models["ok"]["caps"], {"lora", "negative"})
+        self.assertIsNone(models["ok"]["base_model"])
+
+    def test_an_unsupported_flag_is_refused_by_name(self):
+        # The alternative is mflux exiting with its own usage text after the
+        # caller already waited, naming neither the model nor an alternative.
+        spec = {"cli": "mflux-generate-x", "caps": {"negative"}, "steps": None}
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(spec, "cat", "/o.png", loras=["x.safetensors"],
+                                model_name="mage-flow")
+        msg = str(ctx.exception)
+        self.assertIn("mage-flow", msg)
+        self.assertIn("--lora", msg)
+        self.assertIn("Models that do", msg)
+
+    def test_a_default_adapts_but_an_explicit_request_is_validated(self):
+        # Erroring on a flag the caller never named would make an unsupported
+        # default look like their mistake.
+        spec = {"cli": "mflux-generate-x", "caps": {"negative"}, "steps": 8}
+        cmd = media.build_command(spec, "cat", "/o.png", model_name="m")
+        self.assertNotIn("--quantize", cmd)
+        self.assertNotIn("--steps", cmd)
+        with self.assertRaises(ValueError):
+            media.build_command(spec, "cat", "/o.png", quantize=4, model_name="m")
+        with self.assertRaises(ValueError):
+            media.build_command(spec, "cat", "/o.png", steps=3, model_name="m")
+
+    def test_every_documented_capability_is_gated(self):
+        # Five of the ten were ungated: a model whose CLI lacks --seed would
+        # have had it forwarded anyway, which is the failure the gate exists
+        # to prevent for the others.
+        full = {"cli": "x", "steps": None,
+                "caps": {"negative", "prompt-file", "init-image", "lora",
+                         "lora-style", "quantize", "steps", "seed", "aspect",
+                         "dimensions"}}
+        for cap, kwargs in (
+                ("quantize", {"quantize": 4}), ("steps", {"steps": 2}),
+                ("seed", {"seed": 1}), ("aspect", {"aspect": "1:1"}),
+                ("dimensions", {"width": 512})):
+            lacking = dict(full, caps=full["caps"] - {cap})
+            with self.assertRaises(ValueError, msg="%s ungated" % cap):
+                media.build_command(lacking, "c", "/o.png", model_name="m", **kwargs)
+            media.build_command(full, "c", "/o.png", model_name="m", **kwargs)
+
+    def test_a_supported_flag_passes_through(self):
+        spec = {"cli": "mflux-generate-x", "caps": {"negative"}, "steps": None}
+        cmd = media.build_command(spec, "cat", "/o.png", negative="blurry")
+        self.assertEqual(cmd[cmd.index("--negative-prompt") + 1], "blurry")
+
+
+class TestLoRA(unittest.TestCase):
+    # `fxlla pull civitai:<id>` could download LoRAs from the day it shipped
+    # and nothing could apply one.
+    def _spec(self):
+        return {"cli": "mflux-generate-x", "steps": None,
+                "caps": {"lora", "lora-style", "negative", "init-image"}}
+
+    def _lora(self):
+        import tempfile
+        p = os.path.join(tempfile.mkdtemp(), "style.safetensors")
+        open(p, "w").close()
+        return p
+
+    def test_a_path_with_scale_comma_form(self):
+        # Comma, not spaces: a multi-value argparse flag swallowed the prompt,
+        # and a JSON array of plain strings could not express the pair at all.
+        p = self._lora()
+        cmd = media.build_command(self._spec(), "c", "/o.png", loras=["%s,0.8" % p])
+        i = cmd.index("--lora")
+        self.assertEqual(cmd[i + 1:i + 3], [p, "0.8"])
+
+    def test_a_tilde_path_reaches_the_backend_expanded(self):
+        # Validating the expanded path while passing the literal "~" told the
+        # caller the file was fine and handed mflux something it cannot
+        # resolve: nothing here runs through a shell.
+        import tempfile
+        real = self._lora()
+        home = os.path.expanduser("~")
+        if not real.startswith(home):
+            self.skipTest("temp dir is not under HOME")
+        cmd = media.build_command(self._spec(), "c", "/o.png",
+                                  loras=["~" + real[len(home):]])
+        self.assertEqual(cmd[cmd.index("--lora") + 1], real)
+        self.assertNotIn("~", cmd[cmd.index("--lora") + 1])
+
+    def test_several_loras_repeat_the_flag(self):
+        a, b = self._lora(), self._lora()
+        cmd = media.build_command(self._spec(), "c", "/o.png", loras=[a, b])
+        self.assertEqual(cmd.count("--lora"), 2)
+
+    def test_a_huggingface_repo_id_is_accepted(self):
+        # mflux takes org/name too, so only a local-looking path is checked.
+        cmd = media.build_command(self._spec(), "c", "/o.png", loras=["org/name"])
+        self.assertIn("org/name", cmd)
+
+    def test_a_missing_local_lora_is_named(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(self._spec(), "c", "/o.png",
+                                loras=["/no/such.safetensors"])
+        self.assertIn("/no/such.safetensors", str(ctx.exception))
+
+    def test_built_in_styles(self):
+        cmd = media.build_command(self._spec(), "c", "/o.png",
+                                  lora_style="storyboard")
+        self.assertEqual(cmd[cmd.index("--lora-style") + 1], "storyboard")
+        self.assertIn("storyboard", media.LORA_STYLES)
+
+
+class TestPromptControls(unittest.TestCase):
+    def _spec(self):
+        return {"cli": "mflux-generate-x", "steps": None,
+                "caps": {"negative", "prompt-file", "init-image"}}
+
+    def test_negative_prompt(self):
+        cmd = media.build_command(self._spec(), "c", "/o.png", negative="text, watermark")
+        self.assertEqual(cmd[cmd.index("--negative-prompt") + 1], "text, watermark")
+
+    def test_prompt_file_must_exist(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(self._spec(), "c", "/o.png", prompt_file="/no/p.txt")
+        self.assertIn("/no/p.txt", str(ctx.exception))
+
+    def test_init_image_maps_to_image_path(self):
+        import tempfile
+        p = os.path.join(tempfile.mkdtemp(), "in.png")
+        open(p, "wb").write(media.PNG_MAGIC)
+        cmd = media.build_command(self._spec(), "c", "/o.png", init_image=p)
+        self.assertEqual(cmd[cmd.index("--image-path") + 1], p)
+
+
+class TestJobWait(unittest.TestCase):
+    # An agent with no way to await a render polls instead: one issued 47
+    # status calls waiting on a single video.
+    def test_returns_as_soon_as_the_job_leaves_the_active_states(self):
+        import time
+        calls = {"n": 0}
+        saved = jobs.get
+
+        def _fake(_jid):
+            calls["n"] += 1
+            return {"status": "running"} if calls["n"] < 3 else {"status": "done"}
+        jobs.get = _fake
+        try:
+            begin = time.monotonic()
+            rec = jobs.wait("id", timeout_s=10, poll_s=0.01)
+        finally:
+            jobs.get = saved
+        self.assertEqual(rec["status"], "done")
+        self.assertLess(time.monotonic() - begin, 1.0)
+
+    def test_a_timeout_returns_the_record_rather_than_raising(self):
+        saved = jobs.get
+        jobs.get = lambda _jid: {"status": "running"}
+        try:
+            rec = jobs.wait("id", timeout_s=0.05, poll_s=0.01)
+        finally:
+            jobs.get = saved
+        self.assertEqual(rec["status"], "running")
+
+    def test_an_unknown_job_returns_none_immediately(self):
+        saved = jobs.get
+        jobs.get = lambda _jid: None
+        try:
+            self.assertIsNone(jobs.wait("id", timeout_s=10, poll_s=0.01))
+        finally:
+            jobs.get = saved
+
+
+class TestImageFacts(unittest.TestCase):
+    def test_dimensions_and_size_from_the_header(self):
+        import struct, tempfile
+        p = os.path.join(tempfile.mkdtemp(), "i.png")
+        with open(p, "wb") as fh:
+            fh.write(media.PNG_MAGIC + b"\x00\x00\x00\x0dIHDR"
+                     + struct.pack(">II", 512, 384) + b"0" * 40)
+        f = quality.image_facts(p)
+        self.assertEqual((f["width"], f["height"]), (512, 384))
+        self.assertGreater(f["bytes"], 0)
+
+    def test_a_missing_file_yields_nothing(self):
+        self.assertEqual(quality.image_facts("/no/such.png"), {})
+
+
 class TestVideoImageAnchors(unittest.TestCase):
     # Image-to-video. Asked for "a video transitioning between these two
     # images", a model instead described them in the prompt and produced an
@@ -688,7 +913,7 @@ class TestVideoImageAnchors(unittest.TestCase):
     def test_two_anchors_repeat_the_flag(self):
         a, b = self._img(), self._img()
         cmd = media.build_video_command("x", "/o.mp4",
-                                        images=[[a, "0", "1.0"], [b, "96", "1.0"]])
+                                        images=["%s,0,1.0" % a, "%s,96,1.0" % b])
         self.assertEqual(cmd.count("--image"), 2)
         first = cmd.index("--image")
         self.assertEqual(cmd[first + 1:first + 4], [a, "0", "1.0"])

@@ -51,6 +51,8 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla media voice "<text>"    Synthesize speech locally (mlx-audio)
   fxlla media edit "<prompt>" --image p  Edit an image locally (mflux-cv qwen-edit)
   fxlla media upscale --image p          Upscale an image locally (mflux-cv seedvr2)
+  fxlla media models          Image models and what each one supports
+  fxlla media loras           LoRAs you have downloaded, and built-in styles
   fxlla media weights         Media weight catalog and what is cached
   fxlla media jobs            Background media jobs (also job <id>, cancel <id>)
   fxlla wire-opencode [--all] Register the local provider (--all: + MCP + skills)
@@ -1808,7 +1810,7 @@ cmd_complete() {
     kb)         printf '%s\n' add search ls rm reindex eval stop mcp wire-opencode ;;
     graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
                   mcp wire-opencode ;;
-    media)      printf '%s\n' image video voice edit upscale models weights jobs job cancel mcp wire-opencode ;;
+    media)      printf '%s\n' image video voice edit upscale models loras weights jobs job cancel mcp wire-opencode ;;
     skills)     printf '%s\n' install ls status ;;
   esac
 }

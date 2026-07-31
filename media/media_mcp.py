@@ -33,6 +33,23 @@ TOOLS = [
          "height": {"type": "integer"},
          "aspect": {"type": "string", "description": "e.g. 1:1, 16:9"},
          "quantize": {"type": "integer", "enum": [3, 4, 5, 6, 8]},
+         "negative": {"type": "string",
+                      "description": "What the image must NOT contain."},
+         "prompt_file": {"type": "string",
+                         "description": "Read the prompt from this file "
+                                        "instead of the prompt argument."},
+         "init_image": {"type": "string",
+                        "description": "Start from this image (img2img)."},
+         "loras": {"type": "array", "items": {"type": "string"},
+                   "description": "LoRAs to apply. Each entry is a path or a "
+                                  "HuggingFace repo id, optionally with a "
+                                  "scale after a comma: \"style.safetensors,0.8\". "
+                                  "See list_media_models for which models "
+                                  "support them."},
+         "lora_style": {"type": "string",
+                        "description": "A built-in LoRA style (storyboard, "
+                                       "portrait, identity, ...); see "
+                                       "list_media_models."},
      }, "required": ["prompt"]}},
     {"name": "generate_video",
      "description": "Generate a short video from a text prompt using the local "
@@ -54,7 +71,8 @@ TOOLS = [
          "height": {"type": "integer"},
          "seed": {"type": "integer"},
          "images": {"type": "array", "items": {"type": "string"},
-                    "description": "Reference image paths for image-to-video. "
+                    "description": "Reference images for image-to-video, each "
+                                   "\"path\" or \"path,frame,strength\". "
                                    "One anchors the opening frame; two anchor "
                                    "both ends, which is how a transition "
                                    "between two stills is produced. Describing "
@@ -90,10 +108,23 @@ TOOLS = [
      }, "required": ["image"]}},
     {"name": "media_job_status",
      "description": "Status of a background media job: queued, running, done, "
-                    "failed, or cancelled, plus the output path once done.",
+                    "failed, or cancelled, plus the output path once done. "
+                    "Pass wait_s to BLOCK until it finishes instead of polling "
+                    "in a loop.",
      "inputSchema": {"type": "object", "properties": {
          "job_id": {"type": "string"},
+         "wait_s": {"type": "number",
+                    "description": "Block up to this many seconds for the job "
+                                   "to finish. Prefer this over repeated "
+                                   "calls; a render takes minutes and polling "
+                                   "it wastes a call per second."},
      }, "required": ["job_id"]}},
+    {"name": "list_media_models",
+     "description": "Image models available locally, each with the options it "
+                    "supports (negative prompt, LoRA, dimensions, ...), plus "
+                    "the built-in LoRA styles and which model is the default. "
+                    "Call this instead of guessing model names or flags.",
+     "inputSchema": {"type": "object", "properties": {}}},
     {"name": "list_media_jobs",
      "description": "List background media jobs, newest first.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -121,7 +152,10 @@ for _tool in TOOLS:
 
 _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
                 ("width", "--width"), ("height", "--height"), ("aspect", "--aspect"),
-                ("quantize", "--quantize")]
+                ("quantize", "--quantize"), ("negative", "--negative"),
+                ("prompt_file", "--prompt-file"),
+                ("init_image", "--init-image"), ("loras", "--lora"),
+                ("lora_style", "--lora-style")]
 _VIDEO_FLAGS = [("stage", "--stage"), ("seconds", "--seconds"),
                 ("frames", "--frames"),
                 ("frame_rate", "--frame-rate"), ("width", "--width"),
@@ -171,8 +205,19 @@ def run_job_status(args):
     job_id = args.get("job_id")
     if not job_id:
         return "error: job_id is required"
-    return _exec([sys.executable, MEDIA, "job", str(job_id), "--json"],
-                 "unknown job")
+    cmd = [sys.executable, MEDIA, "job", str(job_id), "--json"]
+    wait_s = args.get("wait_s")
+    if wait_s:
+        cmd += ["--wait", str(wait_s)]
+    return _exec(cmd, "unknown job")
+
+
+def run_list_models(_args):
+    """Capabilities, from the catalog. Without this a model reads the source to
+    find out what it can do: one opened generate.py and media_mcp.py ten times
+    in a single session doing exactly that."""
+    return _exec([sys.executable, MEDIA, "models", "--json"],
+                 "could not list models")
 
 
 def run_list_jobs(_args):
@@ -260,6 +305,7 @@ def handle(msg):
                   "edit_image": run_edit,
                   "upscale_image": run_upscale,
                   "media_job_status": run_job_status,
+                  "list_media_models": run_list_models,
                   "list_media_jobs": run_list_jobs,
                   "cancel_media_job": run_cancel_job}.get(tool)
         if runner:

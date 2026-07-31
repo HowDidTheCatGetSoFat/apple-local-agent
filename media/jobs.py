@@ -131,6 +131,24 @@ def get(job_id):
     return _reap(_read(job_id))
 
 
+def wait(job_id, timeout_s=600, poll_s=1.0):
+    """Block until a job leaves the active states, or the timeout.
+
+    Returns the record either way; the caller reads `status`. Without this an
+    agent has no way to await a render and busy-polls instead: one issued 47
+    `media jobs` calls waiting on a single video, which is both wasteful and
+    exactly what a runaway loop looks like from outside."""
+    import time as _time
+    deadline = _time.monotonic() + max(0, timeout_s)
+    while True:
+        rec = get(job_id)
+        if rec is None or rec.get("status") not in ACTIVE:
+            return rec
+        if _time.monotonic() >= deadline:
+            return rec
+        _time.sleep(poll_s)
+
+
 def listing():
     jobs = []
     for name in sorted(os.listdir(_dir())):
