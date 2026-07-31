@@ -34,16 +34,45 @@ import urllib.request
 STORE = os.environ.get("FXLLA_STORE", "")
 KB_DIR = os.path.join(STORE, "kb")
 DB_PATH = os.path.join(KB_DIR, "kb.db")
-EMBED_DIR = os.path.join(STORE, "models", "embed")
 EMBED_PORT = int(os.environ.get("FXLLA_EMBED_PORT", "8090"))
+
+# Which catalog alias supplies the embeddings. `fxlla pull <alias>` names the
+# directory after the alias, so choosing a model is naming one. Unset means the
+# original `embed` alias, which is what every base built so far was indexed with.
+_EMBED_ENV = os.environ.get("FXLLA_EMBED_MODEL", "").strip()
+EMBED_ALIAS = _EMBED_ENV or "embed"
 
 
 def _index_enabled():
     return os.environ.get("FXLLA_KB_INDEX", "").lower() in ("1", "true", "yes", "on")
 
 
+def _embed_dir():
+    # The alias becomes a path component, so it may not walk out of the store.
+    if EMBED_ALIAS in (".", "..") or not re.match(r"^[A-Za-z0-9._-]+$", EMBED_ALIAS):
+        sys.exit("invalid FXLLA_EMBED_MODEL '%s' (use letters, digits, . _ -)"
+                 % EMBED_ALIAS)
+    return os.path.join(STORE, "models", EMBED_ALIAS)
+
+
 def _embed_model():
-    ggufs = sorted(glob.glob(os.path.join(EMBED_DIR, "*.gguf")))
+    """Weights of the selected model, or None when none are installed.
+
+    `fxlla pull` records the file it fetched in `.entry`. Trusting that keeps the
+    choice deterministic when a directory ends up holding two quants of the same
+    model, where globbing would silently take whichever sorts first.
+    """
+    directory = _embed_dir()
+    try:
+        with open(os.path.join(directory, ".entry"), encoding="utf-8") as fh:
+            entry = os.path.basename(fh.read().strip())
+        if entry:
+            path = os.path.join(directory, entry)
+            if os.path.isfile(path):
+                return path
+    except OSError:
+        pass
+    ggufs = sorted(glob.glob(os.path.join(directory, "*.gguf")))
     return ggufs[0] if ggufs else None
 
 
@@ -67,6 +96,49 @@ def _server_healthy(timeout=_HEALTH_TIMEOUT):
         return False
 
 
+def _server_model(timeout=_HEALTH_TIMEOUT):
+    """Weights the running server reports holding, or None when it will not say.
+
+    llama.cpp answers /props with the path it loaded. Another embedding server,
+    or an older build, leaves us unable to tell - which is not the same as a
+    mismatch, so the caller treats the two differently.
+    """
+    try:
+        props = json.load(urllib.request.urlopen(
+            f"http://127.0.0.1:{EMBED_PORT}/props", timeout=timeout))
+    except Exception:
+        return None
+    if not isinstance(props, dict):
+        return None
+    return props.get("model_path") or props.get("model_alias") or None
+
+
+# A server outlives the command that started it, so switching models leaves the
+# previous one listening. Reuse used to adopt whatever answered: with no model
+# installed at all, add and search both succeeded against a borrowed server. That
+# was harmless while one model was possible and is not any more - nomic and
+# embeddinggemma are both 768-dim, qwen3-embedding and bge-large both 1024, so
+# _require_dim cannot see the difference and the store is silently poisoned.
+def _require_server_model(wanted):
+    running = _server_model()
+    if running is not None and wanted is not None:
+        if os.path.realpath(running) != os.path.realpath(wanted):
+            sys.exit(
+                "the embedding server on port %d holds %s, but this command is "
+                "configured for %s. Vectors from two models are not comparable "
+                "and, at equal width, nothing downstream can detect the mix. "
+                "Stop it with 'fxlla kb stop', or point FXLLA_EMBED_PORT at the "
+                "right server." % (EMBED_PORT, running, wanted))
+        return
+    # Unverifiable. Pointing FXLLA_EMBED_PORT at a server fxlla did not start is
+    # a legitimate setup, so this proceeds - but only says so out loud once the
+    # user is actually choosing between models, where being wrong costs a store.
+    if _EMBED_ENV and running is None:
+        print("warning: the embedding server on port %d does not report which "
+              "model it loaded, so '%s' could not be confirmed."
+              % (EMBED_PORT, EMBED_ALIAS), file=sys.stderr)
+
+
 # Runs a local llama.cpp embedding server for the lifetime of the context, or
 # reuses one that is already listening.
 class Embedder:
@@ -76,7 +148,16 @@ class Embedder:
         # searches skip startup entirely.
         self.proc = None
         self._lock = None
+        wanted = _embed_model()
+        # Naming a model that is not installed is a mistake worth reporting on its
+        # own: otherwise a leftover server answers and the search quietly runs on
+        # the previous model instead of the one that was asked for.
+        if wanted is None and _EMBED_ENV:
+            sys.exit("FXLLA_EMBED_MODEL selects '%s' but no weights are installed "
+                     "at %s. Run: fxlla pull %s"
+                     % (EMBED_ALIAS, _embed_dir(), EMBED_ALIAS))
         if _server_healthy():
+            _require_server_model(wanted)
             return self
         # Serialize starting one. Without this, concurrent searches each spawn a
         # server, all but one fail to bind, and the losers have to guess whether
@@ -88,13 +169,20 @@ class Embedder:
         try:
             fcntl.flock(self._lock, fcntl.LOCK_EX)
             if _server_healthy():  # started while we waited for the lock
+                _require_server_model(wanted)
                 return self
-            model = _embed_model()
+            model = wanted if wanted is not None else _embed_model()
             if not model:
                 sys.exit("embedding model not found. Run: fxlla pull embed --quant Q5_K_M")
+            # No --pooling: every embedding GGUF declares its own pooling_type and
+            # llama.cpp honours it. Forcing mean was right for nomic and wrong for
+            # the rest - bge wants CLS, qwen3-embedding wants last-token - which
+            # degrades them silently, since a badly pooled vector is still a
+            # vector. Verified: omitting the flag reproduces --pooling mean
+            # bit-for-bit on nomic, while --pooling cls visibly differs.
             self.proc = subprocess.Popen(
                 ["llama-server", "--embeddings", "-m", model, "--host", "127.0.0.1",
-                 "--port", str(EMBED_PORT), "--pooling", "mean"],
+                 "--port", str(EMBED_PORT)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             deadline = time.time() + _READY_TIMEOUT
             while time.time() < deadline:
@@ -190,8 +278,9 @@ def _require_dim(con, kb, vector):
         sys.exit(
             "the embedding server returned %d dimensions but '%s' holds %d. That "
             "server is a different model than the one this base was built with. "
-            "Point FXLLA_EMBED_PORT at the right server, or rebuild the base."
-            % (len(vector), kb, stored))
+            "Either point FXLLA_EMBED_MODEL back at the model it was built with, "
+            "or re-embed it with the current one: fxlla kb reindex %s"
+            % (len(vector), kb, stored, kb))
 
 
 def _valid_kb(name):
@@ -297,6 +386,48 @@ def cmd_add(args):
     print(f"indexed {len(files)} files, {total} chunks into '{args.name}'")
 
 
+# Chunk text is stored alongside the vector, so switching models re-embeds what
+# is already in the table instead of re-reading sources that may have moved or
+# changed since. Batched to keep one request from carrying a whole base.
+_REINDEX_BATCH = 64
+
+
+def cmd_reindex(args):
+    _valid_kb(args.name)
+    con = _db()
+    rows = con.execute(
+        "SELECT rowid, text FROM chunks WHERE kb=? ORDER BY rowid", (args.name,)
+    ).fetchall()
+    if not rows:
+        sys.exit(f"knowledge base '{args.name}' is empty")
+    before = _kb_dim(con, args.name)
+    done = 0
+    # One transaction: a base half re-embedded holds two widths at once, and
+    # _kb_dim reads whichever row comes first, so an interrupted run would leave
+    # a store that lies about itself. Committing once makes a crash a no-op.
+    with Embedder() as emb:
+        for i in range(0, len(rows), _REINDEX_BATCH):
+            batch = rows[i:i + _REINDEX_BATCH]
+            vecs = emb.embed([text for _rid, text in batch])
+            con.executemany(
+                "UPDATE chunks SET emb=? WHERE rowid=?",
+                [(_pack(v), rid) for (rid, _t), v in zip(batch, vecs)])
+            done += len(batch)
+            print(f"  {done}/{len(rows)} chunks", flush=True)
+    # The vec0 table bakes its width in at creation, so a width change makes the
+    # existing index unusable. Dropping it inside the same transaction leaves the
+    # next search to rebuild it from the new vectors.
+    _load_vec_raw(con)
+    try:
+        con.execute("DROP TABLE IF EXISTS %s" % _vec_table(args.name))
+    except sqlite3.OperationalError:
+        pass
+    con.commit()
+    after = _kb_dim(con, args.name)
+    change = f"{before} -> {after} dimensions" if before != after else f"{after} dimensions"
+    print(f"reindexed {len(rows)} chunks in '{args.name}' with {EMBED_ALIAS} ({change})")
+
+
 def _unpack(blob):
     return struct.unpack(f"{len(blob) // 4}f", blob)
 
@@ -387,6 +518,22 @@ def _search_indexed(con, vec, kb, qv, k):
     return out
 
 
+# Ranked hits for one query vector. `vec` is the loaded sqlite-vec module or
+# None; the caller loads it once rather than per query, which matters when a
+# whole eval run goes through here.
+def _top_k(con, kb, qv, k, vec):
+    if vec is not None:
+        return _search_indexed(con, vec, kb, qv, k)
+    rows = con.execute(
+        "SELECT source, idx, text, emb FROM chunks WHERE kb=?", (kb,)).fetchall()
+    scored = [
+        (_cosine(qv, _unpack(blob)), source, idx, text)
+        for source, idx, text, blob in rows
+    ]
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return scored[:k]
+
+
 def cmd_search(args):
     _valid_kb(args.name)
     con = _db()
@@ -396,19 +543,7 @@ def cmd_search(args):
     with Embedder() as emb:
         qv = emb.embed([args.query])[0]
     _require_dim(con, args.name, qv)
-    vec = _load_vec(con)
-    if vec is not None:
-        top = _search_indexed(con, vec, args.name, qv, args.k)
-    else:
-        rows = con.execute(
-            "SELECT source, idx, text, emb FROM chunks WHERE kb=?", (args.name,)
-        ).fetchall()
-        scored = [
-            (_cosine(qv, _unpack(blob)), source, idx, text)
-            for source, idx, text, blob in rows
-        ]
-        scored.sort(reverse=True, key=lambda x: x[0])
-        top = scored[: args.k]
+    top = _top_k(con, args.name, qv, args.k, _load_vec(con))
     if args.json:
         print(json.dumps([
             {"score": round(s, 4), "source": src, "chunk": idx, "text": txt}
@@ -418,6 +553,120 @@ def cmd_search(args):
     for score, source, idx, text in top:
         print(f"[{score:.3f}] {source}#{idx}")
         print("  " + " ".join(text.split())[:200])
+
+
+# Retrieval quality, so switching embedding models is a measurement rather than a
+# guess. The corpus is the repository's own documentation: real prose about
+# distinct topics, nothing invented, nothing fetched.
+EVAL_SET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_set.json")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Its own base, so a run never disturbs a real one. Dropped again at the end.
+EVAL_KB = "_eval"
+
+
+def _eval_index(con, emb, files):
+    con.execute("DELETE FROM chunks WHERE kb=?", (EVAL_KB,))
+    _load_vec_raw(con)
+    try:
+        con.execute("DROP TABLE IF EXISTS %s" % _vec_table(EVAL_KB))
+    except sqlite3.OperationalError:
+        pass
+    total = 0
+    for path in files:
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            chunks = chunk_text(fh.read())
+        if not chunks:
+            continue
+        vecs = emb.embed(chunks)
+        con.executemany(
+            "INSERT INTO chunks VALUES (?,?,?,?,?)",
+            [(EVAL_KB, path, i, c, _pack(v))
+             for i, (c, v) in enumerate(zip(chunks, vecs))])
+        total += len(chunks)
+    con.commit()
+    return total
+
+
+def _eval_drop(con):
+    con.execute("DELETE FROM chunks WHERE kb=?", (EVAL_KB,))
+    _load_vec_raw(con)
+    try:
+        con.execute("DROP TABLE IF EXISTS %s" % _vec_table(EVAL_KB))
+    except sqlite3.OperationalError:
+        pass
+    con.commit()
+
+
+def cmd_eval(args):
+    with open(EVAL_SET, encoding="utf-8") as fh:
+        spec = json.load(fh)
+    files = [os.path.join(REPO_ROOT, rel) for rel in spec["corpus"]]
+    missing = [rel for rel, path in zip(spec["corpus"], files) if not os.path.isfile(path)]
+    if missing:
+        sys.exit("the eval corpus is missing %s. It is this repository's own "
+                 "documentation, so run this from a checkout." % ", ".join(missing))
+    queries = spec["queries"]
+
+    con = _db()
+    model = _embed_model()
+    started = time.monotonic()
+    with Embedder() as emb:
+        chunks = _eval_index(con, emb, files)
+        indexed = time.monotonic() - started
+        vec = _load_vec(con)
+        results, latencies = [], []
+        for item in queries:
+            begin = time.monotonic()
+            qv = emb.embed([item["q"]])[0]
+            hits = _top_k(con, EVAL_KB, qv, args.k, vec)
+            latencies.append(time.monotonic() - begin)
+            ranked = [os.path.relpath(src, REPO_ROOT) for _s, src, _i, _t in hits]
+            rank = next((i for i, src in enumerate(ranked, 1)
+                         if src in item["expect"]), None)
+            results.append({"query": item["q"], "expect": item["expect"],
+                            "rank": rank, "top": ranked[:3]})
+    dim = _kb_dim(con, EVAL_KB)
+    if not args.keep:
+        _eval_drop(con)
+
+    n = len(results)
+    at1 = sum(1 for r in results if r["rank"] == 1)
+    atk = sum(1 for r in results if r["rank"] is not None)
+    mrr = sum(1.0 / r["rank"] for r in results if r["rank"]) / n if n else 0.0
+    latencies.sort()
+    median = latencies[len(latencies) // 2] if latencies else 0.0
+    summary = {
+        "model": EMBED_ALIAS,
+        "weights": os.path.basename(model) if model else None,
+        "dimensions": dim,
+        "files": len(files), "chunks": chunks,
+        "index_seconds": round(indexed, 2),
+        "queries": n, "k": args.k,
+        "recall_at_1": round(at1 / n, 3) if n else 0.0,
+        "recall_at_k": round(atk / n, 3) if n else 0.0,
+        "mrr": round(mrr, 3),
+        "median_query_seconds": round(median, 3),
+    }
+    if args.json:
+        print(json.dumps({"summary": summary, "results": results}, indent=2))
+        return
+
+    print(f"model:    {EMBED_ALIAS} ({summary['weights']}, {dim} dimensions)")
+    print(f"corpus:   {len(files)} files, {chunks} chunks, indexed in {indexed:.1f}s")
+    print(f"queries:  {n} (k={args.k})")
+    print(f"recall@1: {at1}/{n} ({at1 / n:.0%})" if n else "recall@1: n/a")
+    print(f"recall@{args.k}: {atk}/{n} ({atk / n:.0%})" if n else "")
+    print(f"MRR:      {mrr:.3f}")
+    print(f"latency:  {median * 1000:.0f} ms median per query")
+    misses = [r for r in results if r["rank"] is None]
+    if misses:
+        print(f"\n{len(misses)} miss(es):")
+        for r in misses:
+            print(f"  {r['query']}")
+            print(f"    wanted {' or '.join(r['expect'])}, got {', '.join(r['top'])}")
+    print("\nThese numbers rank models against each other on this commit. The "
+          "corpus is the repository's own docs, so editing them moves the "
+          "scores: do not compare runs across commits.")
 
 
 def main():
@@ -434,8 +683,16 @@ def main():
     se.add_argument("query")
     se.add_argument("-k", type=int, default=5)
     se.add_argument("-j", "--json", action="store_true")
+    ri = sub.add_parser("reindex")
+    ri.add_argument("name")
+    ev = sub.add_parser("eval")
+    ev.add_argument("-k", type=int, default=5)
+    ev.add_argument("-j", "--json", action="store_true")
+    ev.add_argument("--keep", action="store_true",
+                    help="leave the eval knowledge base in place for inspection")
     args = p.parse_args()
-    {"ls": cmd_ls, "rm": cmd_rm, "add": cmd_add, "search": cmd_search}[args.cmd](args)
+    {"ls": cmd_ls, "rm": cmd_rm, "add": cmd_add, "search": cmd_search,
+     "reindex": cmd_reindex, "eval": cmd_eval}[args.cmd](args)
 
 
 if __name__ == "__main__":

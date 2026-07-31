@@ -40,7 +40,9 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
                               --last N prints the newest N recorded samples.
   fxlla logs                  Follow the server log
   fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
-  fxlla kb add|search|ls|rm   Knowledge bases (RAG) over your files (also 'stop')
+  fxlla kb add|search|ls|rm   Knowledge bases (RAG) over your files (also 'stop',
+                              'reindex <name>' to re-embed after changing model,
+                              and 'eval' to score retrieval on the repo docs)
   fxlla graph index|def|refs  Code graph over Python (also callers|impact|unused)
   fxlla media image "<prompt>"  Generate an image locally (mflux-cv). Also 'models'
   fxlla media video "<prompt>"  Generate a short video locally (ltx-2-mlx)
@@ -1323,6 +1325,7 @@ cmd_kb() {
     mcp)           _need_kb_uv
                    exec env FXLLA_STORE="$FXLLA_STORE" \
                      FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
+                     FXLLA_EMBED_MODEL="${FXLLA_EMBED_MODEL:-}" \
                      FXLLA_KB_INDEX="${FXLLA_KB_INDEX:-}" \
                      "${KB_PY[@]}" "$REPO_ROOT/rag/rag_mcp.py" ;;
     wire-opencode) _wire_rag_mcp; return ;;
@@ -1330,6 +1333,7 @@ cmd_kb() {
   esac
   _need_kb_uv
   FXLLA_STORE="$FXLLA_STORE" FXLLA_EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" \
+  FXLLA_EMBED_MODEL="${FXLLA_EMBED_MODEL:-}" \
   FXLLA_KB_INDEX="${FXLLA_KB_INDEX:-}" \
     "${KB_PY[@]}" "$REPO_ROOT/rag/core.py" "$@"
 }
