@@ -55,6 +55,24 @@ class TestDownloadedModels(unittest.TestCase):
             gw.MODELS_DIR, gw.CATALOG = saved
             os.unlink(catalog.name)
 
+    def test_model_context_per_engine(self):
+        # mlx serves the model's own window (config.json); gguf serves the -c
+        # llama-server was started with. Feeding either the wrong one gives
+        # opencode a context meter that lies in one direction or the other.
+        store = self._store({"m-mlx": "org/a", "m-gguf": "org/b", "m-bare": "org/c"})
+        with open(os.path.join(store, "m-mlx", "config.json"), "w") as fh:
+            fh.write('{"max_position_embeddings": 262144}')
+        with open(os.path.join(store, "m-gguf", ".engine"), "w") as fh:
+            fh.write("gguf\n")
+        saved = gw.MODELS_DIR
+        gw.MODELS_DIR = store
+        try:
+            self.assertEqual(gw.model_context("m-mlx"), 262144)
+            self.assertEqual(gw.model_context("m-gguf"), gw.SERVED_GGUF_CTX)
+            self.assertIsNone(gw.model_context("m-bare"))
+        finally:
+            gw.MODELS_DIR = saved
+
     def test_a_missing_catalog_excludes_nothing(self):
         # A stranger's checkout with a moved catalog must not hide their
         # models; the filter fails open to the old behavior.

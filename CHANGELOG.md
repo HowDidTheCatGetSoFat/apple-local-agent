@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Fixed
+- opencode's context meter now runs on each model's real window. The
+  registration declared no per-model limit, so the meter and the
+  auto-compaction trigger used a made-up number. The gateway now reports each
+  model's context on /v1/models - the model's own config.json window for mlx,
+  the served -c for gguf - and the registration writes it as the opencode
+  limit, with output capped between 4k and 16k at a quarter of the window.
 - Selecting the local provider in opencode no longer stops at an API key
   prompt. The local servers validate no key, but opencode asks for one when
   the provider omits it; the registration now carries a dummy `apiKey`

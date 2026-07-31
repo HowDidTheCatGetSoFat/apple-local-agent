@@ -101,6 +101,28 @@ def _embed_identities():
     return aliases, repos
 
 
+# What llama-server is started with (-c) by cmd_backend: for gguf the SERVED
+# window, whatever the weights could do. mlx_lm.server serves the model's own
+# window, which config.json declares.
+SERVED_GGUF_CTX = int(os.environ.get("FXLLA_CTX", "8192"))
+
+
+def model_context(alias):
+    """The context window a request to this model actually gets, or None when
+    it cannot be determined. This feeds opencode's per-model limit: without a
+    declared limit its context meter and auto-compaction run on a made-up
+    number."""
+    d = os.path.join(MODELS_DIR, alias)
+    if engine_for(alias) == "gguf":
+        return SERVED_GGUF_CTX
+    try:
+        with open(os.path.join(d, "config.json"), encoding="utf-8") as fh:
+            value = json.load(fh).get("max_position_embeddings")
+        return int(value) if value else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def downloaded_models():
     """Map alias -> {size_mb} for CHAT models with a completion marker.
 
@@ -363,7 +385,8 @@ class Handler(BaseHTTPRequestHandler):
             models = downloaded_models()
             self._json(200, {"object": "list", "data": [
                 {"id": a, "object": "model", "owned_by": "fxlla",
-                 "size_mb": m["size_mb"]} for a, m in models.items()]})
+                 "size_mb": m["size_mb"], "context": model_context(a)}
+                for a, m in models.items()]})
         elif self.path.rstrip("/") in ("/health", "/v1/health"):
             self._json(200, {"status": "ok", "resident": MANAGER.status(),
                              "budget_mb": BUDGET_MB})

@@ -838,9 +838,25 @@ opts = loc.setdefault("options", {})
 opts["baseURL"] = os.environ["BASE_URL"]
 # No key is validated locally; without one opencode prompts the user for it.
 opts.setdefault("apiKey", "local")
-ids = [i for i in os.environ.get("MODEL_IDS", "").splitlines() if i.strip()]
-if ids:
-    loc["models"] = {i: {"name": "%s (local)" % i} for i in sorted(ids)}
+models = {}
+for line in os.environ.get("MODEL_IDS", "").splitlines():
+    if not line.strip():
+        continue
+    parts = line.split("\t")
+    mid = parts[0].strip()
+    entry = {"name": "%s (local)" % mid}
+    ctx = parts[1].strip() if len(parts) > 1 else ""
+    if ctx.isdigit():
+        # Without a declared limit opencode's context meter and its
+        # auto-compaction trigger run on a made-up number. Output is at
+        # least a real completion (4k) and at most a quarter of the
+        # window, capped at 16k.
+        n = int(ctx)
+        entry["limit"] = {"context": n,
+                          "output": max(4096, min(16384, n // 4))}
+    models[mid] = entry
+if models:
+    loc["models"] = dict(sorted(models.items()))
 else:
     loc.setdefault("models", {})
 with open(cfg, "w") as f: json.dump(data, f, indent=2)
@@ -858,6 +874,7 @@ cmd_serve() {
     FXLLA_BACKEND_PORT_BASE="${FXLLA_BACKEND_PORT_BASE:-8100}" \
     FXLLA_GATEWAY_BUDGET_MB="${FXLLA_GATEWAY_BUDGET_MB:-}" \
     FXLLA_STATS_FILE="$STATS_FILE" \
+    FXLLA_CTX="$FXLLA_CTX" \
     FXLLA_BIN="$SELF" \
     nohup python3 "$REPO_ROOT/gateway/fxlla_gateway.py" > "$GATEWAY_LOG" 2>&1 &
   echo $! > "$GATEWAY_PID"
@@ -865,12 +882,15 @@ cmd_serve() {
   for _ in $(seq 1 30); do
     if curl -sf "http://$FXLLA_HOST:$FXLLA_PORT/health" >/dev/null 2>&1; then
       # One fetch feeds both the banner and the opencode registration, so what
-      # the user reads is exactly what got registered.
+      # the user reads is exactly what got registered. Lines are "id<TAB>ctx";
+      # the context travels so opencode's meter runs on the real window.
       ids="$(curl -s "http://$FXLLA_HOST:$FXLLA_PORT/v1/models" \
-        | python3 -c 'import sys,json;print("\n".join(m["id"] for m in json.load(sys.stdin)["data"]))' 2>/dev/null || true)"
+        | python3 -c 'import sys,json
+for m in json.load(sys.stdin)["data"]:
+    print("%s\t%s" % (m["id"], m.get("context") or ""))' 2>/dev/null || true)"
       MODEL_IDS="$ids" _sync_opencode_all
       ok "Gateway up at $BASE_URL"
-      info "Models: $(printf '%s' "$ids" | tr '\n' ',' | sed 's/,$//;s/,/, /g')"
+      info "Models: $(printf '%s' "$ids" | cut -f1 | tr '\n' ',' | sed 's/,$//;s/,/, /g')"
       ok "In opencode: provider 'local', pick any model. The first request loads it."
       return 0
     fi
