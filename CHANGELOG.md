@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- `FXLLA_LORA_DIRS`: LoRA discovery searches directories you name, not just
+  the civitai download folder. That single-directory assumption answered "no
+  LoRAs found" to someone holding ten, because people train their own and keep
+  them beside the project that produced them. When nothing is found the output
+  now lists the directories it searched, so the answer is actionable instead
+  of just discouraging.
 - The media skill was rewritten as a decision guide rather than a tool list.
   It now tells a model to look before choosing (`list_media_models`,
   `list_loras`), which model suits which kind of request, when each option is

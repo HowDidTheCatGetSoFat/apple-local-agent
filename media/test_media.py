@@ -1008,6 +1008,56 @@ class TestControlAndDepth(unittest.TestCase):
             media.build_command(bare, "c", "/o.png", guidance=7.5, model_name="m")
 
 
+class TestLoraDiscovery(unittest.TestCase):
+    # Searching only the civitai download directory answered "none" to
+    # someone holding ten: people train their own and keep them beside the
+    # project that produced them.
+    def test_configured_directories_are_searched(self):
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, "style.safetensors"), "w").close()
+        saved = os.environ.get("FXLLA_LORA_DIRS")
+        os.environ["FXLLA_LORA_DIRS"] = d
+        try:
+            paths = [p for p, _mb in media.find_loras()]
+            self.assertIn(os.path.join(d, "style.safetensors"), paths)
+        finally:
+            if saved is None:
+                del os.environ["FXLLA_LORA_DIRS"]
+            else:
+                os.environ["FXLLA_LORA_DIRS"] = saved
+
+    def test_several_directories_and_nested_files(self):
+        a, b = tempfile.mkdtemp(), tempfile.mkdtemp()
+        os.makedirs(os.path.join(a, "sub"))
+        open(os.path.join(a, "sub", "deep.safetensors"), "w").close()
+        open(os.path.join(b, "flat.ckpt"), "w").close()
+        saved = os.environ.get("FXLLA_LORA_DIRS")
+        os.environ["FXLLA_LORA_DIRS"] = "%s:%s" % (a, b)
+        try:
+            names = [os.path.basename(p) for p, _ in media.find_loras()]
+            self.assertIn("deep.safetensors", names)
+            self.assertIn("flat.ckpt", names)
+        finally:
+            if saved is None:
+                del os.environ["FXLLA_LORA_DIRS"]
+            else:
+                os.environ["FXLLA_LORA_DIRS"] = saved
+
+    def test_the_civitai_directory_is_always_searched(self):
+        self.assertTrue(any(d.endswith("civitai") for d in media.lora_dirs()))
+
+    def test_a_missing_directory_is_skipped_not_fatal(self):
+        saved = os.environ.get("FXLLA_LORA_DIRS")
+        os.environ["FXLLA_LORA_DIRS"] = "/no/such/dir"
+        try:
+            media.find_loras()  # must not raise
+        finally:
+            if saved is None:
+                del os.environ["FXLLA_LORA_DIRS"]
+            else:
+                os.environ["FXLLA_LORA_DIRS"] = saved
+
+
 class TestLoRA(unittest.TestCase):
     # `fxlla pull civitai:<id>` could download LoRAs from the day it shipped
     # and nothing could apply one.

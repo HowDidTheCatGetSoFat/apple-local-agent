@@ -11,6 +11,7 @@ Config via environment:
   FXLLA_MEDIA_MODEL     default image model (default z-image-turbo)
   FXLLA_MEDIA_OUT       output directory (default <FXLLA_STORE>/media)
   FXLLA_VIDEO_BIN       path to the ltx-2-mlx binary (default: ltx-2-mlx on PATH)
+  FXLLA_LORA_DIRS       colon-separated directories holding LoRAs
   FXLLA_MFLUX_BIN_DIR   directory holding the mflux-cv CLIs (default: PATH)
   FXLLA_EDIT_BIN        path to the image-edit CLI (wins over FXLLA_MFLUX_BIN_DIR)
   FXLLA_UPSCALE_BIN     path to the upscale CLI (wins over FXLLA_MFLUX_BIN_DIR)
@@ -924,23 +925,65 @@ def cmd_models(args):
           "fxlla media models --json")
 
 
-def cmd_loras(_args):
-    """What can actually be applied: the LoRAs civitai pulls have downloaded,
-    plus mflux's built-in styles. Downloading one and having no way to find it
-    again is how they stayed unusable."""
-    root = os.path.join(STORE, "civitai")
+def lora_dirs():
+    """Where to look for LoRAs: FXLLA_LORA_DIRS (colon separated) plus the
+    civitai download directory.
+
+    Searching only the civitai directory was wrong: people train their own and
+    keep them with the project that produced them, or share a directory with
+    another tool, so a real collection was invisible and `list_loras` answered
+    "none" to someone holding ten."""
+    dirs = [d for d in os.environ.get("FXLLA_LORA_DIRS", "").split(":") if d]
+    dirs.append(os.path.join(STORE, "civitai"))
+    seen, out = set(), []
+    for d in dirs:
+        d = os.path.expanduser(d)
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+def find_loras():
+    """(path, megabytes) for every LoRA under the search directories."""
     found = []
-    for base, _dirs, names in os.walk(root):
-        for n in names:
-            if n.endswith((".safetensors", ".ckpt")):
-                p = os.path.join(base, n)
-                found.append((p, os.path.getsize(p) // (1024 * 1024)))
+    for root in lora_dirs():
+        if not os.path.isdir(root):
+            continue
+        for base, _dirs, names in os.walk(root):
+            for n in sorted(names):
+                if n.endswith((".safetensors", ".ckpt")):
+                    full = os.path.join(base, n)
+                    try:
+                        found.append((full, os.path.getsize(full) // (1024 * 1024)))
+                    except OSError:
+                        continue
+    return sorted(found)
+
+
+def cmd_loras(args):
+    """What can actually be applied: the LoRAs found on disk plus mflux's
+    built-in styles. Having one and no way to find it again is how they stayed
+    unusable."""
+    found = find_loras()
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "loras": [{"path": p, "mb": mb, "name": os.path.basename(p)}
+                      for p, mb in found],
+            "styles": list(LORA_STYLES),
+            "searched": lora_dirs(),
+        }, indent=1))
+        return
     if found:
-        print("Downloaded (use: --lora <path> [scale])")
-        for p, mb in sorted(found):
-            print("  %-58s %d MB" % (p, mb))
+        print("Found (use: --lora <path>[,scale])")
+        for p, mb in found:
+            print("  %-64s %5d MB" % (p, mb))
     else:
-        print("No LoRAs downloaded yet. Get one: fxlla pull civitai:<id>")
+        print("No LoRAs found. Searched:")
+        for d in lora_dirs():
+            print("  %s" % d)
+        print("Point FXLLA_LORA_DIRS at where yours live (colon separated), "
+              "or get one: fxlla pull civitai:<id>")
     print("\nBuilt-in styles (use: --lora-style <name>)")
     print("  " + ", ".join(LORA_STYLES))
 
@@ -1089,7 +1132,8 @@ def main():
 
     ml = sub.add_parser("models")
     ml.add_argument("-j", "--json", action="store_true")
-    sub.add_parser("loras")
+    lr = sub.add_parser("loras")
+    lr.add_argument("-j", "--json", action="store_true")
     # Introspection for doctor and setup: the ONE place voice-interpreter
     # resolution lives, so shell never re-implements it.
     sub.add_parser("voice-python")

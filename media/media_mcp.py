@@ -143,8 +143,7 @@ TOOLS = [
                                    "it wastes a call per second."},
      }, "required": ["job_id"]}},
     {"name": "list_loras",
-     "description": "LoRAs available locally (downloaded with `fxlla pull "
-                    "civitai:<id>`) and the built-in styles. Check here before "
+     "description": "LoRAs found on this machine and the built-in styles. Check here before "
                     "generating: if a LoRA fits what the user asked for, offer "
                     "it rather than ignoring what they already downloaded.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -249,7 +248,8 @@ def run_job_status(args):
 
 
 def run_list_loras(_args):
-    return _exec([sys.executable, MEDIA, "loras"], "could not list loras")
+    return _exec([sys.executable, MEDIA, "loras", "--json"],
+                 "could not list loras")
 
 
 def run_list_models(_args):
