@@ -36,12 +36,18 @@ TOOLS = [
      }, "required": ["prompt"]}},
     {"name": "generate_video",
      "description": "Generate a short video from a text prompt using the local "
-                    "ltx-2-mlx (LTX-2.3) toolchain. Returns the path to the MP4.",
+                    "ltx-2-mlx (LTX-2.3) toolchain. Returns the path to the MP4 "
+                    "and the MEASURED duration, frame count and fps of the "
+                    "result - report those, do not compute duration from the "
+                    "request.",
      "inputSchema": {"type": "object", "properties": {
          "prompt": {"type": "string"},
          "stage": {"type": "string",
                    "enum": ["distilled", "one-stage", "two-stage", "two-stages-hq"],
                    "description": "Quality stage (default distilled, the fast path)."},
+         "seconds": {"type": "number",
+                     "description": "Target duration in seconds. Prefer this over "
+                                    "frames; do not pass both."},
          "frames": {"type": "integer"},
          "frame_rate": {"type": "integer", "description": "Default 24 (trained fps)."},
          "width": {"type": "integer"},
@@ -109,7 +115,8 @@ for _tool in TOOLS:
 _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
                 ("width", "--width"), ("height", "--height"), ("aspect", "--aspect"),
                 ("quantize", "--quantize")]
-_VIDEO_FLAGS = [("stage", "--stage"), ("frames", "--frames"),
+_VIDEO_FLAGS = [("stage", "--stage"), ("seconds", "--seconds"),
+                ("frames", "--frames"),
                 ("frame_rate", "--frame-rate"), ("width", "--width"),
                 ("height", "--height"), ("seed", "--seed"), ("model", "--model")]
 _VOICE_FLAGS = [("ref", "--ref"), ("lang", "--lang"), ("speed", "--speed"),
@@ -167,7 +174,23 @@ def run_generate(args):
 
 
 def run_generate_video(args):
-    return _run("video", "prompt", _VIDEO_FLAGS, args)
+    result = _run("video", "prompt", _VIDEO_FLAGS, args)
+    # Hand back what the file IS, measured. A caller that computes duration
+    # from its own request can be wrong and sound certain: one reported 49
+    # frames at 24 fps as "about 10 seconds" (2.04) and declared an unmet
+    # 4-8 second requirement satisfied. Async returns a job id, not a path,
+    # so there is nothing to measure yet.
+    if result.startswith("error:") or not os.path.isfile(result):
+        return result
+    sys.path.insert(0, HERE)
+    import quality  # noqa: E402  (local module, beside this file)
+    facts = quality.video_facts(result)
+    if not facts.get("duration_s"):
+        return result
+    return ("%s\nmeasured: %.2fs, %s frames, %s fps, %sx%s"
+            % (result, facts["duration_s"], facts.get("frames", "?"),
+               facts.get("fps", "?"), facts.get("width", "?"),
+               facts.get("height", "?")))
 
 
 def run_generate_speech(args):

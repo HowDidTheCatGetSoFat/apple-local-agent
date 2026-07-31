@@ -27,6 +27,32 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Fixed
+- The media MCP registration was written with an EMPTY environment through
+  `fxlla wire-opencode --all`, so every media tool call from an editor died
+  with "FXLLA_STORE is not set". The wiring copied only exported variables,
+  and config.env is read with `: "${VAR:=default}"`, which assigns without
+  exporting - only `fxlla media wire-opencode` (which exports on its way
+  through cmd_media) ever worked. Found by reading a real session where a
+  model hit this four times and abandoned the MCP for about thirty shell
+  commands.
+- `--output` accepts a directory. Passing one ("put it in ~/Downloads") is
+  the obvious thing to try and used to reach the toolchain as a filename,
+  failing deep inside a backend; all five generators now name the file
+  inside it. A trailing separator creates the directory.
+- Image dimensions are no longer dropped in silence. `--aspect` together with
+  `--width/--height` made aspect win without a word, so a request for 512x512
+  produced a 1024x1024 file; the combination is now refused, naming both. The
+  test suite had encoded the old behavior as intent and defended the bug.
+- `fxlla media video` reports the MEASURED duration, frames and fps of what it
+  produced, and the MCP returns them too. A model computed 49 frames at 24 fps
+  as "about 10 seconds" (it is 2.04) and declared an unmet 4-8 second
+  requirement satisfied. `--seconds` now asks for duration directly instead of
+  making the caller do the multiplication.
+- Voice through the MCP used a python without mlx-audio: `lib/core.sh`
+  defaulted FXLLA_VOICE_PYTHON to `python3`, and the registration forwarded
+  that default as if it were an explicit choice, beating the uv tool venv that
+  actually has mlx-audio. The default now lives only in generate.py's
+  resolution, where unset means unset.
 - opencode's context meter now runs on each model's real window. The
   registration declared no per-model limit, so the meter and the
   auto-compaction trigger used a made-up number. The gateway now reports each

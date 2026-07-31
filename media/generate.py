@@ -51,6 +51,26 @@ EDIT_BIN = os.environ.get("FXLLA_EDIT_BIN", "")
 UPSCALE_BIN = os.environ.get("FXLLA_UPSCALE_BIN", "")
 
 
+def resolve_output(output, kind, ext):
+    """Where a render should land: OUT_DIR when nothing was asked for, a
+    generated name INSIDE the path when it is an existing directory, and the
+    path itself otherwise.
+
+    Passing a directory is the obvious thing to try ("put it in ~/Downloads")
+    and it used to reach the toolchain as a filename, which failed deep in a
+    backend with a message about writing to a directory. Naming the file here
+    is what a caller would have had to do by hand."""
+    if not output:
+        return os.path.join(OUT_DIR, "fxlla-%s-%d.%s" % (kind, int(time.time()), ext))
+    # A trailing separator means a directory was intended even if it does not
+    # exist yet, which is worth creating rather than treating as a filename.
+    if output.endswith(os.sep) and not os.path.exists(output):
+        os.makedirs(output, exist_ok=True)
+    if os.path.isdir(output):
+        return os.path.join(output, "fxlla-%s-%d.%s" % (kind, int(time.time()), ext))
+    return output
+
+
 def mflux_cli(name):
     """Resolve one mflux-family CLI: FXLLA_MFLUX_BIN_DIR when set, PATH
     otherwise. A set directory missing the binary is an error worth naming -
@@ -170,6 +190,14 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
         cmd += ["--steps", str(eff_steps)]
     if seed is not None:
         cmd += ["--seed", str(seed)]
+    # Both would be a contradiction the CLI resolves by ignoring one, silently:
+    # a request for 512x512 with aspect 1:1 produced a 1024x1024 file and
+    # nothing said so. Refusing names the conflict; asking for either alone is
+    # the ordinary case and still works.
+    if aspect and (width or height):
+        raise ValueError(
+            "give either --aspect or --width/--height, not both: aspect %s "
+            "would override the requested %sx%s" % (aspect, width or "?", height or "?"))
     if aspect:
         cmd += ["--aspect", aspect]
     else:
@@ -228,7 +256,7 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
         raise ValueError("unknown model '%s'; try one of: %s"
                          % (model, ", ".join(sorted(MODELS))))
     os.makedirs(OUT_DIR, exist_ok=True)
-    output = output or os.path.join(OUT_DIR, "fxlla-%s-%d.png" % (model, int(time.time())))
+    output = resolve_output(output, model, "png")
     free_gpu("image", keep_models)
     cmd = build_command(spec, prompt, output, steps=steps, seed=seed, width=width,
                         height=height, aspect=aspect, quantize=quantize,
@@ -288,7 +316,7 @@ def generate_video(prompt, stage=DEFAULT_STAGE, frames=None,
     if not prompt:
         raise ValueError("prompt is required")
     os.makedirs(OUT_DIR, exist_ok=True)
-    output = output or os.path.join(OUT_DIR, "fxlla-video-%d.mp4" % int(time.time()))
+    output = resolve_output(output, "video", "mp4")
     free_gpu("video", keep_models)
     cmd = build_video_command(prompt, output, stage=stage, frames=frames,
                               frame_rate=frame_rate, width=width, height=height,
@@ -332,7 +360,7 @@ def generate_speech(text, ref=None, lang=None, model=None, speed=1.0,
     if not text:
         raise ValueError("text is required")
     os.makedirs(OUT_DIR, exist_ok=True)
-    output = output or os.path.join(OUT_DIR, "fxlla-voice-%d.wav" % int(time.time()))
+    output = resolve_output(output, "voice", "wav")
     free_gpu("voice", keep_models)
     cmd = build_voice_command(text, output, ref or VOICE_REF, model=model,
                               lang=lang, speed=speed)
@@ -371,7 +399,7 @@ def generate_edit(prompt, image, seed=None, quantize=8, output=None,
     if not os.path.exists(image):
         raise ValueError("input image not found: %s" % image)
     os.makedirs(OUT_DIR, exist_ok=True)
-    output = output or os.path.join(OUT_DIR, "fxlla-edit-%d.png" % int(time.time()))
+    output = resolve_output(output, "edit", "png")
     free_gpu("edit", keep_models)
     cmd = build_edit_command(prompt, image, output, seed=seed, quantize=quantize)
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
@@ -402,7 +430,7 @@ def generate_upscale(image, scale=None, output=None, keep_models=False):
     if not os.path.exists(image):
         raise ValueError("input image not found: %s" % image)
     os.makedirs(OUT_DIR, exist_ok=True)
-    output = output or os.path.join(OUT_DIR, "fxlla-upscale-%d.png" % int(time.time()))
+    output = resolve_output(output, "upscale", "png")
     free_gpu("upscale", keep_models)
     cmd = build_upscale_command(image, output, scale=scale)
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
@@ -422,11 +450,25 @@ def cmd_image(args):
 
 
 def cmd_video(args):
+    frames = args.frames
+    rate = args.frame_rate if args.frame_rate is not None else DEFAULT_FRAME_RATE
+    if args.seconds is not None:
+        if frames is not None:
+            raise ValueError("give either --seconds or --frames, not both")
+        frames = max(1, int(round(args.seconds * rate)))
     path = generate_video(
-        args.prompt, stage=args.stage, frames=args.frames, frame_rate=args.frame_rate,
+        args.prompt, stage=args.stage, frames=frames, frame_rate=args.frame_rate,
         width=args.width, height=args.height, seed=args.seed, low_ram=args.low_ram,
         model=args.model, output=args.output, keep_models=args.keep_models)
     print(path)
+    # The measured result, not the request: a caller reading back its own
+    # --frames has no way to know what the backend actually produced, and one
+    # confidently reported 2 seconds of video as 10.
+    facts = quality.video_facts(path)
+    if facts.get("duration_s") is not None:
+        print("duration: %.2fs (%s frames at %s fps)"
+              % (facts["duration_s"], facts.get("frames", "?"), facts.get("fps", "?")),
+              file=sys.stderr)
 
 
 def cmd_voice(args):
@@ -520,6 +562,11 @@ def main():
     vi.add_argument("prompt")
     vi.add_argument("--stage", choices=VIDEO_STAGES, default=DEFAULT_STAGE)
     vi.add_argument("--frames", type=int)
+    # Duration is what a person asks for; frames is what the backend takes.
+    # Without this the caller does the multiplication, and one got it wrong by
+    # 5x while reporting success.
+    vi.add_argument("--seconds", type=float,
+                    help="target duration; converted to frames at the frame rate")
     vi.add_argument("--frame-rate", type=int, default=DEFAULT_FRAME_RATE)
     vi.add_argument("--width", type=int)
     vi.add_argument("--height", type=int)

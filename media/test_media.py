@@ -48,11 +48,14 @@ class TestBuildCommand(unittest.TestCase):
         cmd = media.build_command(media.MODELS["z-image-turbo"], "cat", "/o.png", steps=3)
         self.assertEqual(cmd[cmd.index("--steps") + 1], "3")
 
-    def test_aspect_excludes_width_height(self):
-        cmd = media.build_command(media.MODELS["z-image-turbo"], "cat", "/o.png",
-                                  aspect="1:1", width=512, height=512)
-        self.assertIn("--aspect", cmd)
-        self.assertNotIn("--width", cmd)
+    def test_aspect_with_width_height_is_refused(self):
+        # This test used to assert the opposite - that aspect silently won and
+        # the dimensions were dropped - which is how a request for 512x512
+        # produced a 1024x1024 file with nothing said. The old behavior was
+        # written down as intent, so the suite defended the bug.
+        with self.assertRaises(ValueError):
+            media.build_command(media.MODELS["z-image-turbo"], "cat", "/o.png",
+                                aspect="1:1", width=512, height=512)
 
     def test_width_height_without_aspect(self):
         cmd = media.build_command(media.MODELS["z-image-turbo"], "cat", "/o.png",
@@ -419,6 +422,53 @@ class TestQualityAudio(unittest.TestCase):
         self.assertIn("; and ", both)
 
 
+class TestVideoFacts(unittest.TestCase):
+    # The measured truth about a produced file, so a caller cannot report its
+    # own request back as the result: one called 49 frames at 24 fps "about 10
+    # seconds" (2.04) and declared a 4-8 second requirement met.
+    def _probe(self, payload):
+        saved = quality._ffprobe
+        quality._ffprobe = lambda _p: payload
+        return saved
+
+    def test_duration_frames_and_fps_are_read(self):
+        saved = self._probe({"streams": [{"nb_frames": "49", "width": 512,
+                                          "height": 512, "r_frame_rate": "24/1",
+                                          "duration": "2.041667"}]})
+        try:
+            f = quality.video_facts("/x.mp4")
+        finally:
+            quality._ffprobe = saved
+        self.assertEqual(f["duration_s"], 2.04)
+        self.assertEqual(f["frames"], 49)
+        self.assertEqual(f["fps"], 24.0)
+        self.assertEqual((f["width"], f["height"]), (512, 512))
+
+    def test_container_duration_is_the_fallback(self):
+        saved = self._probe({"streams": [{"nb_frames": "10"}],
+                             "format": {"duration": "0.5"}})
+        try:
+            self.assertEqual(quality.video_facts("/x.mp4")["duration_s"], 0.5)
+        finally:
+            quality._ffprobe = saved
+
+    def test_no_ffprobe_yields_no_facts_rather_than_guesses(self):
+        saved = self._probe(None)
+        try:
+            self.assertEqual(quality.video_facts("/x.mp4"), {})
+        finally:
+            quality._ffprobe = saved
+
+    def test_unparseable_rate_is_omitted_not_invented(self):
+        saved = self._probe({"streams": [{"r_frame_rate": "0/0", "duration": "1"}]})
+        try:
+            f = quality.video_facts("/x.mp4")
+        finally:
+            quality._ffprobe = saved
+        self.assertNotIn("fps", f)
+        self.assertEqual(f["duration_s"], 1.0)
+
+
 class TestQualityImageVideo(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -618,6 +668,60 @@ class TestJobs(unittest.TestCase):
         rec = self._record(status="failed",
                            error="Traceback...\n  File x\nValueError: bad input")
         self.assertIn("ValueError: bad input", jobs.describe(rec))
+
+
+class TestResolveOutput(unittest.TestCase):
+    # Passing a directory ("put it in ~/Downloads") used to reach the backend
+    # as a filename and fail deep inside it. A real model hit exactly that and
+    # abandoned the tool for ~30 shell commands.
+    def test_none_lands_in_the_default_dir(self):
+        p = media.resolve_output(None, "image", "png")
+        self.assertTrue(p.startswith(media.OUT_DIR))
+        self.assertTrue(p.endswith(".png"))
+
+    def test_a_file_path_is_used_verbatim(self):
+        self.assertEqual(media.resolve_output("/tmp/x.png", "image", "png"),
+                         "/tmp/x.png")
+
+    def test_an_existing_directory_gets_a_generated_name_inside(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        p = media.resolve_output(d, "image", "png")
+        self.assertEqual(os.path.dirname(p), d)
+        self.assertTrue(p.endswith(".png"))
+        self.assertNotEqual(p, d)
+
+    def test_a_trailing_separator_means_a_directory(self):
+        import tempfile
+        d = os.path.join(tempfile.mkdtemp(), "new-dir") + os.sep
+        p = media.resolve_output(d, "video", "mp4")
+        self.assertTrue(os.path.isdir(d))
+        self.assertEqual(os.path.dirname(p) + os.sep, d)
+
+    def test_every_generator_kind_uses_it(self):
+        for kind, ext in (("image", "png"), ("video", "mp4"), ("voice", "wav"),
+                          ("edit", "png"), ("upscale", "png")):
+            self.assertTrue(media.resolve_output(None, kind, ext).endswith("." + ext))
+
+
+class TestAspectConflict(unittest.TestCase):
+    # Measured: a request for 512x512 WITH aspect 1:1 produced 1024x1024,
+    # because aspect won and the dimensions were dropped without a word.
+    def test_aspect_with_dimensions_is_refused(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(media.MODELS["z-image-turbo"], "a cat", "/o.png",
+                                width=512, height=512, aspect="1:1")
+        self.assertIn("512", str(ctx.exception))
+        self.assertIn("1:1", str(ctx.exception))
+
+    def test_either_alone_still_works(self):
+        only_dims = media.build_command(media.MODELS["z-image-turbo"], "c", "/o.png",
+                                        width=512, height=512)
+        self.assertEqual(only_dims[only_dims.index("--width") + 1], "512")
+        only_aspect = media.build_command(media.MODELS["z-image-turbo"], "c", "/o.png",
+                                          aspect="16:9")
+        self.assertEqual(only_aspect[only_aspect.index("--aspect") + 1], "16:9")
+        self.assertNotIn("--width", only_aspect)
 
 
 class TestMfluxBinDir(unittest.TestCase):

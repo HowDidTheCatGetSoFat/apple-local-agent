@@ -144,7 +144,9 @@ def check_png(path):
 def _ffprobe(path):
     """Video stream facts via ffprobe, or None when it is unavailable."""
     cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0",
-           "-show_entries", "stream=nb_frames,width,height", "-of", "json", path]
+           "-show_entries",
+           "stream=nb_frames,width,height,r_frame_rate,duration:format=duration",
+           "-of", "json", path]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
                               stdin=subprocess.DEVNULL)
@@ -156,6 +158,46 @@ def _ffprobe(path):
         return json.loads(proc.stdout)
     except ValueError:
         return None
+
+
+def video_facts(path):
+    """What the produced video actually IS: {duration_s, frames, fps, width,
+    height}, with whatever ffprobe could not answer left out.
+
+    Measured, not derived from the request: a caller reading back its own
+    --frames and --frame-rate can be wrong about the result and say so
+    confidently. A real model did exactly that - reported 49 frames at 24 fps
+    as "about 10 seconds" (it is 2.04) and called an unmet 4-8 second
+    requirement satisfied."""
+    info = _ffprobe(path)
+    if not info:
+        return {}
+    streams = info.get("streams") or []
+    stream = streams[0] if streams else {}
+    facts = {}
+    for key, name in (("width", "width"), ("height", "height")):
+        if stream.get(key):
+            facts[name] = int(stream[key])
+    try:
+        facts["frames"] = int(stream.get("nb_frames"))
+    except (TypeError, ValueError):
+        pass
+    rate = stream.get("r_frame_rate") or ""
+    if "/" in rate:
+        num, den = rate.split("/", 1)
+        try:
+            if float(den):
+                facts["fps"] = round(float(num) / float(den), 3)
+        except ValueError:
+            pass
+    # The stream's own duration when present, else the container's.
+    for source in (stream.get("duration"), (info.get("format") or {}).get("duration")):
+        try:
+            facts["duration_s"] = round(float(source), 2)
+            break
+        except (TypeError, ValueError):
+            continue
+    return facts
 
 
 def check_video(path):

@@ -1438,7 +1438,7 @@ cmd_doctor() {
   # lives there (env override, then the uv tool venv, then python3) and
   # re-implementing it here is how the two would drift.
   local _vp
-  _vp="$(python3 "$REPO_ROOT/media/generate.py" voice-python 2>/dev/null || echo "$FXLLA_VOICE_PYTHON")"
+  _vp="$(python3 "$REPO_ROOT/media/generate.py" voice-python 2>/dev/null || echo "${FXLLA_VOICE_PYTHON:-python3}")"
   if ! command -v "$_vp" >/dev/null 2>&1; then
     _chk warn "voice interpreter not found: $_vp (set FXLLA_VOICE_PYTHON)"
   elif "$_vp" -c 'import mlx_audio' >/dev/null 2>&1; then
@@ -1720,6 +1720,14 @@ cmd_media() {
 _wire_media_mcp() {
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   mkdir -p "$(dirname "$cfg")"
+  # Export the set here rather than relying on the caller: config.env is read
+  # with `: "${VAR:=default}"`, which assigns without exporting, so only
+  # `fxlla media wire-opencode` (which exports on its way through cmd_media)
+  # ever saw these. Through `wire-opencode --all` the registration got an
+  # EMPTY environment, and every MCP media call died with "FXLLA_STORE is not
+  # set" - which is what drove a real model off the tool and into shell.
+  # shellcheck disable=SC2086,SC2163  # export the names in the list
+  export $FXLLA_MEDIA_ENV
   CFG="$cfg" MCP="$REPO_ROOT/media/media_mcp.py" KEYS="$FXLLA_MEDIA_ENV" python3 - <<'PY'
 import os, json
 cfg = os.environ["CFG"]
