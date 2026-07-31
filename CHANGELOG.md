@@ -5,6 +5,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-31
+
+Everything on the original roadmap is now delivered or explicitly declined
+with a measurement. Highlights: the multi-model gateway with passive metrics,
+RAG with a selectable embedding model and its own retrieval eval, the KuzuDB
+code graph across nine languages, local media generation with async jobs and
+content validation, consent gates on every download path, a signed and
+notarized menu bar app that bundles the CLI, and `fxlla eval`, which scores
+chat models on mechanically checked quality and measured speed.
+
 ### Added
 - `fxlla eval`: score chat models on quality and speed locally, so choosing a
   model rests on data instead of the catalog's prose. Quality is 30 authored
