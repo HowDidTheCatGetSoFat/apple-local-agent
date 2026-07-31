@@ -6,6 +6,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- The media skill was rewritten as a decision guide rather than a tool list.
+  It now tells a model to look before choosing (`list_media_models`,
+  `list_loras`), which model suits which kind of request, when each option is
+  worth setting, how Ideogram 4's JSON caption works and where to get its
+  schema, that controls stack and how to chain a depth pass into one, and to
+  block on `wait_s` instead of polling a job. The old text predated all of
+  that and actively taught polling, which is what produced 47 status calls in
+  one real session.
 - ControlNet and depth, both stackable. Their weight rows list BOTH repos
   each needs - the adapter and the base model - because listing only the
   adapter let the consent gate pass on 4 GB while mflux then pulled 58 GB of
