@@ -140,6 +140,12 @@ class TestCheckers(unittest.TestCase):
         t = _task({"type": "contains", "values": ["A-1", ["blue", "azure"]]})
         self.assertTrue(run.check_task(t, {"content": "A-1 looks azure to me"})["pass"])
         self.assertFalse(run.check_task(t, {"content": "A-1 looks red"})["pass"])
+        # Case-insensitive in both directions, pinned like the absent checker.
+        self.assertTrue(run.check_task(t, {"content": "a-1 looks AZURE"})["pass"])
+
+    def test_must_contain_is_case_insensitive(self):
+        t = _task({"type": "no_tool_call", "must_contain": [["Paris"]]}, dim="tools")
+        self.assertTrue(run.check_task(t, {"content": "It is PARIS."})["pass"])
 
     def test_json_shape_extra_key_rejected(self):
         t = _task({"type": "json_shape",
@@ -155,6 +161,29 @@ class TestCheckers(unittest.TestCase):
         self.assertTrue(run.check_task(t, {"content": "[\"a\", \"b\", \"c\"]"})["pass"])
         self.assertFalse(run.check_task(t, {"content": "[\"a\", \"b\"]"})["pass"])
         self.assertFalse(run.check_task(t, {"content": "[\"a\", \"b\", 3]"})["pass"])
+
+    def test_json_booleans_do_not_pass_as_numbers(self):
+        # bool subclasses int: without the guard, JSON true satisfies both
+        # numeric kinds.
+        for kind in ("number", "integer"):
+            ok, _why = run._shape_ok({"type": kind}, True)
+            self.assertFalse(ok, kind)
+        ok, _why = run._shape_ok({"type": "number"}, 1.5)
+        self.assertTrue(ok)
+
+    def test_json_extraction_prefers_the_outer_array(self):
+        # A one-object array: the {..} slice parses too, but the answer is
+        # the array.
+        self.assertEqual(run.extract_json("[{\"a\": 1}]"), [{"a": 1}])
+
+    def test_run_tests_error_verdict_is_a_harness_error(self):
+        # A sandbox that cannot even spawn says nothing about the model.
+        t = _task({"type": "run_tests", "tests": "import solution"}, dim="code")
+        fake = lambda code, tests: {"verdict": "error", "seconds": 0.0,
+                                    "output": "spawn failed", "taskdir": None}
+        v = run.check_task(t, {"content": "```python\nx = 1\n```"}, run_code=fake)
+        self.assertFalse(v["pass"])
+        self.assertTrue(v.get("harness_error"))
 
     def test_tool_call_wrong_args_fail(self):
         t = _task({"type": "tool_call", "name": "f", "args": {"x": 1}}, dim="tools")
@@ -302,7 +331,10 @@ class TestSandbox(unittest.TestCase):
             import shutil
             shutil.rmtree(r2["taskdir"], ignore_errors=True)
 
-    def test_fallback_without_sandbox_exec_is_identical(self):
+    def test_fallback_without_sandbox_exec_agrees_on_cooperative_code(self):
+        # The stdlib path is the Linux CI floor: for code that does what the
+        # tasks ask (and for the casual socket tripwire) verdicts match the
+        # seatbelt path.
         saved = sandbox._sandbox_exec_argv
         sandbox._sandbox_exec_argv = lambda argv, taskdir: (argv, False)
         try:
@@ -313,6 +345,51 @@ class TestSandbox(unittest.TestCase):
             self.assertEqual(net["verdict"], "fail")
         finally:
             sandbox._sandbox_exec_argv = saved
+
+    def test_seatbelt_is_stricter_never_looser(self):
+        # The review falsified the old claim that verdicts are identical with
+        # and without the seatbelt: an out-of-directory write has no
+        # Python-level counterpart, so the wrapper can flip pass to fail on
+        # code probing the sandbox. That direction is the contract now, and
+        # this pins it where the seatbelt exists.
+        if not os.path.exists("/usr/bin/sandbox-exec"):
+            self.skipTest("no sandbox-exec on this platform")
+        probe = os.path.join(tempfile.gettempdir(),
+                             "fxlla-eval-divergence-probe")
+        solution = "open(%r, 'w').write('x')\n" % probe
+        try:
+            with_belt = sandbox.run_code(solution, "import solution")
+            self.assertEqual(with_belt["verdict"], "fail",
+                             "seatbelt did not block an outside write")
+            saved = sandbox._sandbox_exec_argv
+            sandbox._sandbox_exec_argv = lambda argv, taskdir: (argv, False)
+            try:
+                without = sandbox.run_code(solution, "import solution")
+            finally:
+                sandbox._sandbox_exec_argv = saved
+            self.assertEqual(without["verdict"], "pass",
+                             "stdlib path unexpectedly blocks writes now - "
+                             "update the README contract")
+        finally:
+            try:
+                os.remove(probe)
+            except OSError:
+                pass
+
+    def test_exit_zero_alone_is_not_a_pass(self):
+        # os._exit(0) at module level ends the interpreter with status 0
+        # before any assert has run; the sentinel requirement catches it.
+        r = sandbox.run_code("import os\nos._exit(0)\n",
+                             "import solution\nassert False")
+        self.assertEqual(r["verdict"], "fail")
+
+    def test_raw_socket_module_is_seatbelt_territory(self):
+        # _socket is patched as a second tripwire, but the docstring is
+        # explicit that Python-level patching is a speed bump: this asserts
+        # the tripwire fires on the common re-import, nothing stronger.
+        r = sandbox.run_code("import _socket\n_socket.socket()\n",
+                             "import solution")
+        self.assertEqual(r["verdict"], "fail")
 
 
 # --------------------------------------------------------------------------
@@ -348,13 +425,20 @@ class TestRendering(unittest.TestCase):
         self.assertNotEqual(moved, run.fingerprint(run.render_tasks(self.spec)))
 
     def test_results_write_invariance(self):
-        # The JOURNAL lesson as a test: writing results anywhere must not move
-        # the fingerprint, because the harness reads only tasks.json.
+        # The JOURNAL lesson as a test: writing results into the directory the
+        # harness itself uses must not move the fingerprint. The temp dir is
+        # wired in as EVAL_DIR, or the test would hold for any implementation
+        # including one that hashes its own history.
         before = run.fingerprint(run.render_tasks(self.spec))
+        saved = run.EVAL_DIR
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "history.jsonl"), "w") as fh:
-                fh.write("{\"score\": 1}\n")
-            after = run.fingerprint(run.render_tasks(run.load_tasks(TASKS)))
+            run.EVAL_DIR = d
+            try:
+                with open(os.path.join(d, "history.jsonl"), "w") as fh:
+                    fh.write("{\"score\": 1}\n")
+                after = run.fingerprint(run.render_tasks(run.load_tasks(TASKS)))
+            finally:
+                run.EVAL_DIR = saved
         self.assertEqual(before, after)
 
     def test_plants_land_and_are_unique(self):
@@ -366,6 +450,21 @@ class TestRendering(unittest.TestCase):
 
     def test_filler_differs_by_seed(self):
         self.assertNotEqual(run.gen_filler(1, 200, []), run.gen_filler(2, 200, []))
+
+    def test_full_render_preserves_every_task(self):
+        # The mutant this kills silently shrank the rendered set to one task
+        # per dimension and every other rendering test still passed: quick
+        # expects 4, the dim filter only checks non-emptiness, and the
+        # fingerprint tests compare renders with themselves. Id-order equality
+        # pins count, identity and order at once.
+        rendered = run.render_tasks(self.spec)
+        self.assertEqual([t["id"] for t in rendered],
+                         [t["id"] for t in self.spec["tasks"]])
+        per_dim = {}
+        for t in rendered:
+            per_dim[t["dim"]] = per_dim.get(t["dim"], 0) + 1
+        self.assertEqual(per_dim, {"code": 10, "tools": 8,
+                                   "instructions": 8, "context": 4})
 
     def test_quick_takes_one_task_per_dimension(self):
         quick = run.render_tasks(self.spec, quick=True)
@@ -507,9 +606,31 @@ REFERENCE_SOLUTIONS = {
 }
 
 
+BROKEN_SOLUTIONS = {
+    # One known-bad solution per code task: right names, wrong behavior. Each
+    # must FAIL its check snippet, or the snippet is vacuous and the task
+    # measures nothing.
+    "code-merge-intervals": "def merge_intervals(intervals):\n    return []\n",
+    "code-toposort": "def topo_sort(edges, n):\n    return list(range(n))\n",
+    "code-parse-duration": "def parse_duration(s):\n    return 0\n",
+    "code-lru": ("class LRUCache:\n"
+                 "    def __init__(self, capacity):\n        pass\n"
+                 "    def get(self, key):\n        return None\n"
+                 "    def put(self, key, value):\n        pass\n"),
+    "code-rle": "def rle_encode(s):\n    return s\ndef rle_decode(s):\n    return s\n",
+    "code-deep-get": "def deep_get(d, path, default=None):\n    return None\n",
+    "bugfix-binary-search": "def find(a, x):\n    return -1\n",
+    "bugfix-mutable-default": ("def add_tag(tag, tags=[]):\n"
+                               "    tags.append(tag)\n    return tags\n"),
+    "bugfix-date-compare": "def is_before(a, b):\n    return a < b\n",
+    "bugfix-generator": "def stats(nums):\n    return (sum(nums), max(nums))\n",
+}
+
+
 class TestReferenceSolutions(unittest.TestCase):
-    # An unsatisfiable task cannot ship: every code task must be passed by a
-    # known-good solution running through the real sandbox.
+    # An unsatisfiable task cannot ship, and neither can a vacuous one: every
+    # code task must be passed by a known-good solution AND failed by a
+    # known-bad one, both through the real sandbox.
     @classmethod
     def setUpClass(cls):
         cls.spec = run.load_tasks(TASKS)
@@ -523,6 +644,17 @@ class TestReferenceSolutions(unittest.TestCase):
             r = sandbox.run_code(REFERENCE_SOLUTIONS[t["id"]], t["check"]["tests"])
             self.assertEqual(r["verdict"], "pass",
                              "%s: %s" % (t["id"], r["output"][-300:]))
+
+    def test_every_code_task_can_fail(self):
+        for t in self.spec["tasks"]:
+            if t["check"]["type"] != "run_tests":
+                continue
+            self.assertIn(t["id"], BROKEN_SOLUTIONS,
+                          "%s has no broken solution" % t["id"])
+            r = sandbox.run_code(BROKEN_SOLUTIONS[t["id"]], t["check"]["tests"],
+                                 timeout_s=4)
+            self.assertNotEqual(r["verdict"], "pass",
+                                "%s: its check snippet is vacuous" % t["id"])
 
 
 # --------------------------------------------------------------------------
@@ -641,6 +773,25 @@ class TestHTTP(unittest.TestCase):
             self.assertIsNone(usage)  # no usage chunk: the ~ marker downstream
             self.assertNotIn("stream_options", handler.seen_bodies[-1])
 
+    def test_sse_events_split_across_read_boundaries(self):
+        # The fake usually writes one event per flush, so the carry buffer in
+        # request_streamed is never exercised on a split event. A stream well
+        # past the 8KB read size forces events to straddle reads; parsing
+        # per-chunk without carrying the remainder loses deltas and the usage
+        # chunk.
+        n = 600
+        events = [_delta("w%03d " % i) for i in range(n)]
+        events.append({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+        events.append({"choices": [], "usage": {"completion_tokens": n}})
+        with fake_chat([{"sse": events}]) as (port, _h):
+            message, sm, usage, finish, wall = run.request_streamed(
+                port, "m", [{"role": "user", "content": "x"}], 4096)
+        expected = "".join("w%03d " % i for i in range(n))
+        self.assertEqual(message["content"], expected)
+        self.assertEqual(usage, {"completion_tokens": n})
+        _t, _tps, tokens = sm.result(sm.start + wall)
+        self.assertEqual(tokens, n)
+
     def test_plain_request(self):
         script = [{"body": {"choices": [{"message": {"content": "hi"},
                                          "finish_reason": "stop"}],
@@ -683,14 +834,17 @@ http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 
 
 class TestLifecycle(unittest.TestCase):
-    def _stub_backend(self, tmp, delay):
+    def _stub_backend(self, tmp, delay, fork=False):
+        # fork=True keeps the shell as group leader with python as its child,
+        # the shape that separates a group kill from a leader-only kill.
         server_py = os.path.join(tmp, "serve.py")
         with open(server_py, "w") as fh:
             fh.write(_STUB_SERVER)
         stub = os.path.join(tmp, "fxlla-stub")
+        launcher = "" if fork else "exec "
         with open(stub, "w") as fh:
-            fh.write("#!/bin/sh\nexec %s %s \"$3\" %s\n"
-                     % (sys.executable, server_py, delay))
+            fh.write("#!/bin/sh\n%s%s %s \"$3\" %s\n"
+                     % (launcher, sys.executable, server_py, delay))
         os.chmod(stub, 0o755)
         return stub
 
@@ -721,8 +875,11 @@ class TestLifecycle(unittest.TestCase):
             if "s" in srv:
                 srv["s"].shutdown()
                 srv["s"].server_close()
+        # 0.9, not tighter: the 1s-poll mutant has a hard floor of ~1.0
+        # (time.sleep never undershoots), so 0.9 kills it deterministically
+        # while leaving headroom for scheduler jitter on a loaded CI runner.
         self.assertGreaterEqual(load_s, 0.4)
-        self.assertLess(load_s, 0.75)
+        self.assertLess(load_s, 0.9)
 
     def test_teardown_frees_the_port_and_kills_the_group(self):
         port = _free_port()
@@ -738,6 +895,25 @@ class TestLifecycle(unittest.TestCase):
                 run.FXLLA_BIN = saved
             self.assertFalse(run.port_in_use(port))
             self.assertIsNotNone(proc.poll())
+
+    def test_teardown_kills_the_child_holding_the_port_not_just_the_leader(self):
+        # With the shell as leader and python as its child, a leader-only kill
+        # orphans the python still holding the port; the group kill gets both.
+        # A surviving orphan makes teardown's port drain raise after its cap,
+        # so the mutant is killed by the exception (and by the leaked server).
+        port = _free_port()
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = self._stub_backend(tmp, 0, fork=True)
+            saved = run.FXLLA_BIN
+            run.FXLLA_BIN = stub
+            try:
+                proc = run.spawn_backend("x", port, os.path.join(tmp, "log"))
+                run.wait_ready(proc, "gguf", port, timeout_s=10)
+                run.teardown(proc, port)
+                self.assertFalse(run.port_in_use(port))
+            finally:
+                run.FXLLA_BIN = saved
+                subprocess.run(["pkill", "-f", tmp], capture_output=True)
 
     def test_death_on_start_fails_fast(self):
         # A model that cannot load must fail in milliseconds, not burn the
@@ -770,6 +946,134 @@ class TestLifecycle(unittest.TestCase):
                 self.assertIn("refusing", str(ctx.exception))
             finally:
                 run.EVAL_PORT, run.spawn_backend = saved_port, saved_spawn
+
+    def test_eval_model_measures_what_the_report_prints(self):
+        # The measurement path end to end against a scripted backend: probe 0
+        # excluded from the medians and carried as first_request_s, the
+        # 64-token tps gate, usage_exact propagation, repeat passes frozen out
+        # of every headline number, unstable_tasks populated - and the SAME
+        # record fed to render_report, so a producer/consumer key drift cannot
+        # hide behind a hand-built fixture.
+        port = _free_port()
+        deltas = lambda n: [_delta("w ") for _ in range(n)]
+        stop = {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+        usage = lambda n: {"choices": [], "usage": {"completion_tokens": n}}
+        body = lambda text: {"body": {
+            "choices": [{"message": {"content": text}, "finish_reason": "stop"}],
+            "usage": {"completion_tokens": 5}}}
+        script = [
+            {"sse": [0.8] + deltas(70) + [stop, usage(70)]},   # probe 0: the load
+            {"sse": deltas(70) + [stop, usage(70)]},           # probe 1
+            {"sse": deltas(70) + [stop]},                      # probe 2: no usage
+            {"sse": deltas(10) + [stop, usage(10)]},           # probe 3: under gate
+            body("BUILD OK 42"),                               # task, pass 1
+            body("nope"),                                      # task, repeat pass
+        ]
+        handler = type("_H", (_FakeChat,), {"script": script, "seen": [],
+                                            "seen_bodies": []})
+        srv = {}
+
+        class _Alive:
+            pid = os.getpid()
+
+            def poll(self):
+                return None
+
+        def _spawn(alias, port_, log_path):
+            srv["s"] = http.server.HTTPServer(("127.0.0.1", port), handler)
+            threading.Thread(target=srv["s"].serve_forever, daemon=True).start()
+            return _Alive()
+
+        rendered = [{"id": "t-exact", "dim": "instructions", "max_tokens": 64,
+                     "prompt": "say it", "stream": False,
+                     "check": {"type": "exact", "value": "BUILD OK 42"}}]
+        saved = (run.EVAL_PORT, run.spawn_backend, run.teardown)
+        run.EVAL_PORT = port
+        run.spawn_backend = _spawn
+        run.teardown = lambda proc, port_: srv["s"].shutdown()
+        try:
+            args = argparse.Namespace(quick=False, keep_failed=False, repeats=2)
+            with tempfile.TemporaryDirectory() as tmp:
+                rec = run.eval_model(("m", "/d", "mlx", 100, "dev"),
+                                     rendered, args, tmp)
+        finally:
+            run.EVAL_PORT, run.spawn_backend, run.teardown = saved
+            if "s" in srv:
+                srv["s"].server_close()
+
+        # Probe 0 is first_request_s, never in the medians.
+        self.assertGreaterEqual(rec["first_request_s"], 0.8)
+        self.assertGreaterEqual(rec["first_request_ttft_ms"], 700)
+        self.assertLess(rec["ttft_ms"]["median"], 700)
+        self.assertEqual(rec["ttft_ms"]["n"], 3)
+        # tps: probes 1 and 2 qualify, probe 3 is under the 64-token gate.
+        self.assertEqual(rec["tok_s"]["n"], 2)
+        # Probe 2 sent no usage chunk.
+        self.assertFalse(rec["usage_exact"])
+        # 70+70+70+10 probe tokens plus the pass-1 task's 5: the repeat pass
+        # is frozen out of tokens, tps and wall.
+        self.assertEqual(rec["tokens_spent"], 225)
+        self.assertEqual(rec["repeats"], 2)
+        self.assertEqual(rec["unstable_tasks"], ["t-exact"])
+        self.assertTrue(rec["results"][0]["pass"])
+
+        text = run.render_report([rec], "f" * 12, False, {"instructions": 1})
+        self.assertIn(str(rec["first_request_s"]), text)
+        self.assertIn("1/1", text)
+
+    def test_a_teardown_failure_does_not_destroy_the_results(self):
+        # A model that spent minutes of GPU time must not report FAILED TO
+        # LOAD because the port would not free afterwards: the record
+        # survives, carries the teardown error, and the NEXT model's
+        # pre-spawn check is what refuses the stuck port.
+        port = _free_port()
+        deltas = lambda n: [_delta("w ") for _ in range(n)]
+        stop = {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+        script = [
+            {"sse": deltas(70) + [stop]},
+            {"sse": deltas(70) + [stop]},
+            {"body": {"choices": [{"message": {"content": "BUILD OK 42"},
+                                   "finish_reason": "stop"}]}},
+        ]
+        handler = type("_H", (_FakeChat,), {"script": script, "seen": [],
+                                            "seen_bodies": []})
+        srv = {}
+
+        class _Alive:
+            pid = os.getpid()
+
+            def poll(self):
+                return None
+
+        def _spawn(alias, port_, log_path):
+            srv["s"] = http.server.HTTPServer(("127.0.0.1", port), handler)
+            threading.Thread(target=srv["s"].serve_forever, daemon=True).start()
+            return _Alive()
+
+        def _bad_teardown(proc, port_):
+            srv["s"].shutdown()
+            raise RuntimeError("port %d still held" % port_)
+
+        rendered = [{"id": "t", "dim": "instructions", "max_tokens": 64,
+                     "prompt": "say it", "stream": False,
+                     "check": {"type": "exact", "value": "BUILD OK 42"}}]
+        saved = (run.EVAL_PORT, run.spawn_backend, run.teardown)
+        run.EVAL_PORT = port
+        run.spawn_backend = _spawn
+        run.teardown = _bad_teardown
+        try:
+            args = argparse.Namespace(quick=True, keep_failed=False, repeats=1)
+            with tempfile.TemporaryDirectory() as tmp:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    rec = run.eval_model(("m", "/d", "mlx", 100, "dev"),
+                                         rendered, args, tmp)
+        finally:
+            run.EVAL_PORT, run.spawn_backend, run.teardown = saved
+            if "s" in srv:
+                srv["s"].server_close()
+        self.assertFalse(rec.get("failed_to_load"))
+        self.assertTrue(rec["results"][0]["pass"])
+        self.assertIn("still held", rec["teardown_error"])
 
     def test_ready_url_is_engine_aware(self):
         # llama-server answers HTTP while weights still load; only /health
@@ -828,6 +1132,13 @@ class TestReport(unittest.TestCase):
                   usage_exact=False)], "f" * 12, False, {"code": 1})
         self.assertIn("50.0~", text.replace(" ", ""))
 
+    def test_no_approx_marker_when_usage_is_exact(self):
+        # One-sided assertions rot: the marker must also be provably absent.
+        text = run.render_report(
+            [_rec("m1", [{"id": "a", "dim": "code", "pass": True}])],
+            "f" * 12, False, {"code": 1})
+        self.assertNotIn("~", text.splitlines()[4])  # the m1 row
+
     def test_partial_and_failed_are_visible(self):
         text = run.render_report(
             [_rec("m1", [{"id": "a", "dim": "code", "pass": True}], partial=True),
@@ -851,10 +1162,16 @@ class TestReport(unittest.TestCase):
         self.assertNotIn("serving-layer gap", text2)
 
     def test_harness_errors_are_never_silent_model_failures(self):
+        # A dead request says nothing about the model: it leaves the pass
+        # denominator, is flagged on the row, and is named in the detail.
         results = [{"id": "a", "dim": "code", "pass": False,
-                    "harness_error": True, "detail": "request failed"}]
-        text = run.render_report([_rec("m1", results)], "f" * 12, False, {"code": 1})
+                    "harness_error": True, "detail": "request failed"},
+                   {"id": "b", "dim": "code", "pass": True}]
+        text = run.render_report([_rec("m1", results)], "f" * 12, False, {"code": 2})
         self.assertIn("HARNESS ERROR", text)
+        self.assertIn("1/1!", text)  # measured denominator excludes the error
+        self.assertIn("excluded from the denominators", text)
+        self.assertEqual(run.dim_counts(results), {"code": (1, 1, 1)})
 
     def test_quick_is_labeled_not_a_ranking(self):
         text = run.render_report([_rec("m1", [])], "f" * 12, True, {})
