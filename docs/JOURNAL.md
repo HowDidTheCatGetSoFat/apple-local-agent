@@ -515,11 +515,11 @@ next to a large model could exceed the wired limit and OOM the machine.
 Added `fxlla media voice` and the MCP `generate_speech` tool, completing the
 media trio (image, video, speech). Reversed the earlier "not wireable" verdict.
 
-- Earlier investigation concluded VOICE-1 had no callable text->speech path,
+- Earlier investigation concluded there was no callable text->speech path,
   because the best engine (Chatterbox via mlx-audio) was only importable inside
-  a gitignored bot env. The unlock: mlx-audio is also installed in the VFX-1
-  venv (the same one that hosts ltx-2-mlx). So voice follows the video pattern:
-  a configurable interpreter path (`FXLLA_VOICE_PYTHON`) rather than a CLI.
+  one private virtualenv. The unlock: mlx-audio can live in the same
+  environment that hosts ltx-2-mlx. So voice follows the video pattern: a
+  configurable interpreter path (`FXLLA_VOICE_PYTHON`) rather than a CLI.
 - `media/voice_backend.py` runs under that interpreter (imports mlx_audio,
   loads Chatterbox, writes a 24 kHz mono WAV). fxlla's own python never imports
   mlx_audio; `generate.py` shells out to it. The backend is not exercised in CI

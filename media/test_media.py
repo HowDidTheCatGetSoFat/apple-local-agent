@@ -1046,6 +1046,41 @@ class TestLoraDiscovery(unittest.TestCase):
     def test_the_civitai_directory_is_always_searched(self):
         self.assertTrue(any(d.endswith("civitai") for d in media.lora_dirs()))
 
+    def test_huggingface_cached_loras_are_found_by_repo_id(self):
+        # mflux takes a repo id directly for --lora, so a cached one is usable
+        # with no path. These arrive by download or as another tool's side
+        # effect, never through the civitai folder.
+        cache = tempfile.mkdtemp()
+        for repo in ("models--krea--Krea-2-LoRA-darkbrush",
+                     "models--org--Some-Base-Model"):
+            blobs = os.path.join(cache, "hub", repo, "blobs")
+            os.makedirs(blobs)
+            open(os.path.join(blobs, "w.safetensors"), "w").write("x" * 100)
+        saved = os.environ.get("FXLLA_MEDIA_HF_HOME")
+        os.environ["FXLLA_MEDIA_HF_HOME"] = cache
+        try:
+            names = [p for p, _mb in media._hf_cache_loras()]
+        finally:
+            if saved is None:
+                del os.environ["FXLLA_MEDIA_HF_HOME"]
+            else:
+                os.environ["FXLLA_MEDIA_HF_HOME"] = saved
+        self.assertIn("krea/Krea-2-LoRA-darkbrush", names)
+        # Matched by name, not by size: every base model is safetensors too,
+        # and a size guess would list the whole cache.
+        self.assertNotIn("org/Some-Base-Model", names)
+
+    def test_a_missing_hf_cache_is_not_fatal(self):
+        saved = os.environ.get("FXLLA_MEDIA_HF_HOME")
+        os.environ["FXLLA_MEDIA_HF_HOME"] = "/no/such/cache"
+        try:
+            self.assertEqual(media._hf_cache_loras(), [])
+        finally:
+            if saved is None:
+                del os.environ["FXLLA_MEDIA_HF_HOME"]
+            else:
+                os.environ["FXLLA_MEDIA_HF_HOME"] = saved
+
     def test_a_missing_directory_is_skipped_not_fatal(self):
         saved = os.environ.get("FXLLA_LORA_DIRS")
         os.environ["FXLLA_LORA_DIRS"] = "/no/such/dir"

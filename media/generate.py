@@ -944,8 +944,41 @@ def lora_dirs():
     return out
 
 
+def _hf_cache_loras():
+    """LoRAs sitting in the Hugging Face cache, as (repo_id, megabytes).
+
+    mflux takes a repo id directly for --lora, so one that is already cached
+    is usable with no path at all - and these arrive by `hf download` or as a
+    side effect of another tool, never through the civitai path. Matched by
+    name (lora, dora, lightning) rather than by size: every base model is a
+    pile of .safetensors too, and guessing by size would list all of them.
+    """
+    root = os.environ.get("FXLLA_MEDIA_HF_HOME") or os.path.expanduser(
+        "~/.cache/huggingface")
+    hub = os.path.join(root, "hub")
+    if not os.path.isdir(hub):
+        return []
+    found = []
+    for name in sorted(os.listdir(hub)):
+        if not name.startswith("models--"):
+            continue
+        repo = name[len("models--"):].replace("--", "/")
+        if not any(w in repo.lower() for w in ("lora", "dora", "lightning")):
+            continue
+        total = 0
+        for base, _dirs, files in os.walk(os.path.join(hub, name, "blobs")):
+            for f in files:
+                try:
+                    total += os.path.getsize(os.path.join(base, f))
+                except OSError:
+                    continue
+        found.append((repo, total // (1024 * 1024)))
+    return found
+
+
 def find_loras():
-    """(path, megabytes) for every LoRA under the search directories."""
+    """(path_or_repo, megabytes) for every LoRA fxlla can find: files under the
+    search directories, plus Hugging Face repos already in the cache."""
     found = []
     for root in lora_dirs():
         if not os.path.isdir(root):
@@ -958,7 +991,7 @@ def find_loras():
                         found.append((full, os.path.getsize(full) // (1024 * 1024)))
                     except OSError:
                         continue
-    return sorted(found)
+    return sorted(found) + sorted(_hf_cache_loras())
 
 
 def cmd_loras(args):
@@ -968,14 +1001,15 @@ def cmd_loras(args):
     found = find_loras()
     if getattr(args, "json", False):
         print(json.dumps({
-            "loras": [{"path": p, "mb": mb, "name": os.path.basename(p)}
+            "loras": [{"path": p, "mb": mb, "name": os.path.basename(p),
+                       "source": "huggingface" if not os.path.isabs(p) else "file"}
                       for p, mb in found],
             "styles": list(LORA_STYLES),
             "searched": lora_dirs(),
         }, indent=1))
         return
     if found:
-        print("Found (use: --lora <path>[,scale])")
+        print("Found (use: --lora <path-or-repo>[,scale])")
         for p, mb in found:
             print("  %-64s %5d MB" % (p, mb))
     else:
