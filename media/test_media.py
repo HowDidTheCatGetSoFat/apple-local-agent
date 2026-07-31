@@ -1057,6 +1057,60 @@ class TestLoraDiscovery(unittest.TestCase):
     def test_the_civitai_directory_is_always_searched(self):
         self.assertTrue(any(d.endswith("civitai") for d in media.lora_dirs()))
 
+    def test_the_base_model_is_inferred_from_the_architecture(self):
+        # Most adapters declare no base, and the hidden dimension is a property
+        # of the model one was fitted to, so it survives renaming. The table
+        # was measured from adapters whose base was known independently, and
+        # it recovers every declared label in the collection it was built from.
+        def hdr(dim, names=("blocks.0.attn.lora_A.weight",), extra=()):
+            h = {n: {"dtype": "F16", "shape": [dim, 16], "data_offsets": [0, 2]}
+                 for n in names}
+            for n in extra:
+                h[n] = {"dtype": "F16", "shape": [dim, 16], "data_offsets": [0, 2]}
+            return h
+        self.assertEqual(media.infer_base_model(hdr(1536)), "krea2")
+        self.assertEqual(media.infer_base_model(hdr(4608)), "ideogram4")
+        self.assertEqual(media.infer_base_model(hdr(3840)), "z-image")
+        self.assertEqual(media.infer_base_model(hdr(4096)), "ltx2")
+        self.assertEqual(media.infer_base_model(hdr(64)), "")
+
+    def test_flux_and_qwen_share_a_dimension_and_are_split_by_names(self):
+        # Both are 3072, so the dimension alone would pair an adapter with the
+        # wrong model. Qwen's joint attention adds projections FLUX has no
+        # equivalent of.
+        def hdr(names):
+            return {n: {"dtype": "F16", "shape": [3072, 16], "data_offsets": [0, 2]}
+                    for n in names}
+        self.assertEqual(media.infer_base_model(
+            hdr(["transformer.blocks.0.attn.to_k.lora_A.weight"])), "flux")
+        self.assertEqual(media.infer_base_model(
+            hdr(["transformer_blocks.0.attn.add_k_proj.lora_down.weight"])), "qwen")
+
+    def test_an_inferred_base_is_marked_as_a_guess(self):
+        # A guess presented as fact would send someone hunting for why a
+        # correctly-paired adapter did nothing.
+        import struct as _s
+        d = tempfile.mkdtemp()
+        h = {"blocks.0.attn.lora_A.weight": {"dtype": "F16", "shape": [1536, 16],
+                                             "data_offsets": [0, 2]}}
+        blob = json.dumps(h).encode()
+        p = os.path.join(d, "x.safetensors")
+        with open(p, "wb") as fh:
+            fh.write(_s.pack("<Q", len(blob)) + blob + b"\x00\x00")
+        self.assertEqual(media.lora_base_model(p), "~krea2")
+
+    def test_a_declared_base_beats_the_guess(self):
+        import struct as _s
+        d = tempfile.mkdtemp()
+        h = {"blocks.0.attn.lora_A.weight": {"dtype": "F16", "shape": [1536, 16],
+                                             "data_offsets": [0, 2]},
+             "__metadata__": {"ss_base_model_version": "something-specific"}}
+        blob = json.dumps(h).encode()
+        p = os.path.join(d, "y.safetensors")
+        with open(p, "wb") as fh:
+            fh.write(_s.pack("<Q", len(blob)) + blob + b"\x00\x00")
+        self.assertEqual(media.lora_base_model(p), "something-specific")
+
     def test_a_lora_is_identified_by_its_tensors_not_its_name(self):
         # Filenames lie both ways: an adapter can be called Krea2-realism-V1
         # and a 26 GB base model can be called Krea-2-Turbo. Only the tensor

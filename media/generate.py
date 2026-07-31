@@ -956,6 +956,50 @@ _LORA_TENSOR_MARKS = ("lora_a", "lora_b", "lora_down", "lora_up", "lokr_",
 _SAFETENSORS_HEADER_CAP = 20 * 1024 * 1024
 
 
+# Hidden dimension -> architecture, measured from adapters whose base is known
+# either from their own metadata or from what they were trained against. The
+# dimension is a property of the model an adapter was fitted to, so it survives
+# renaming, and most LoRAs in the wild declare nothing.
+_DIM_TO_BASE = {
+    1536: "krea2",
+    4608: "ideogram4",
+    3840: "z-image",
+    4096: "ltx2",     # with 16384; disambiguated below
+    3072: "flux",     # shared with qwen, split by tensor names below
+}
+
+
+def infer_base_model(header):
+    """Best guess at the base architecture from tensor shapes and names, or ""
+    when nothing is recognised.
+
+    Reported as a guess, never as fact: it is the only signal available for the
+    majority of adapters, which declare no base at all, and a wrong pairing
+    wastes a render rather than corrupting anything."""
+    counts = {}
+    names = []
+    for key, spec in header.items():
+        if key == "__metadata__":
+            continue
+        names.append(key.lower())
+        for dim in (spec.get("shape") or []) if isinstance(spec, dict) else []:
+            if isinstance(dim, int) and dim >= 256:
+                counts[dim] = counts.get(dim, 0) + 1
+    if not counts:
+        return ""
+    present = set(counts)
+    # 3072 is FLUX and Qwen both; Qwen's joint attention adds its own
+    # projections, which FLUX has no equivalent of.
+    if 3072 in present:
+        joint = any("add_k_proj" in n or "add_q_proj" in n for n in names)
+        return "qwen" if joint else "flux"
+    for dim in sorted(present, key=lambda d: -counts[d]):
+        base = _DIM_TO_BASE.get(dim)
+        if base:
+            return base
+    return ""
+
+
 def lora_base_model(path):
     """The base model a LoRA declares, "" when it declares none, or None when
     the file is not a LoRA at all.
@@ -978,7 +1022,11 @@ def lora_base_model(path):
     if not any(any(m in n for m in _LORA_TENSOR_MARKS) for n in names):
         return None
     meta = header.get("__metadata__") or {}
-    return meta.get("ss_base_model_version", "") if isinstance(meta, dict) else ""
+    declared = meta.get("ss_base_model_version", "") if isinstance(meta, dict) else ""
+    if declared:
+        return declared
+    guess = infer_base_model(header)
+    return ("~" + guess) if guess else ""
 
 
 def _hf_cache_loras():

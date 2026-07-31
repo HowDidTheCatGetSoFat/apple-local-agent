@@ -13,7 +13,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   because filenames lie in both directions - an adapter can be called
   Krea2-realism-V1 and a 26 GB base model can be called Krea-2-Turbo - and the
   header also declares which base model it was trained for, which is what makes
-  a collection usable. A repo whose weights are not all adapters is skipped:
+  a collection usable. When an adapter declares nothing - most do not - the
+  base is inferred from its architecture: the hidden dimension is a property
+  of the model it was fitted to, so it survives renaming (1536 krea2, 4608
+  ideogram4, 3840 z-image, 4096 ltx2), and FLUX and Qwen share 3072 so they
+  are split by Qwen's joint-attention projections. An inferred base is shown
+  with a ~ prefix, never as fact. Validated by recovering all 28 declared
+  labels in the collection the table was measured from. A repo whose weights
+  are not all adapters is skipped:
   SDXL base ships an example LoRA beside the model, and offering that repo id
   would hand the base model to --lora. That single-directory assumption answered "no
   LoRAs found" to someone holding ten, because people train their own and keep

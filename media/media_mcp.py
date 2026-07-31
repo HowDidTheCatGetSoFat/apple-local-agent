@@ -143,7 +143,7 @@ TOOLS = [
                                    "it wastes a call per second."},
      }, "required": ["job_id"]}},
     {"name": "list_loras",
-     "description": "LoRAs found on this machine and the built-in styles. Check here before "
+     "description": "LoRAs found on this machine and the built-in styles. Each entry carries base_model: the architecture it was trained for, prefixed with ~ when inferred from the weights rather than declared. Apply one only to its own base - a krea2 adapter does nothing useful on z-image. Check here before "
                     "generating: if a LoRA fits what the user asked for, offer "
                     "it rather than ignoring what they already downloaded.",
      "inputSchema": {"type": "object", "properties": {}}},
