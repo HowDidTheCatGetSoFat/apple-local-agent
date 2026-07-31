@@ -1,6 +1,8 @@
 import contextlib
 import http.server
 import importlib
+import io
+import json
 import os
 import socket
 import tempfile
@@ -100,19 +102,33 @@ class TestVecIndex(unittest.TestCase):
 
 
 class _Health(http.server.BaseHTTPRequestHandler):
-    """Answers /health like llama-server does, and nothing else."""
+    """Answers /health like llama-server does, and /props when told which model.
+
+    `model` None stands for a server that will not identify itself: another
+    embedding server, or a build too old to answer /props.
+    """
+    model = None
+
     def do_GET(self):
+        if self.path.startswith("/props") and self.model:
+            body = json.dumps({"model_path": self.model}).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_response(200 if self.path.startswith("/health") else 404)
         self.end_headers()
         self.wfile.write(b"{}")
+
     def log_message(self, *_a):
         pass
 
 
 @contextlib.contextmanager
-def _fake_server():
+def _fake_server(model=None):
     """A live health endpoint on a free port, standing in for llama-server."""
-    srv = http.server.HTTPServer(("127.0.0.1", 0), _Health)
+    handler = type("_H", (_Health,), {"model": model})
+    srv = http.server.HTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     saved = core.EMBED_PORT
@@ -141,6 +157,11 @@ class TestEmbedderLifecycle(unittest.TestCase):
         port = _free_port()
         saved_port, saved_model = core.EMBED_PORT, core._embed_model
         saved_popen = core.subprocess.Popen
+        # KB_DIR too: with FXLLA_STORE unset it is the relative path "kb", so
+        # taking the startup lock littered a kb/embed.lock into whatever
+        # directory the suite was run from.
+        saved_kb = core.KB_DIR
+        core.KB_DIR = tempfile.mkdtemp()
         core.EMBED_PORT = port
         core._embed_model = lambda: "/dev/null"
 
@@ -172,6 +193,7 @@ class TestEmbedderLifecycle(unittest.TestCase):
         finally:
             core.EMBED_PORT, core._embed_model = saved_port, saved_model
             core.subprocess.Popen = saved_popen
+            core.KB_DIR = saved_kb
             if "s" in srv:
                 srv["s"].shutdown()
                 srv["s"].server_close()
@@ -215,6 +237,53 @@ class TestEmbedderLifecycle(unittest.TestCase):
         finally:
             (core.EMBED_PORT, core._embed_model, core.subprocess.Popen,
              core.fcntl.flock, core.KB_DIR) = saved
+            if "s" in srv:
+                srv["s"].shutdown()
+                srv["s"].server_close()
+
+    def test_the_server_is_started_without_forcing_a_pooling_mode(self):
+        # Every embedding GGUF declares its own pooling_type and llama.cpp
+        # honours it: nomic MEAN, bge CLS, qwen3-embedding LAST. Forcing mean was
+        # right for nomic and silently wrong for the rest, and a badly pooled
+        # vector is still a vector, so nothing downstream would have complained.
+        # Measured before removing it: omitting the flag reproduces --pooling
+        # mean bit for bit on nomic, while --pooling cls visibly differs.
+        port = _free_port()
+        saved = (core.EMBED_PORT, core._embed_model, core.subprocess.Popen,
+                 core.KB_DIR)
+        core.EMBED_PORT = port
+        core._embed_model = lambda: "/dev/null"
+        core.KB_DIR = tempfile.mkdtemp()
+        seen = {}
+        srv = {}
+
+        class _Alive:
+            def poll(self):
+                return None
+            def terminate(self):
+                pass
+            def wait(self, timeout=None):
+                return 0
+
+        def _fake_popen(argv, *_a, **_k):
+            seen["argv"] = argv
+
+            def serve():
+                time.sleep(0.05)
+                srv["s"] = http.server.HTTPServer(("127.0.0.1", port), _Health)
+                srv["s"].serve_forever()
+            threading.Thread(target=serve, daemon=True).start()
+            return _Alive()
+
+        core.subprocess.Popen = _fake_popen
+        try:
+            with core.Embedder():
+                pass
+            self.assertIn("llama-server", seen["argv"][0])
+            self.assertNotIn("--pooling", seen["argv"])
+        finally:
+            (core.EMBED_PORT, core._embed_model, core.subprocess.Popen,
+             core.KB_DIR) = saved
             if "s" in srv:
                 srv["s"].shutdown()
                 srv["s"].server_close()
@@ -318,6 +387,304 @@ class TestDimensionGuard(unittest.TestCase):
 
     def test_an_empty_base_accepts_any_width(self):
         core._require_dim(self._con(768), "fresh", [0.1] * 384)
+
+
+class TestModelSelection(unittest.TestCase):
+    # An alias names both the catalog entry and the directory `fxlla pull` made,
+    # so selecting a model is selecting a directory.
+    @contextlib.contextmanager
+    def _selected(self, alias, store, explicit=True):
+        saved = (core.EMBED_ALIAS, core._EMBED_ENV, core.STORE)
+        core.EMBED_ALIAS, core._EMBED_ENV, core.STORE = (
+            alias, alias if explicit else "", store)
+        try:
+            yield
+        finally:
+            core.EMBED_ALIAS, core._EMBED_ENV, core.STORE = saved
+
+    def _dir(self, alias):
+        root = tempfile.mkdtemp()
+        directory = os.path.join(root, "models", alias)
+        os.makedirs(directory)
+        return root, directory
+
+    def test_the_default_alias_keeps_the_original_directory(self):
+        root, _d = self._dir("embed")
+        with self._selected("embed", root, explicit=False):
+            self.assertEqual(core._embed_dir(), os.path.join(root, "models", "embed"))
+
+    def test_an_alias_selects_its_own_directory(self):
+        root, _d = self._dir("embed-qwen3")
+        with self._selected("embed-qwen3", root):
+            self.assertTrue(core._embed_dir().endswith("models/embed-qwen3"))
+
+    def test_an_alias_cannot_walk_out_of_the_store(self):
+        # It is interpolated into a path, so a traversal would read weights from
+        # anywhere on disk.
+        for bad in ("../../etc", "..", ".", "a/b", "", "with space", "x;rm"):
+            with self._selected(bad, "/tmp"):
+                with self.assertRaises(SystemExit, msg=f"accepted {bad!r}"):
+                    core._embed_dir()
+
+    def test_entry_decides_when_a_directory_holds_two_quants(self):
+        # Re-pulling a different quant leaves both files behind; the glob would
+        # take whichever sorts first, which is not the one that was asked for.
+        root, directory = self._dir("embed")
+        for name in ("aaa-q4_k_m.gguf", "zzz-q8_0.gguf"):
+            open(os.path.join(directory, name), "w").close()
+        with open(os.path.join(directory, ".entry"), "w") as fh:
+            fh.write("zzz-q8_0.gguf\n")
+        with self._selected("embed", root):
+            self.assertEqual(os.path.basename(core._embed_model()), "zzz-q8_0.gguf")
+
+    def test_a_missing_entry_falls_back_to_the_glob(self):
+        root, directory = self._dir("embed")
+        open(os.path.join(directory, "only.gguf"), "w").close()
+        with self._selected("embed", root):
+            self.assertEqual(os.path.basename(core._embed_model()), "only.gguf")
+
+    def test_a_stale_entry_falls_back_to_the_glob(self):
+        # `.entry` survives a file being deleted by hand.
+        root, directory = self._dir("embed")
+        open(os.path.join(directory, "real.gguf"), "w").close()
+        with open(os.path.join(directory, ".entry"), "w") as fh:
+            fh.write("deleted.gguf")
+        with self._selected("embed", root):
+            self.assertEqual(os.path.basename(core._embed_model()), "real.gguf")
+
+    def test_entry_cannot_point_outside_its_directory(self):
+        # The traversal has to land on a file that really exists, or the check
+        # passes for the wrong reason: a path to nowhere falls back to the glob
+        # whether or not anything is guarding it.
+        root, directory = self._dir("embed")
+        open(os.path.join(directory, "real.gguf"), "w").close()
+        open(os.path.join(root, "outside.gguf"), "w").close()
+        with open(os.path.join(directory, ".entry"), "w") as fh:
+            fh.write("../../outside.gguf")
+        with self._selected("embed", root):
+            chosen = core._embed_model()
+        self.assertEqual(os.path.dirname(chosen), directory)
+        self.assertEqual(os.path.basename(chosen), "real.gguf")
+
+    def test_none_when_nothing_is_installed(self):
+        root, _d = self._dir("embed")
+        with self._selected("embed", root):
+            self.assertIsNone(core._embed_model())
+
+
+class TestServerIdentity(unittest.TestCase):
+    # A server outlives the command that started it, so switching models leaves
+    # the previous one listening. Verified against the real thing before this
+    # existed: with no model installed at all, add and search both succeeded
+    # against a borrowed server. nomic and embeddinggemma are both 768-dim and
+    # qwen3-embedding and bge-large both 1024, so the width guard cannot see it.
+    @contextlib.contextmanager
+    def _running(self, path, explicit=""):
+        # Both globals come from one variable at import, so a test that moves one
+        # without the other is testing a state that cannot occur.
+        saved = (core._server_model, core._EMBED_ENV, core.EMBED_ALIAS)
+        core._server_model = lambda *_a, **_k: path
+        core._EMBED_ENV = explicit
+        core.EMBED_ALIAS = explicit or "embed"
+        try:
+            yield
+        finally:
+            core._server_model, core._EMBED_ENV, core.EMBED_ALIAS = saved
+
+    def test_a_different_model_refuses(self):
+        with self._running("/store/models/embed/nomic.gguf"):
+            with self.assertRaises(SystemExit) as ctx:
+                core._require_server_model("/store/models/embed-small/bge.gguf")
+        message = str(ctx.exception)
+        self.assertIn("nomic.gguf", message)
+        self.assertIn("bge.gguf", message)
+        self.assertIn("fxlla kb stop", message)  # the way out, not just the fault
+
+    def test_the_same_model_passes(self):
+        with self._running("/store/models/embed/nomic.gguf"):
+            core._require_server_model("/store/models/embed/nomic.gguf")
+
+    def test_the_same_model_reached_by_a_symlink_passes(self):
+        # A store on an external disk is routinely reached through one.
+        root = tempfile.mkdtemp()
+        real = os.path.join(root, "real.gguf")
+        open(real, "w").close()
+        link = os.path.join(root, "link.gguf")
+        os.symlink(real, link)
+        with self._running(link):
+            core._require_server_model(real)
+
+    def test_a_server_that_will_not_identify_itself_is_allowed(self):
+        # Someone pointing FXLLA_EMBED_PORT at their own embedding server is a
+        # legitimate setup: unverifiable is not the same as wrong.
+        with self._running(None):
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                core._require_server_model("/store/models/embed/nomic.gguf")
+        self.assertEqual(err.getvalue(), "")
+
+    def test_it_says_so_when_a_model_was_actually_chosen(self):
+        with self._running(None, explicit="embed-qwen3"):
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                core._require_server_model("/store/models/embed-qwen3/q.gguf")
+        self.assertIn("embed-qwen3", err.getvalue())
+
+    def test_the_check_is_actually_wired_into_the_reuse_path(self):
+        # Testing _require_server_model on its own proves nothing about whether
+        # anyone calls it, and the reuse path is the only place it matters: this
+        # goes through Embedder against a live server that names its model.
+        saved = core._embed_model
+        core._embed_model = lambda: "/store/models/embed-small/bge.gguf"
+        try:
+            with _fake_server(model="/store/models/embed/nomic.gguf"):
+                with self.assertRaises(SystemExit) as ctx:
+                    with core.Embedder():
+                        pass
+            self.assertIn("nomic.gguf", str(ctx.exception))
+        finally:
+            core._embed_model = saved
+
+    def test_an_identified_server_with_nothing_installed_locally_is_allowed(self):
+        # The pre-existing arrangement: no local weights, a server someone else
+        # runs. Nothing was chosen, so there is nothing to contradict.
+        with self._running("/somewhere/else.gguf"):
+            core._require_server_model(None)
+
+
+class TestReindex(unittest.TestCase):
+    # Switching models makes every stored vector unusable. The chunk text is in
+    # the table already, so re-embedding never re-reads sources that may have
+    # moved or changed since.
+    def _store(self, rows, dim=768):
+        root = tempfile.mkdtemp()
+        saved = (core.KB_DIR, core.DB_PATH)
+        core.KB_DIR = os.path.join(root, "kb")
+        os.makedirs(core.KB_DIR)
+        core.DB_PATH = os.path.join(core.KB_DIR, "kb.db")
+        con = core._db()
+        con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?)",
+                        [("k", "s.md", i, f"chunk {i}", core._pack([0.1] * dim))
+                         for i in range(rows)])
+        con.commit()
+        con.close()
+        return saved
+
+    @staticmethod
+    def _fake(dim, fail_after=None):
+        class _E:
+            calls = 0
+
+            def __enter__(self_):
+                return self_
+
+            def __exit__(self_, *_a):
+                return False
+
+            def embed(self_, texts):
+                _E.calls += 1
+                if fail_after is not None and _E.calls > fail_after:
+                    raise RuntimeError("server died")
+                return [[0.25] * dim for _ in texts]
+        return _E
+
+    @contextlib.contextmanager
+    def _patched(self, embedder):
+        # Its per-batch progress is worth having on a base that takes minutes,
+        # and worth swallowing here.
+        saved = core.Embedder
+        core.Embedder = embedder
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                yield
+        finally:
+            core.Embedder = saved
+
+    def _widths(self):
+        con = sqlite3.connect(core.DB_PATH)
+        try:
+            return [n // 4 for (n,) in con.execute(
+                "SELECT length(emb) FROM chunks WHERE kb='k'")]
+        finally:
+            con.close()
+
+    def test_every_vector_is_rewritten_at_the_new_width(self):
+        saved = self._store(10)
+        try:
+            with self._patched(self._fake(384)):
+                core.cmd_reindex(core.argparse.Namespace(name="k"))
+            self.assertEqual(self._widths(), [384] * 10)
+        finally:
+            core.KB_DIR, core.DB_PATH = saved
+
+    def test_the_text_is_left_alone(self):
+        saved = self._store(4)
+        try:
+            with self._patched(self._fake(384)):
+                core.cmd_reindex(core.argparse.Namespace(name="k"))
+            con = sqlite3.connect(core.DB_PATH)
+            texts = [t for (t,) in con.execute(
+                "SELECT text FROM chunks WHERE kb='k' ORDER BY idx")]
+            con.close()
+            self.assertEqual(texts, [f"chunk {i}" for i in range(4)])
+        finally:
+            core.KB_DIR, core.DB_PATH = saved
+
+    def test_it_batches_instead_of_sending_one_huge_request(self):
+        saved = self._store(core._REINDEX_BATCH * 2 + 1)
+        try:
+            fake = self._fake(384)
+            with self._patched(fake):
+                core.cmd_reindex(core.argparse.Namespace(name="k"))
+            self.assertEqual(fake.calls, 3)
+        finally:
+            core.KB_DIR, core.DB_PATH = saved
+
+    def test_an_interrupted_run_leaves_the_base_untouched(self):
+        # Half a base holds two widths at once and _kb_dim reads whichever row
+        # comes first, so a partial write is a store that lies about itself.
+        # This is the assertion behind the single-transaction comment.
+        saved = self._store(core._REINDEX_BATCH * 2)
+        try:
+            with self._patched(self._fake(384, fail_after=1)):
+                with self.assertRaises(RuntimeError):
+                    core.cmd_reindex(core.argparse.Namespace(name="k"))
+            self.assertEqual(set(self._widths()), {768}, "a partial reindex landed")
+        finally:
+            core.KB_DIR, core.DB_PATH = saved
+
+    def test_an_empty_base_is_refused(self):
+        saved = self._store(0)
+        try:
+            with self.assertRaises(SystemExit):
+                core.cmd_reindex(core.argparse.Namespace(name="absent"))
+        finally:
+            core.KB_DIR, core.DB_PATH = saved
+
+
+class TestEvalSet(unittest.TestCase):
+    # The golden set is hand written, so the cheap structural mistakes are the
+    # likely ones: a path typo, an expectation naming a file nobody indexes.
+    @classmethod
+    def setUpClass(cls):
+        with open(core.EVAL_SET, encoding="utf-8") as fh:
+            cls.spec = json.load(fh)
+
+    def test_every_corpus_file_exists(self):
+        for rel in self.spec["corpus"]:
+            self.assertTrue(os.path.isfile(os.path.join(core.REPO_ROOT, rel)), rel)
+
+    def test_every_expected_file_is_in_the_corpus(self):
+        corpus = set(self.spec["corpus"])
+        for item in self.spec["queries"]:
+            for rel in item["expect"]:
+                self.assertIn(rel, corpus, f"{rel} is expected but never indexed")
+
+    def test_queries_are_distinct(self):
+        queries = [item["q"] for item in self.spec["queries"]]
+        self.assertEqual(len(queries), len(set(queries)))
+
+    def test_every_query_expects_something(self):
+        for item in self.spec["queries"]:
+            self.assertTrue(item["expect"], item["q"])
 
 
 class TestMCP(unittest.TestCase):
