@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1589,6 +1590,98 @@ class TestVideoStepKnobs(unittest.TestCase):
         for name, info in video["stages"].items():
             self.assertTrue(info.get("steps") or info.get("stage1_steps"), name)
             self.assertIn(info["steps_flag"], ("steps", "stage1_steps"), name)
+
+
+class TestObservedTimings(unittest.TestCase):
+    # Steps were published as the cost signal and that invited the wrong
+    # inference: a caller concluded 8-step krea2 was as fast as 8-step
+    # z-image-turbo (measured 9x apart) and produced a timing table off by 25x.
+    # Measured seconds are the answer, and they were already on disk unused.
+    def _records(self):
+        return [
+            {"kind": "image", "status": "done", "started": 0, "finished": 60,
+             "argv": ["image", "--model", "z-image-turbo"],
+             "output": "/nope.png"},
+            {"kind": "image", "status": "done", "started": 0, "finished": 54,
+             "argv": ["image", "--model", "z-image-turbo",
+                      "--width", "1024", "--height", "1024"],
+             "output": "/nope.png"},
+            {"kind": "image", "status": "done", "started": 0, "finished": 520,
+             "argv": ["image", "--model", "krea2",
+                      "--width", "1088", "--height", "1920"],
+             "output": "/nope.png"},
+            # Dimensions present, so a version that normalised video by area
+            # would produce an s_per_mp here instead of leaving it out.
+            {"kind": "video", "status": "done", "started": 0, "finished": 55,
+             "argv": ["video", "--distilled", "--width", "1280",
+                      "--height", "720"], "output": "/nope.mp4"},
+            {"kind": "image", "status": "running", "started": 0,
+             "finished": None, "argv": ["image", "--model", "dev"]},
+            # Finished, so only the status keeps it out of the numbers: a
+            # render that died after eight minutes is not a timing.
+            {"kind": "image", "status": "failed", "started": 0, "finished": 480,
+             "argv": ["image", "--model", "fibo"], "output": None},
+        ]
+
+    def test_it_reports_measured_seconds_per_model(self):
+        seen = media.observed_timings(self._records())
+        self.assertEqual(seen["z-image-turbo"]["n"], 2)
+        self.assertEqual(seen["z-image-turbo"]["median_s"], 57.0)
+        self.assertEqual(seen["krea2"]["median_s"], 520.0)
+
+    def test_same_steps_are_not_the_same_cost(self):
+        # The whole point: these two run 8 steps each and are far apart.
+        seen = media.observed_timings(self._records())
+        self.assertEqual(media.MODELS["krea2"]["steps"] or 8,
+                         media.MODELS["z-image-turbo"]["steps"])
+        self.assertGreater(seen["krea2"]["median_s"],
+                           seen["z-image-turbo"]["median_s"] * 5)
+
+    def test_images_normalise_by_area_and_video_does_not(self):
+        # A clip's cost scales with frames too, so seconds-per-megapixel for
+        # video would be a fresh wrong signal.
+        seen = media.observed_timings(self._records())
+        self.assertIn("s_per_mp", seen["krea2"])
+        self.assertNotIn("s_per_mp", seen["video:distilled"])
+
+    def test_a_video_stage_keeps_its_own_key(self):
+        seen = media.observed_timings(self._records())
+        self.assertEqual(seen["video:distilled"]["n"], 1)
+
+    def test_unfinished_jobs_are_not_counted(self):
+        self.assertNotIn("dev", media.observed_timings(self._records()))
+
+    def test_a_failed_render_is_not_a_timing(self):
+        self.assertNotIn("fibo", media.observed_timings(self._records()))
+
+    def test_no_history_reports_nothing_rather_than_a_guess(self):
+        self.assertEqual(media.observed_timings([]), {})
+
+    def test_the_catalog_carries_the_measurements_and_the_warning(self):
+        # Against a store with a real job record, so a catalog that reported an
+        # empty `observed` would fail here rather than look correct.
+        store = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, store, True)
+        jobs_dir = os.path.join(store, "media", "jobs")
+        os.makedirs(jobs_dir)
+        with open(os.path.join(jobs_dir, "1785500000-abcdef.json"), "w") as fh:
+            json.dump({"id": "1785500000-abcdef", "kind": "image",
+                       "status": "done", "started": 1785500000.0,
+                       "finished": 1785500123.0, "output": None,
+                       "argv": ["image", "--model", "krea2",
+                                "--width", "1024", "--height", "1024"]}, fh)
+        payload = json.loads(_models_json_with_store(store))
+        self.assertEqual(payload["observed"]["krea2"]["median_s"], 123.0)
+        self.assertIn("compare a model only against ITSELF", payload["cost"])
+
+
+def _models_json_with_store(store):
+    """`fxlla media models --json` as a fresh process under this store, since
+    the store is read at import time."""
+    return subprocess.check_output(
+        [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "generate.py"), "models", "--json"],
+        env=dict(os.environ, FXLLA_STORE=store), text=True)
 
 
 class TestLoraNameResolution(unittest.TestCase):

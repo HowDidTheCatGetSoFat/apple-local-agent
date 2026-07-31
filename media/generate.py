@@ -1007,10 +1007,24 @@ IDEOGRAM_PROMPT_FORMAT = {
 }
 
 
+_COST_GUIDE = (
+    "Steps compare a model only against ITSELF. Across models they do not: "
+    "krea2 and z-image-turbo both run 8 steps and were measured on this "
+    "machine 9x apart, because a step costs what the model costs. Use "
+    "`observed` - real seconds from this machine's own finished jobs, keyed by "
+    "model and by video:<stage>, with n samples and s_per_mp for images so it "
+    "scales to your canvas. A model absent from `observed` has never been "
+    "timed here: say that you do not know rather than estimating, because an "
+    "invented figure was wrong by 25x."
+)
+
+
 def cmd_models(args):
     if getattr(args, "json", False):
         print(json.dumps({
             "default": DEFAULT_MODEL,
+            "cost": _COST_GUIDE,
+            "observed": observed_timings(),
             "models": {n: {"cli": s["cli"], "steps": s["steps"],
                            "caps": sorted(s["caps"]), "note": s["note"],
                            # What it will actually run if nothing is passed.
@@ -1039,7 +1053,10 @@ def cmd_models(args):
                         "AND duration: seconds x frame_rate is the frame count, "
                         "and every frame is sampled. A long clip at a slow "
                         "stage is the most expensive thing here - iterate "
-                        "short and distilled, then commit.",
+                        "short and distilled, then commit. Measured times per "
+                        "stage are in the top-level `observed`, under "
+                        "video:<stage>; they are not normalised by length, so "
+                        "read n and treat one sample as one sample.",
             },
         }, indent=1))
         return
@@ -1059,8 +1076,95 @@ def cmd_models(args):
         steps = info.get("steps") or "%s+%s" % (info["stage1_steps"],
                                                 info["stage2_steps"])
         print("%-14s%s%-9s %s" % (name, default, steps, info["note"]))
+    seen = observed_timings()
+    if seen:
+        print("\nMEASURED HERE  RUNS   MEDIAN    PER MEGAPIXEL")
+        for key in sorted(seen, key=lambda k: -seen[k]["median_s"]):
+            entry = seen[key]
+            rate = ("%.0f s" % entry["s_per_mp"]) if entry.get("s_per_mp") else "-"
+            print("%-14s %-6s %-9s %s"
+                  % (key, entry["n"], "%.0f s" % entry["median_s"], rate))
+        print("\nSteps compare a model to itself, not to another one: the same "
+              "8 steps\nrun 9x apart on two of these. A model missing above "
+              "has not been timed here.")
     print("\n* defaults. Capabilities, video cost and the ideogram4 caption "
           "schema: fxlla media models --json")
+
+
+def observed_timings(records=None):
+    """What renders on THIS machine actually took, from the job history:
+    {key: {n, median_s, s_per_mp}}. Keys are model aliases, and "video:<stage>"
+    for video.
+
+    Steps are not a portable cost signal and publishing them as one was a
+    mistake: krea2 and z-image-turbo both run 8 steps and were measured here 9x
+    apart, because a step costs what the model costs. A caller told "cost is
+    linear in steps" concluded that 8-step krea2 was as fast as 8-step turbo
+    and invented a timing table that was off by 25x. Measured seconds are the
+    only honest answer, they are already sitting in the job records, and being
+    machine-specific is exactly right - nobody else's hardware is the question.
+    """
+    by_key = {}
+    for rec in (records if records is not None else jobs.listing()):
+        if rec.get("status") != "done":
+            continue
+        started, finished = rec.get("started"), rec.get("finished")
+        # `is None`, not falsiness: a timestamp of 0 is a real value, and
+        # treating it as missing silently dropped whole records.
+        if started is None or finished is None or finished <= started:
+            continue
+        argv = rec.get("argv") or []
+        kind = rec.get("kind")
+        if kind == "video":
+            stage = next((a.lstrip("-") for a in argv
+                          if a.lstrip("-") in VIDEO_STAGES), DEFAULT_STAGE)
+            key = "video:" + stage
+        elif kind == "image":
+            key = argv[argv.index("--model") + 1] if "--model" in argv else DEFAULT_MODEL
+        else:
+            key = kind
+        # Area normalises an image, where one render is one canvas. It does NOT
+        # normalise a video, whose cost also scales with the frame count - a
+        # seconds-per-megapixel for a clip would be a fresh wrong signal of
+        # exactly the kind this function exists to replace.
+        area = _megapixels(rec) if kind == "image" else None
+        by_key.setdefault(key, []).append((finished - started, area))
+    out = {}
+    for key, samples in by_key.items():
+        seconds = sorted(s for s, _ in samples)
+        rates = sorted(s / mp for s, mp in samples if mp)
+        entry = {"n": len(seconds), "median_s": round(_median(seconds), 1)}
+        if rates:
+            entry["s_per_mp"] = round(_median(rates), 1)
+        out[key] = entry
+    return out
+
+
+def _median(values):
+    mid = len(values) // 2
+    if len(values) % 2:
+        return values[mid]
+    return (values[mid - 1] + values[mid]) / 2.0
+
+
+def _megapixels(rec):
+    """Pixel count of what a job produced, in megapixels, or None.
+
+    Preferred from the artifact itself rather than the request: a backend that
+    snapped a size to its grid produced something other than what was asked
+    for, and the timing belongs to what it actually rendered."""
+    output = rec.get("output")
+    if output:
+        facts = quality.image_facts(output)
+        if facts.get("width"):
+            return (facts["width"] * facts["height"]) / 1e6
+    argv = rec.get("argv") or []
+    try:
+        width = int(argv[argv.index("--width") + 1])
+        height = int(argv[argv.index("--height") + 1])
+    except (ValueError, IndexError):
+        return None
+    return (width * height) / 1e6
 
 
 def lora_dirs():

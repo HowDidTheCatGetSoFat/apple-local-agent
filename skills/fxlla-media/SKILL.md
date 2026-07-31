@@ -40,10 +40,19 @@ deliberately:
 Say which model you chose and why, in one short clause. If the user names one,
 use it.
 
-**Cost is part of the choice.** A big canvas on a 20 or 50 step model is
-minutes, not seconds. When someone is iterating - trying a layout, checking a
-composition - render small or on a fast model first and only then commit to the
-full size. Nobody asked for eight minutes; they asked for a poster.
+**Cost is part of the choice**, and it is measured, not guessed.
+`list_media_models` returns `observed`: real seconds from this machine's own
+finished renders, per model and per video stage, with `n` and `s_per_mp`.
+
+- **Never estimate a duration from step counts.** Steps compare a model to
+  itself and to nothing else - krea2 and z-image-turbo both run 8 steps and are
+  9x apart here. A model that reasoned from steps published a timing table
+  wrong by 25x and stated it as fact.
+- **A model missing from `observed` has never been timed here.** Say you do not
+  know. An invented number is worse than an absent one, because it gets used.
+- When someone is iterating - trying a layout, checking a composition - render
+  small or on a fast model first and commit to the full size afterwards. Nobody
+  asked for eight minutes; they asked for a poster.
 
 ## Options worth setting
 
@@ -102,19 +111,28 @@ To copy the geometry of a photo: run `depth` with `init_image` and
 line; then pass that map as a control to a following generation. fxlla exposes
 each step - sequencing them is yours.
 
-## Long renders
+## Long renders: submit, report, move on
 
-A render runs as a background job. If it finishes quickly you get the output
-path back and there is nothing more to do. If it does not, you get a job id and
-a line saying the job is still running - **that is the render working, not a
-failure**. Call `media_job_status` with that id; keep calling it while it says
-running. Each call blocks for the server's wait window, so this is not a busy
-loop.
+Every render runs in the background and the call returns a **job id
+immediately**. Nothing here is fast - the quickest measured render is under a
+minute and a poster took eight - so:
 
-The one thing never to do is generate again because a call did not return a
-path. That starts a second render competing with the first for the same GPU,
-and both get slower. If you are unsure whether something is already going,
-`list_media_jobs` answers it.
+**Submit, tell the user the job id and roughly what it will take, and finish
+your turn.** Do not sit in a `media_job_status` loop. While you poll, the
+person you are working for cannot ask you anything else; their messages queue
+up behind a render you are not making any faster by watching it.
+
+Pick the result up on the next turn, or when they ask, or after doing something
+else useful. `media_job_status` answers instantly and `list_media_jobs` shows
+everything in flight.
+
+Two things never to do:
+
+- **Never resubmit because a call did not hand back a path.** It starts a
+  second render competing with the first for the same GPU and both get slower.
+  One session did this four times with the same poster.
+- **Never report a path you have not seen.** Until the job says `done` there is
+  no file.
 
 `cancel_media_job` stops one. Jobs run one at a time, so a submission may sit
 in `queued` while another finishes. That is expected.

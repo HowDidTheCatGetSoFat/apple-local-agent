@@ -5,11 +5,13 @@ Newline-delimited JSON-RPC, no dependencies. Image (mflux-cv), video (ltx-2-mlx)
 speech (mlx-audio), edit, and upscale tools, so opencode or Claude Code can
 render media locally.
 
-A render takes tens of seconds and video takes minutes, which is longer than an
-MCP client will wait for a response. So a render is submitted as a background job
-and awaited for FXLLA_MCP_WAIT_S seconds: it returns the path if it finished in
-that window and the job id if it did not, to be followed with `media_job_status`
-(or `list_media_jobs`, `cancel_media_job`). Background jobs run one at a time.
+A render takes minutes - the quickest measured on this hardware is 55 seconds -
+which is longer than an MCP client will wait for a response and far longer than
+anyone should have their session held open. So a render is submitted as a
+background job and the call returns a job id immediately, to be followed with
+`media_job_status` (or `list_media_jobs`, `cancel_media_job`). Background jobs
+run one at a time. FXLLA_MCP_WAIT_S can make the call wait for a result instead;
+it defaults to 0 because nothing here finishes fast enough for that to pay.
 
 Each tool call runs on its own thread. The read loop used to run them inline, so
 one render made the server deaf: every later call - including the status calls
@@ -28,10 +30,10 @@ MEDIA = os.path.join(HERE, "generate.py")
 TOOLS = [
     {"name": "generate_image",
      "description": "Generate an image from a text prompt using the local "
-                    "mflux-cv toolchain. Returns the PNG path, or a job id and "
-                    "a status line when the render outlasts the wait window - "
-                    "in which case follow it with media_job_status rather than "
-                    "generating again.",
+                    "mflux-cv toolchain. Returns a job id immediately; the "
+                    "render runs in the background. Report the id, finish your "
+                    "turn, and pick the result up with media_job_status - do "
+                    "not sit waiting on it.",
      "inputSchema": {"type": "object", "properties": {
          "prompt": {"type": "string"},
          "model": {"type": "string",
@@ -172,19 +174,22 @@ TOOLS = [
                    "description": "Target shortest edge in pixels or a factor, e.g. 2x."},
      }, "required": ["image"]}},
     {"name": "media_job_status",
-     "description": "Status of a background media job. Blocks while the job "
-                    "runs and returns the finished record - output path, or "
-                    "the error - as soon as it lands. If it comes back saying "
-                    "the job is still running, call this again: that is the "
-                    "render still going, not a failure, and resubmitting it "
-                    "starts a second one.",
+     "description": "Status of a background media job: the finished record "
+                    "with its output path or its error, or a line saying it is "
+                    "still going. Answers IMMEDIATELY. If it is still running "
+                    "that is the render working, not a failure - report the "
+                    "job id and finish your turn rather than calling this in a "
+                    "loop, and never resubmit, which only starts a second "
+                    "render competing with the first.",
      "inputSchema": {"type": "object", "properties": {
          "job_id": {"type": "string"},
          "wait_s": {"type": "number",
-                    "description": "Seconds to block, capped at the server's "
-                                   "wait window (FXLLA_MCP_WAIT_S). Asking for "
-                                   "more does not wait longer, it only risks "
-                                   "your own client timing out."},
+                    "description": "Seconds to block before answering. Default "
+                                   "0, and leave it there: renders here run "
+                                   "from about a minute to eight, so waiting "
+                                   "holds up the person you are working for "
+                                   "and changes nothing. Capped at the "
+                                   "server's window (FXLLA_MCP_WAIT_S)."},
      }, "required": ["job_id"]}},
     {"name": "list_loras",
      "description": "LoRAs found on this machine and the built-in styles. Each entry carries base_model: the architecture it was trained for, prefixed with ~ when inferred from the weights rather than declared. Apply one only to its own base - a krea2 adapter does nothing useful on z-image. Check here before "
@@ -192,18 +197,20 @@ TOOLS = [
                     "it rather than ignoring what they already downloaded.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "list_media_models",
-     "description": "Every image model and every video stage, with what each "
-                    "one costs. Per image model: the options it supports "
-                    "(negative prompt, LoRA, dimensions, ...), default_steps - "
-                    "the count it will actually run, spanning 4 to 50, so this "
-                    "is what separates a one-minute render from an eight-minute "
-                    "one - dim_step where sizes must sit on a grid, and presets "
-                    "where the model has them instead of steps. Under `video`: "
-                    "each stage, its step counts, and how duration multiplies "
-                    "the cost. Plus the built-in LoRA styles, the default "
-                    "model, and prompt_formats, the JSON caption schema "
-                    "ideogram4 takes, with an example. Call this instead of "
-                    "guessing model names, flags, cost, or prompt structure.",
+     "description": "Every image model and every video stage, what each "
+                    "supports, and what each COSTS. `observed` is the "
+                    "important part: real measured seconds from this machine's "
+                    "own finished jobs, per model and per video:<stage>, with "
+                    "n and s_per_mp. Quote those. Do NOT estimate a duration "
+                    "from step counts - steps compare a model only to itself, "
+                    "two 8-step models here run 9x apart, and estimating that "
+                    "way produced a table wrong by 25x. A model missing from "
+                    "`observed` has never been timed here: say so instead of "
+                    "guessing. Also: per-model options, default_steps, "
+                    "dim_step where sizes sit on a grid, presets where a model "
+                    "has them instead of steps, the video stages, the LoRA "
+                    "styles, and prompt_formats - ideogram4's JSON caption "
+                    "schema with an example.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "list_media_jobs",
      "description": "List background media jobs, newest first.",
@@ -218,11 +225,11 @@ TOOLS = [
 # Every generator tool takes an async flag, and it defaults to on: holding a
 # call open for a render that takes minutes only produces a client timeout, and
 # a timeout reads as a failure, so the caller renders it again.
-_ASYNC_DOC = ("Default true: the render runs as a background job and this "
-              "returns the output path if it finishes quickly, or the job id "
-              "to follow with media_job_status if it does not. Set false only "
-              "to hold the call open until the file is written, which a long "
-              "render will outlast.")
+_ASYNC_DOC = ("Default true, and leave it: the render runs in the background "
+              "and this returns a job id immediately, so the conversation is "
+              "not held hostage to a render that takes minutes. Follow it with "
+              "media_job_status. Set false only to hold the call open until "
+              "the file is written, which a long render will outlast.")
 _SKIP_QUALITY_DOC = ("Accept output that fails the content checks (silence, a "
                      "container with no frames). Use only after a check rejected "
                      "something you actually wanted.")
@@ -266,12 +273,15 @@ _EDIT_FLAGS = [("image", "--image"), ("seed", "--seed"),
                ("quantize", "--quantize"), ("output", "--output")]
 
 
-# How long a tool call may block before the client gives up on it. Measured
-# against opencode in one session: a 45 s call returned its result, calls that
-# ran past ~69 s came back to the model as "MCP error -32001: Request timed
-# out" while the render kept going invisibly. Staying under that is what makes
-# a slow render report progress instead of vanishing.
-WAIT_S = float(os.environ.get("FXLLA_MCP_WAIT_S", "45"))
+# Seconds a render may hold the call open before it answers with a job id.
+# ZERO by default, which is the whole point: nothing here finishes fast enough
+# for waiting to pay. The quickest render measured on this hardware is 55 s and
+# a poster took 473, so a wait window only ever spends the caller's turn to
+# arrive at the same job id it could have had immediately - and while it waits,
+# whoever is driving cannot do anything else. Raise it only if you specifically
+# want short renders to come back as a path, and keep it under the calling
+# client's own timeout (opencode returned a 45 s call and timed out past ~69).
+WAIT_S = float(os.environ.get("FXLLA_MCP_WAIT_S", "0"))
 
 
 def _exec(cmd, failure):
@@ -295,9 +305,15 @@ def _job_record(job_id, wait_s):
 
 
 def _still_running(job_id, status):
-    return ("job %s is %s and has not finished. Call media_job_status with "
-            "job_id \"%s\" to keep waiting - do NOT submit the render again, "
-            "it is already going." % (job_id, status, job_id))
+    """What to say about a job that has not landed yet.
+
+    It tells the caller to STOP, not to wait: holding the conversation open for
+    a render that takes minutes blocks whoever is driving it from doing
+    anything else, and no amount of polling makes the render faster."""
+    return ("job %s is %s. Tell the user the job id and finish your turn - do "
+            "NOT wait for it and do NOT submit it again. Check it with "
+            "media_job_status when they next ask, or when you have something "
+            "else to do first." % (job_id, status))
 
 
 def _spawn(cmd, args, failure):

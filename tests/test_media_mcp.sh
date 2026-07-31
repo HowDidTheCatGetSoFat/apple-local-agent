@@ -71,6 +71,29 @@ case "$status_line" in
   *) fail "the running answer says not to resubmit";;
 esac
 
+# --- the default is not to wait at all --------------------------------------
+# The quickest render measured on this hardware is 55 s, so a wait window can
+# only ever spend the caller's turn to arrive at the same job id it could have
+# had immediately - and while it waits, whoever is driving is stuck.
+default_wait="$(FXLLA_STORE="$STORE" python3 -c '
+import sys; sys.path.insert(0, sys.argv[1] + "/media")
+import media_mcp; print(media_mcp.WAIT_S)' "$ROOT")"
+case "$default_wait" in
+  0|0.0) pass "a render does not hold the call open by default";;
+  *) fail "a render does not hold the call open by default (WAIT_S=$default_wait)";;
+esac
+
+# A status call with no wait_s must answer without blocking, even though the
+# job is genuinely running.
+start=$(date +%s)
+FXLLA_STORE="$STORE" python3 "$MCP" > /dev/null <<EOF
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"media_job_status","arguments":{"job_id":"$JOB_ID"}}}
+EOF
+elapsed=$(( $(date +%s) - start ))
+if [ "$elapsed" -le 5 ]; then pass "a status call answers immediately ($elapsed s)"
+else fail "a status call answers immediately ($elapsed s)"; fi
+
 # --- wait_s is capped -------------------------------------------------------
 # The call above asked to wait 120 s with a 3 s window. Uncapped it would have
 # blocked past any client timeout, which is how a status request came back as

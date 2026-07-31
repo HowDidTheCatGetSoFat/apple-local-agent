@@ -73,6 +73,55 @@ named when passed to a stage that ignores it, and every stage publishes what it
 runs. Video also got the point stated plainly: cost is stage x steps x
 resolution x duration, and duration is the multiplier people forget.
 
+**The wait window turned out to be dead weight, and the measurements are what
+showed it.** "No puede quedar trabado esperando" - and it was, because I had
+built it to. Renders returned after a bounded 45 second wait so a fast one
+could hand back a path in a single call. Once real timings existed the premise
+collapsed: the quickest render on this hardware is 55 seconds. Nothing ever
+landed inside the window. Every submission spent 45 seconds of someone's turn
+to arrive at exactly the job id it could have had immediately, and while it
+waited, the person driving could not ask anything else - opencode queues their
+messages behind the turn in progress.
+
+So the window is 0 by default, `media_job_status` answers instantly, and a
+still-running job now says to report the id and finish the turn rather than to
+keep waiting. The knob survives for anyone whose renders are fast enough to
+justify it; the default should not have been a guess in the first place.
+
+Worth noticing that this is the same error as the timing table, one level up: I
+picked 45 by reasoning about a client timeout instead of measuring what a
+render actually takes, and reasoning from the wrong quantity is what produced
+both.
+
+**And then the fix caused the next bug, which is the most instructive one all
+day.** Asked what each model costs, the model called `list_media_models`, read
+the new `default_steps` correctly - and invented the seconds. It published a
+table claiming z-image-turbo at 10-15 s (measured: 57) and krea2 at 15-25 s
+(measured: 518), with a dollar-sign column, for renders that cost no money at
+all. Off by 25x, stated as fact.
+
+That is mine. I published steps and wrote that cost is "roughly linear" in
+them, which is true within a model and false between them: krea2 and
+z-image-turbo both run 8 steps and are 9x apart, because a step costs what the
+model costs. So the signal did not merely fail to help, it actively supported
+the wrong conclusion - and having been given a partial cost model with no way
+to convert it to time, the model closed the gap by inventing.
+
+`observed` now reports real seconds from this machine's own finished jobs, per
+model and per `video:<stage>`, with n and seconds-per-megapixel for images. The
+data had been sitting in the job records the whole time, unused. Not normalised
+by area for video, whose cost also scales with frames - that would have been
+the same mistake in a new place. And the text says plainly: a model absent from
+`observed` has never been timed here, say you do not know.
+
+Writing the tests found a bug in the reader itself: `if not started` treated a
+timestamp of zero as missing and dropped whole records. Six mutations, three
+survived the first pass - the video record in the fixture had no dimensions, so
+"normalise video by area too" changed nothing; the catalog assertion checked
+that the key existed rather than that it carried anything; and the status filter
+was shadowed by the timestamp filter. All three were holes in the test, not in
+the code, and worth more than the passing runs.
+
 Three times now, on the same surface: the capability existed and the caller had
 no way to reach it. It is worth naming what makes this recur - the CLI is where
 the feature gets built and the MCP schema is a separate list that has to be

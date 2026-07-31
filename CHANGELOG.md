@@ -113,7 +113,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   back to PATH and running a different install than the one pointed at.
   `fxlla doctor` checks the directory when the knob is set.
 
+### Changed
+- A media render never holds the call open now: `FXLLA_MCP_WAIT_S` defaults to
+  0 and the tool returns a job id immediately. The 45 second window it replaced
+  was dead weight - the quickest render measured on this hardware is 55 s, so
+  nothing ever landed inside it, and every submission spent 45 s of the
+  caller's turn to arrive at the same job id. `media_job_status` answers
+  instantly for the same reason, and a still-running job is told to report the
+  id and finish rather than poll: while an agent polls, whoever it is working
+  for is queued behind a render that is not going any faster for being watched.
+
 ### Fixed
+- Publishing step counts as the cost signal invited the wrong inference and got
+  one: told cost was "roughly linear in steps", a model concluded that 8-step
+  krea2 was as fast as 8-step z-image-turbo and published a timing table
+  claiming 15-25 s for a render measured here at 518 s. Steps compare a model
+  only to itself - a step costs what the model costs, and those two are 9x
+  apart at the same count. `list_media_models` now returns `observed`: real
+  seconds from this machine's own finished jobs, per model and per
+  `video:<stage>`, with sample counts and seconds-per-megapixel for images
+  (not for video, whose cost also scales with frames, where an area-normalised
+  figure would be a fresh wrong signal). The data was already in the job
+  records and unused. A model with no history says so instead of estimating.
 - Nothing told a caller what a render would cost, for image or for video, so
   the choice that decides between one minute and ten was made blind - an eight
   minute poster looked identical to a fast one until it had been waited for.
