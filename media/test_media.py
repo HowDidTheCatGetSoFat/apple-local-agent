@@ -1423,6 +1423,14 @@ class TestResolveOutput(unittest.TestCase):
                           ("edit", "png"), ("upscale", "png")):
             self.assertTrue(media.resolve_output(None, kind, ext).endswith("." + ext))
 
+    def test_a_tilde_expands(self):
+        # "~/Downloads" is what a person says and what an agent passes on, and
+        # nothing here runs through a shell - unexpanded it would create a
+        # directory literally named "~" beside the working directory.
+        p = media.resolve_output("~/Downloads", "image", "png")
+        self.assertTrue(p.startswith(os.path.expanduser("~/Downloads")), p)
+        self.assertNotIn("~", p)
+
 
 class TestAspectConflict(unittest.TestCase):
     # Measured: a request for 512x512 WITH aspect 1:1 produced 1024x1024,

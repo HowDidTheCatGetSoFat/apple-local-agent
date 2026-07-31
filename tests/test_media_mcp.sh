@@ -126,6 +126,45 @@ PY
 then pass "renders default to a job, and only async:false opts out"
 else fail "renders default to a job, and only async:false opts out"; fi
 
+# --- every generator can be told where to write -----------------------------
+# The CLI took --output from the start and no MCP tool exposed it, so "save it
+# in ~/Downloads" was accepted and silently dropped: the render landed in the
+# media directory and the answer did not mention it.
+if python3 - "$ROOT" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/media")
+import media_mcp as m
+
+
+class Result:
+    returncode = 0
+    stdout = "/tmp/out.png"
+    stderr = ""
+
+
+seen = []
+m.subprocess.run = lambda cmd, **kw: (seen.append(cmd), Result())[1]
+
+runners = [(m.run_generate, {"prompt": "p"}),
+           (m.run_generate_video, {"prompt": "p"}),
+           (m.run_generate_speech, {"text": "t"}),
+           (m.run_edit, {"prompt": "p", "image": "/tmp/in.png"}),
+           (m.run_upscale, {"image": "/tmp/in.png"})]
+for runner, args in runners:
+    seen.clear()
+    runner(dict(args, output="~/Downloads", **{"async": False}))
+    cmd = seen[0]
+    if "--output" not in cmd or cmd[cmd.index("--output") + 1] != "~/Downloads":
+        sys.exit("%s dropped the output path: %s" % (runner.__name__, cmd))
+
+for tool in m.TOOLS:
+    if tool["name"].startswith(("generate_", "edit_", "upscale_")):
+        if "output" not in tool["inputSchema"]["properties"]:
+            sys.exit("%s does not advertise output" % tool["name"])
+PY
+then pass "every generator takes and forwards an output path"
+else fail "every generator takes and forwards an output path"; fi
+
 # --- every tool still advertises itself ------------------------------------
 tools="$(FXLLA_STORE="$STORE" python3 "$MCP" <<'EOF'
 {"jsonrpc":"2.0","id":9,"method":"tools/list","params":{}}

@@ -114,6 +114,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Fixed
+- No MCP generator exposed `output`, so over MCP there was no way to say where
+  a file should go: "save it in ~/Downloads" was accepted and silently dropped,
+  every render landed in the media directory, and the reported path looked like
+  an answer. The CLI has taken `--output` on all five generators from the
+  start - only the tool schemas were missing it. A `~` in the path now expands
+  too, since nothing here runs through a shell and an unexpanded one would
+  create a directory named `~`.
 - One media render made the MCP server deaf to everything else. Tool calls were
   handled inline in the stdin read loop, so while mflux ran the server read
   nothing: later calls came back as `MCP error -32001: Request timed out`,

@@ -38,6 +38,22 @@ someone is not in our repo. When the work can exceed it, the honest move is to
 return a handle and a status, because the alternative is not a slow answer but
 an ambiguous one - and an agent resolves ambiguity by retrying.
 
+**Then the fixed version ran, and the third instance of the same mistake showed
+up.** The poster prompt said "guardalo en ~/Downloads". The model picked
+ideogram4, corrected 1080 to 1088 on its own from `dim_step`, submitted the
+job, followed it without resubmitting - everything the day's work was for - and
+wrote the file to the media directory anyway, because no MCP generator exposes
+`output`. The CLI has taken `--output` on all five since the beginning. Only
+the schemas were missing it, so the request was accepted and dropped, and the
+path in the answer read like a result rather than a default.
+
+Three times now, on the same surface: the capability existed and the caller had
+no way to reach it. It is worth naming what makes this recur - the CLI is where
+the feature gets built and the MCP schema is a separate list that has to be
+edited by hand, so every new option is one edit away from being invisible. The
+test that catches it does not check any single flag; it walks every generator
+and asserts the argv carries what the schema advertises.
+
 Two smaller findings from the same reading, both the same shape as yesterday's:
 
 - `list_loras` reports a path and a name; the model passed the name and got

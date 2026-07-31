@@ -54,6 +54,10 @@ use it.
   refused. Aspect for standard framing, dimensions for exact pixels. Some
   models only accept sizes on a grid; `list_media_models` reports `dim_step`
   for those, and 1080 wide is not a multiple of 16.
+- `output` - where the file goes. A path names it, a directory has it named
+  inside. **Set it whenever the user says where they want it**; without it the
+  file lands in the media directory and they will go looking in the wrong
+  place.
 - `init_image` - start from an existing image instead of from noise.
 - `loras` - `"path,0.8"`, the bare filename `list_loras` shows, or a
   HuggingFace repo id; the scale after the comma is optional, and the option
@@ -127,7 +131,9 @@ authorization. Never authorize a large transfer on the user's behalf.
 
 ## Reporting
 
-Give the output path, the model, and the seed. If a content check rejected the
+Give the output path, the model, and the seed. If the user named a place and
+the path you report is not in it, you dropped `output` - say so rather than
+reporting a path as if it were what they asked for. If a content check rejected the
 output (silence in a WAV, a container with no frames), relay what was flagged
 rather than retrying blindly. If a backend is missing, relay the error and
 point at `fxlla doctor`.

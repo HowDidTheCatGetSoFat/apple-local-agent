@@ -190,8 +190,16 @@ _ASYNC_DOC = ("Default true: the render runs as a background job and this "
 _SKIP_QUALITY_DOC = ("Accept output that fails the content checks (silence, a "
                      "container with no frames). Use only after a check rejected "
                      "something you actually wanted.")
+# The CLI has taken --output on every generator from the start; none of the MCP
+# tools exposed it, so "save it in ~/Downloads" was accepted and then quietly
+# ignored - the file landed in the media directory and the answer said nothing.
+_OUTPUT_DOC = ("Where to write it: a file path, or a directory to have the "
+               "file named inside it. Defaults to the media output directory. "
+               "Pass this whenever the user says where they want it.")
 for _tool in TOOLS:
     if _tool["name"].startswith(("generate_", "edit_", "upscale_")):
+        _tool["inputSchema"]["properties"]["output"] = {
+            "type": "string", "description": _OUTPUT_DOC}
         _tool["inputSchema"]["properties"]["async"] = {
             "type": "boolean", "description": _ASYNC_DOC}
         _tool["inputSchema"]["properties"]["skip_quality"] = {
@@ -205,17 +213,18 @@ _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
                 ("controlnet_strength", "--controlnet-strength"),
                 ("depth_image", "--depth-image"),
                 ("init_image", "--init-image"), ("loras", "--lora"),
-                ("lora_style", "--lora-style")]
+                ("lora_style", "--lora-style"), ("output", "--output")]
 _VIDEO_FLAGS = [("stage", "--stage"), ("seconds", "--seconds"),
                 ("frames", "--frames"),
                 ("frame_rate", "--frame-rate"), ("width", "--width"),
                 ("height", "--height"), ("seed", "--seed"), ("model", "--model"),
                 # generate.py takes --image (singular, repeatable), mirroring
                 # ltx's own flag. --images does not exist in either.
-                ("images", "--image")]
+                ("images", "--image"), ("output", "--output")]
 _VOICE_FLAGS = [("ref", "--ref"), ("lang", "--lang"), ("speed", "--speed"),
-                ("model", "--model")]
-_EDIT_FLAGS = [("image", "--image"), ("seed", "--seed"), ("quantize", "--quantize")]
+                ("model", "--model"), ("output", "--output")]
+_EDIT_FLAGS = [("image", "--image"), ("seed", "--seed"),
+               ("quantize", "--quantize"), ("output", "--output")]
 
 
 # How long a tool call may block before the client gives up on it. Measured
@@ -397,6 +406,8 @@ def run_upscale(args):
     scale = args.get("scale")
     if scale is not None:
         cmd += ["--scale", str(scale)]
+    if args.get("output") is not None:
+        cmd += ["--output", str(args["output"])]
     return _spawn(cmd, args, "upscale failed")
 
 

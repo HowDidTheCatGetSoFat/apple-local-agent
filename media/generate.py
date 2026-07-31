@@ -95,6 +95,10 @@ def resolve_output(output, kind, ext):
     is what a caller would have had to do by hand."""
     if not output:
         return os.path.join(OUT_DIR, "fxlla-%s-%d.%s" % (kind, int(time.time()), ext))
+    # "~/Downloads" is what a person says and what an agent passes on. Nothing
+    # here runs through a shell, so an unexpanded ~ would become a directory of
+    # that literal name beside the working directory.
+    output = os.path.expanduser(output)
     # A trailing separator means a directory was intended even if it does not
     # exist yet, which is worth creating rather than treating as a filename.
     if output.endswith(os.sep) and not os.path.exists(output):
