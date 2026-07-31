@@ -588,7 +588,12 @@ data.setdefault("$schema", "https://opencode.ai/config.json")
 loc = data.setdefault("provider", {}).setdefault("local", {})
 loc["npm"] = "@ai-sdk/openai-compatible"
 loc["name"] = "Local (MLX/llama.cpp)"
-loc.setdefault("options", {})["baseURL"] = os.environ["BASE_URL"]
+opts = loc.setdefault("options", {})
+opts["baseURL"] = os.environ["BASE_URL"]
+# The local servers validate no key, but opencode prompts for one when the
+# provider does not carry it. Any non-empty string satisfies both sides;
+# setdefault keeps a value the user chose themselves.
+opts.setdefault("apiKey", "local")
 mid = os.environ.get("MODEL_ID", "")
 if mid:
     loc["models"] = { mid: { "name": os.environ["LABEL"] } }
@@ -808,13 +813,19 @@ PY
   ok "opencode instructions updated: $cfg"
 }
 
-# register every downloaded model under the opencode 'local' provider (gateway mode)
+# Register the gateway's models under the opencode 'local' provider. The list
+# arrives on MODEL_IDS (newline-separated) from the gateway's own /v1/models,
+# which is the single place that decides what is chat-servable - it already
+# excludes embedding models, and enumerating the store here again would
+# re-add them (that bug shipped: 'embed' spent days registered as a chat
+# model in opencode). An empty list leaves the existing models untouched
+# rather than wiping the provider over a transient fetch failure.
 _sync_opencode_all() {
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
   mkdir -p "$(dirname "$cfg")"
-  BASE_URL="$BASE_URL" MODELS_DIR="$MODELS_DIR" CFG="$cfg" python3 - <<'PY'
+  BASE_URL="$BASE_URL" MODEL_IDS="${MODEL_IDS:-}" CFG="$cfg" python3 - <<'PY'
 import os, json
-cfg = os.environ["CFG"]; md = os.environ["MODELS_DIR"]
+cfg = os.environ["CFG"]
 try:
     with open(cfg) as f: data = json.load(f)
 except Exception:
@@ -823,13 +834,15 @@ data.setdefault("$schema", "https://opencode.ai/config.json")
 loc = data.setdefault("provider", {}).setdefault("local", {})
 loc["npm"] = "@ai-sdk/openai-compatible"
 loc["name"] = "Local (fxlla gateway)"
-loc.setdefault("options", {})["baseURL"] = os.environ["BASE_URL"]
-models = {}
-if os.path.isdir(md):
-    for n in sorted(os.listdir(md)):
-        if os.path.exists(os.path.join(md, n, ".source")):
-            models[n] = {"name": "%s (local)" % n}
-loc["models"] = models
+opts = loc.setdefault("options", {})
+opts["baseURL"] = os.environ["BASE_URL"]
+# No key is validated locally; without one opencode prompts the user for it.
+opts.setdefault("apiKey", "local")
+ids = [i for i in os.environ.get("MODEL_IDS", "").splitlines() if i.strip()]
+if ids:
+    loc["models"] = {i: {"name": "%s (local)" % i} for i in sorted(ids)}
+else:
+    loc.setdefault("models", {})
 with open(cfg, "w") as f: json.dump(data, f, indent=2)
 PY
 }
@@ -848,12 +861,16 @@ cmd_serve() {
     FXLLA_BIN="$SELF" \
     nohup python3 "$REPO_ROOT/gateway/fxlla_gateway.py" > "$GATEWAY_LOG" 2>&1 &
   echo $! > "$GATEWAY_PID"
-  local _
+  local _ ids
   for _ in $(seq 1 30); do
     if curl -sf "http://$FXLLA_HOST:$FXLLA_PORT/health" >/dev/null 2>&1; then
-      _sync_opencode_all
+      # One fetch feeds both the banner and the opencode registration, so what
+      # the user reads is exactly what got registered.
+      ids="$(curl -s "http://$FXLLA_HOST:$FXLLA_PORT/v1/models" \
+        | python3 -c 'import sys,json;print("\n".join(m["id"] for m in json.load(sys.stdin)["data"]))' 2>/dev/null || true)"
+      MODEL_IDS="$ids" _sync_opencode_all
       ok "Gateway up at $BASE_URL"
-      info "Models: $(curl -s "http://$FXLLA_HOST:$FXLLA_PORT/v1/models" | python3 -c 'import sys,json;print(", ".join(m["id"] for m in json.load(sys.stdin)["data"]))' 2>/dev/null)"
+      info "Models: $(printf '%s' "$ids" | tr '\n' ',' | sed 's/,$//;s/,/, /g')"
       ok "In opencode: provider 'local', pick any model. The first request loads it."
       return 0
     fi

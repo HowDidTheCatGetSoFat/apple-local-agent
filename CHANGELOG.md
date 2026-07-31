@@ -5,6 +5,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Fixed
+- Selecting the local provider in opencode no longer stops at an API key
+  prompt. The local servers validate no key, but opencode asks for one when
+  the provider omits it; the registration now carries a dummy `apiKey`
+  (kept only if the user has not set their own).
+- Embedding models no longer appear as chat models. The gateway's model list
+  - which also feeds the opencode registration on `fxlla serve` - excludes
+  catalog entries with role `embed`, matched by alias and by source repo, so
+  `embed` cannot end up selectable in an editor again (it shipped that way
+  once) and a raw API caller cannot make the gateway spawn a chat server on
+  a BERT. The opencode registration now consumes the gateway's own filtered
+  `/v1/models` instead of re-enumerating the store, so there is exactly one
+  place that decides what is chat-servable. With a moved or missing catalog
+  the filter excludes nothing: hiding a stranger's models would be worse
+  than listing an extra one.
+
 ## [0.2.0] - 2026-07-31
 
 Everything on the original roadmap is now delivered or explicitly declined

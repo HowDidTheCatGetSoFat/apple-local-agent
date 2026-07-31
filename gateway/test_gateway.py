@@ -21,6 +21,52 @@ for _name, _engine in (("mlx-model", None), ("gguf-model", "gguf")):
 gw = importlib.import_module("fxlla_gateway")
 
 
+class TestDownloadedModels(unittest.TestCase):
+    # Embedding models share the store but cannot chat. Serving one spawns
+    # llama-server without --embeddings on a BERT, and this list feeds the
+    # opencode registration: 'embed' shipped as a selectable chat model once.
+    def _store(self, dirs):
+        root = tempfile.mkdtemp(prefix="fxlla-dm-")
+        for name, source in dirs.items():
+            os.makedirs(os.path.join(root, name))
+            with open(os.path.join(root, name, ".source"), "w") as fh:
+                fh.write(source + "\n")
+        return root
+
+    def test_embed_models_are_excluded_by_alias_and_by_repo(self):
+        catalog = tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False)
+        catalog.write(
+            "# comment\n"
+            "chat  | org/chat-model  | 1GB | dev   | mlx  | note\n"
+            "embed | org/embed-model | 1GB | embed | gguf | note\n")
+        catalog.close()
+        store = self._store({
+            "chat": "org/chat-model",
+            "embed": "org/embed-model",              # by alias
+            "embed-model": "org/embed-model",        # pulled by org/repo form
+            "incomplete": "",                        # no real .source content
+        })
+        os.remove(os.path.join(store, "incomplete", ".source"))
+        saved = (gw.MODELS_DIR, gw.CATALOG)
+        gw.MODELS_DIR, gw.CATALOG = store, catalog.name
+        try:
+            self.assertEqual(sorted(gw.downloaded_models()), ["chat"])
+        finally:
+            gw.MODELS_DIR, gw.CATALOG = saved
+            os.unlink(catalog.name)
+
+    def test_a_missing_catalog_excludes_nothing(self):
+        # A stranger's checkout with a moved catalog must not hide their
+        # models; the filter fails open to the old behavior.
+        store = self._store({"m1": "org/m1"})
+        saved = (gw.MODELS_DIR, gw.CATALOG)
+        gw.MODELS_DIR, gw.CATALOG = store, "/nonexistent/models.conf"
+        try:
+            self.assertEqual(sorted(gw.downloaded_models()), ["m1"])
+        finally:
+            gw.MODELS_DIR, gw.CATALOG = saved
+
+
 class TestEngineDetection(unittest.TestCase):
     def test_default_engine_is_mlx(self):
         self.assertEqual(gw.engine_for("mlx-model"), "mlx")

@@ -80,15 +80,51 @@ def default_budget_mb():
 BUDGET_MB = default_budget_mb()
 
 
+CATALOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "config", "models.conf")
+
+
+def _embed_identities():
+    """(aliases, repos) of catalog entries with role embed. Both are needed:
+    a pull by alias names the directory after the alias, a pull by org/repo
+    names it after the repo, and .source records which repo either came from."""
+    aliases, repos = set(), set()
+    try:
+        with open(CATALOG, encoding="utf-8") as fh:
+            for line in fh:
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 5 and not parts[0].startswith("#") and parts[3] == "embed":
+                    aliases.add(parts[0])
+                    repos.add(parts[1])
+    except OSError:
+        pass
+    return aliases, repos
+
+
 def downloaded_models():
-    """Map alias -> {size_mb} for models with a completion marker."""
+    """Map alias -> {size_mb} for CHAT models with a completion marker.
+
+    Embedding models live in the same store but cannot chat: serving one here
+    would spawn llama-server without --embeddings on a BERT, and registering
+    one in an editor is exactly how a non-chat model ends up as somebody's
+    local chat model. They are fxlla kb's business, not the gateway's."""
     out = {}
     if not os.path.isdir(MODELS_DIR):
         return out
+    embed_aliases, embed_repos = _embed_identities()
     for name in sorted(os.listdir(MODELS_DIR)):
         d = os.path.join(MODELS_DIR, name)
-        if os.path.isdir(d) and os.path.exists(os.path.join(d, ".source")):
-            out[name] = {"size_mb": dir_size_mb(d)}
+        if not (os.path.isdir(d) and os.path.exists(os.path.join(d, ".source"))):
+            continue
+        if name in embed_aliases:
+            continue
+        try:
+            with open(os.path.join(d, ".source"), encoding="utf-8") as fh:
+                if fh.read().strip() in embed_repos:
+                    continue
+        except OSError:
+            pass
+        out[name] = {"size_mb": dir_size_mb(d)}
     return out
 
 

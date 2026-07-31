@@ -50,6 +50,17 @@ case "$env_on" in
   *) fail "index on: FXLLA_KB_INDEX=1 in env (got $env_on)" ;;
 esac
 
+# --- the provider carries a dummy apiKey ---
+# The local servers validate no key, but opencode PROMPTS for one when the
+# provider omits it - measured: selecting the provider stopped dead at an api
+# key dialog. Any non-empty string satisfies both sides.
+XDG_CONFIG_HOME="$CFG" FXLLA_STORE=/tmp bash "$FXLLA" wire-opencode >/dev/null
+prov="$(python3 -c "import json;print(json.dumps(json.load(open('$oc'))['provider']['local']['options']))")"
+case "$prov" in
+  *'"apiKey"'*) pass "provider carries an apiKey so opencode does not prompt" ;;
+  *) fail "provider carries an apiKey so opencode does not prompt (got $prov)" ;;
+esac
+
 # --- the chosen embedding model is baked in too ---
 # opencode launches rag_mcp.py directly rather than through `fxlla kb mcp`, so
 # this registration is the only thing telling it which model to embed with. Left
