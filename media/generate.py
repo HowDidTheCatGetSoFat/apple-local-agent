@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fxlla media: local image and video generation.
+"""fxlla media: local image, video, and voice generation.
 
 Images go through the mflux-cv toolchain (mflux-generate, mflux-generate-z-image-turbo,
 ...), mapping a friendly model name to the right CLI. Video goes through
@@ -11,16 +11,34 @@ Config via environment:
   FXLLA_MEDIA_MODEL     default image model (default z-image-turbo)
   FXLLA_MEDIA_OUT       output directory (default <FXLLA_STORE>/media)
   FXLLA_VIDEO_BIN       path to the ltx-2-mlx binary (default: ltx-2-mlx on PATH)
+  FXLLA_MFLUX_BIN_DIR   directory holding the mflux-cv CLIs (default: PATH)
+  FXLLA_EDIT_BIN        path to the image-edit CLI (wins over FXLLA_MFLUX_BIN_DIR)
+  FXLLA_UPSCALE_BIN     path to the upscale CLI (wins over FXLLA_MFLUX_BIN_DIR)
+  FXLLA_MEDIA_KEEP_MODELS  set to keep the gateway's resident models loaded
+  FXLLA_VOICE_PYTHON    interpreter that has mlx-audio (default: the uv tool
+                        venv when present, else python3)
+  FXLLA_VOICE_MODEL     TTS model (default YUGOROU/Chatterbox-Multilingual-MLX-4bit)
+  FXLLA_VOICE_REF       reference voice wav for TTS (--ref overrides)
+  FXLLA_VOICE_LANG      TTS language (default en)
+  FXLLA_HOST, FXLLA_PORT  gateway asked to free its models (default 127.0.0.1:8080)
 
 Usage (normally driven via `fxlla media`):
   generate.py image "<prompt>" [--model z-image-turbo] [--steps N] [--seed N]
                               [--width N --height N | --aspect 1:1] [-q {3,4,5,6,8}]
                               [--low-ram] [--metadata] [-o path]
-  generate.py video "<prompt>" [--stage distilled] [--frames N] [--frame-rate R]
-                              [--width N] [--height N] [--seed N] [--low-ram] [-o path]
+  generate.py video "<prompt>" [--stage distilled] [--frames N | --seconds S]
+                              [--frame-rate R] [--width N] [--height N] [--seed N]
+                              [--model NAME] [--low-ram] [-o path]
+  generate.py voice "<text>"  [--ref voice.wav] [--lang en] [--model NAME]
+                              [--speed X] [-o path]
   generate.py edit "<prompt>" --image path [--seed N] [-q {3,4,5,6,8}] [-o path]
   generate.py upscale --image path [--scale 2x] [-o path]
+  (every generator also takes --async, --keep-models, --skip-quality, --yes)
   generate.py models          list the supported image models
+  generate.py voice-python    print the resolved mlx-audio interpreter
+  generate.py jobs [--prune]  list background jobs
+  generate.py job <id>        show one background job
+  generate.py cancel <id>     cancel a running job
 """
 import argparse
 import json
@@ -270,7 +288,8 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
 
 def build_video_command(prompt, output, stage=DEFAULT_STAGE, frames=None,
                         frame_rate=DEFAULT_FRAME_RATE, width=None, height=None,
-                        seed=None, low_ram=False, model=None, bin_path=None):
+                        seed=None, low_ram=False, model=None, bin_path=None,
+                        images=None):
     """Assemble the ltx-2-mlx argument vector for one video generation.
 
     generate requires exactly one stage flag (distilled is the fast default) and
@@ -293,6 +312,9 @@ def build_video_command(prompt, output, stage=DEFAULT_STAGE, frames=None,
         cmd += ["--seed", str(seed)]
     if low_ram:
         cmd += ["--low-ram"]
+    if images:
+        for img in images:
+            cmd += ["--image", img]
     return cmd
 
 
@@ -312,7 +334,7 @@ def validate_video_output(path):
 def generate_video(prompt, stage=DEFAULT_STAGE, frames=None,
                    frame_rate=DEFAULT_FRAME_RATE, width=None, height=None,
                    seed=None, low_ram=False, model=None, output=None,
-                   keep_models=False):
+                   keep_models=False, images=None):
     if not prompt:
         raise ValueError("prompt is required")
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -320,7 +342,8 @@ def generate_video(prompt, stage=DEFAULT_STAGE, frames=None,
     free_gpu("video", keep_models)
     cmd = build_video_command(prompt, output, stage=stage, frames=frames,
                               frame_rate=frame_rate, width=width, height=height,
-                              seed=seed, low_ram=low_ram, model=model)
+                              seed=seed, low_ram=low_ram, model=model,
+                              images=images)
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "video generation failed")[-800:])

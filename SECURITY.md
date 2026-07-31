@@ -15,7 +15,8 @@ fixes.
 ## Handling of secrets
 
 - The tool never transmits credentials to third parties. `HF_TOKEN` is used
-  only for direct requests to Hugging Face.
+  only for direct requests to Hugging Face, and `FXLLA_CIVITAI_TOKEN` only for
+  direct requests to Civitai.
 - `config/config.env` holds local configuration and tokens and is git-ignored.
   Keep tokens out of the rest of the tree.
 - Downloaded model weights are stored on the disk configured by `FXLLA_STORE`.

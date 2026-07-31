@@ -8,7 +8,10 @@ set -euo pipefail
 
 ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FXLLA="$ROOT/bin/fxlla"
-DEFAULT_STORE="/Volumes/1TB-WD750-1/llm"
+# The built-in fallback, used when neither the environment nor config.env sets
+# a store. It must stay portable: a hard-coded external volume made the whole
+# install path fail on every machine except the author's.
+DEFAULT_STORE="${XDG_DATA_HOME:-$HOME/.local/share}/fxlla/store"
 
 fails=0
 pass() { printf 'ok   - %s\n' "$1"; }

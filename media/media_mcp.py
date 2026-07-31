@@ -53,6 +53,9 @@ TOOLS = [
          "width": {"type": "integer"},
          "height": {"type": "integer"},
          "seed": {"type": "integer"},
+         "images": {"type": "array", "items": {"type": "string"},
+                    "description": "Reference images for I2V video generation. "
+                                   "Form: [path, path, ...]"},
      }, "required": ["prompt"]}},
     {"name": "generate_speech",
      "description": "Synthesize speech from text using the local mlx-audio "
@@ -118,7 +121,8 @@ _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
 _VIDEO_FLAGS = [("stage", "--stage"), ("seconds", "--seconds"),
                 ("frames", "--frames"),
                 ("frame_rate", "--frame-rate"), ("width", "--width"),
-                ("height", "--height"), ("seed", "--seed"), ("model", "--model")]
+                ("height", "--height"), ("seed", "--seed"), ("model", "--model"),
+                ("images", "--images")]
 _VOICE_FLAGS = [("ref", "--ref"), ("lang", "--lang"), ("speed", "--speed"),
                 ("model", "--model")]
 _EDIT_FLAGS = [("image", "--image"), ("seed", "--seed"), ("quantize", "--quantize")]
@@ -139,7 +143,11 @@ def _run(subcmd, positional, flags, args):
     for key, flag in flags:
         val = args.get(key)
         if val is not None:
-            cmd += [flag, str(val)]
+            if key == "images" and isinstance(val, list):
+                for img in val:
+                    cmd += [flag, str(img)]
+            else:
+                cmd += [flag, str(val)]
     if args.get("async"):
         cmd.append("--async")
     if args.get("skip_quality"):

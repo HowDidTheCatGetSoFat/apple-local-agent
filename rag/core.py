@@ -2,7 +2,8 @@
 """fxlla RAG: index files into a local knowledge base and search them.
 
 Storage is a SQLite database under <store>/kb. Embeddings come from a local
-llama.cpp embedding server (the 'embed' catalog model). Standard library only,
+llama.cpp embedding server running the catalog model selected by
+FXLLA_EMBED_MODEL (default: the 'embed' alias). Standard library only,
 plus llama-server for embeddings.
 
 Search defaults to a brute-force cosine scan. Set FXLLA_KB_INDEX=1 and run this
@@ -15,6 +16,8 @@ Usage (normally driven via `fxlla kb`):
   core.py search <kb> <query>   top-k chunks for a query
   core.py ls                    list knowledge bases
   core.py rm <kb>               delete a knowledge base
+  core.py reindex <kb>          re-embed every chunk with the current embedding model
+  core.py eval                  score retrieval quality on the repo's own docs
 """
 import argparse
 import fcntl

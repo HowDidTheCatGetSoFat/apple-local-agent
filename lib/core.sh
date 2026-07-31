@@ -29,7 +29,10 @@ if [ -f "$_user_cfg" ]; then
   unset _saved_env
 fi
 
-: "${FXLLA_STORE:=/Volumes/1TB-WD750-1/llm}"
+# Portable default: weights are large, so an external disk is the common
+# choice, but hard-coding one author's volume made `fxlla setup` die on every
+# other machine. Set FXLLA_STORE in config.env to point at a disk.
+: "${FXLLA_STORE:=${XDG_DATA_HOME:-$HOME/.local/share}/fxlla/store}"
 : "${FXLLA_RATE_MBIT:=25}"
 : "${FXLLA_HOST:=127.0.0.1}"
 : "${FXLLA_PORT:=8080}"

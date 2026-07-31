@@ -36,7 +36,8 @@ jobs:
         # and must never ship config/config.env, which holds the user's tokens.
         run: |
           cli="app/fxlla.app/Contents/Resources/cli"
-          for d in bin lib config gateway rag graph media skills; do
+          test -f "$cli/config/media.conf" || { echo "missing config/media.conf in the bundled CLI" >&2; exit 1; }
+          for d in bin lib config gateway rag graph media skills evals; do
             test -d "$cli/$d" || { echo "missing $d in the bundled CLI" >&2; exit 1; }
           done
           test -x "$cli/bin/fxlla" || { echo "bundled fxlla is not executable" >&2; exit 1; }

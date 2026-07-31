@@ -1,12 +1,12 @@
 # machine-local config (paths and tokens per machine)
 config/config.env
 
-# estado en runtime
+# runtime state
 *.pid
 *.log
 .DS_Store
 
-# nunca versionar modelos ni caches
+# never version models or caches
 models/
 hf-cache/
 *.safetensors
@@ -20,3 +20,10 @@ app/.build/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Build artifacts of the menu bar app. The signed .dmg is a release asset
+# (GitHub Releases), not repository content: it is rebuilt by app/build.sh
+# plus app/package-dmg.sh and one slipped in through a `git add -A`.
+app/fxlla.dmg
+app/fxlla.app/
+app/.build/

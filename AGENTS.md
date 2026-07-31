@@ -35,7 +35,7 @@ this before opening a pull request.
 ## Secrets
 
 - Never commit tokens or keys. `config/config.env` is git-ignored and is the
-  only place for `HF_TOKEN`.
+  only place for tokens (`HF_TOKEN`, `FXLLA_CIVITAI_TOKEN`).
 - Do not print secrets in logs or error messages.
 
 ## Commits and pull requests
@@ -51,11 +51,18 @@ this before opening a pull request.
   Request a Greptile review once the branch has reached about 20 commits.
 - CodeRabbit is available on demand as a second opinion. Trigger it with a
   comment on the pull request (`@coderabbitai review`).
-- CI runs shell lint (shellcheck and `bash -n`) on changes to `bin/`, `lib/`,
-  or shell scripts. CodeQL runs on pull requests that touch workflow files.
+- CI runs shell lint (shellcheck and `bash -n`) plus every `tests/test_*.sh`
+  suite, and the Python unit tests (`rag`, `graph`, `gateway`, `media`,
+  `evals`) on changes to `bin/`, `lib/`, shell scripts, or the `rag/`,
+  `graph/`, `gateway/`, or `media/` directories. A separate App workflow
+  compiles the Swift app on changes to `app/`. CodeQL analyzes the Python
+  sources and the workflow files on pushes to main and pull requests that
+  touch them.
 
 ## Testing
 
-- `bash -n bin/fxlla lib/core.sh` for syntax.
+- `bash -n bin/fxlla lib/core.sh tests/*.sh` for syntax.
+- Run the shell suites: `for t in tests/test_*.sh; do bash "$t" || exit 1; done`.
+- Run the Python suites: `FXLLA_STORE=/tmp python3 -m unittest rag.test_rag graph.test_graph gateway.test_gateway gateway.test_metrics gateway.test_gateway_e2e media.test_media evals.test_evals`.
 - Smoke test the read-only commands: `fxlla models`, `fxlla config`, `fxlla ram`.
 - For runtime changes, validate with the `tiny` model end to end.

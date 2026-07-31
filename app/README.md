@@ -30,10 +30,15 @@ app/build.sh --release --sign
 ```
 
 Signing uses the `Developer ID Application` identity; override with
-`FXLLA_SIGN_ID`. Notarization and a `.dmg` installer are tracked in the roadmap.
+`FXLLA_SIGN_ID`. A signed `.dmg` is built by `app/package-dmg.sh`, which can also
+notarize and staple it (`app/package-dmg.sh --notarize <profile>`; `--check`
+verifies the signing prerequisites).
 
 ## Requirements
 
 - macOS 14 or later, Swift 6 toolchain (Xcode).
-- The `fxlla` CLI installed and on one of the standard paths
-  (`~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`).
+- No separate CLI install is required: `app/build.sh` bundles the CLI into the
+  app (`Contents/Resources/cli`), and the panel's "Install the fxlla command"
+  button symlinks it into `~/.local/bin`. A CLI already installed at
+  `~/.local/bin`, `/usr/local/bin`, or `/opt/homebrew/bin` wins over the
+  bundled copy (so a development checkout stays in charge).

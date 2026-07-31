@@ -15,6 +15,7 @@ fxlla eval --quick              # 1 task per dimension: a pipeline check, not a 
 fxlla eval --dim tools,code     # a subset of dimensions
 fxlla eval --json               # machine-readable output
 fxlla eval --list               # show the plan and fingerprint, run nothing
+fxlla eval --keep-failed        # keep failed code tasks' scratch dirs for inspection
 ```
 
 Each model runs alone on a cold, dedicated server (`FXLLA_EVAL_PORT`, default

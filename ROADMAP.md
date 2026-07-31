@@ -107,12 +107,15 @@ Notes:
       `notarytool` (`app/build.sh --sign`, `app/package-dmg.sh --check|--notarize`).
       Verified end to end: a notarized, stapled `.dmg` that passes a Gatekeeper
       assessment offline.
-- [~] Installer: the signed, notarized `.dmg` installs the app; symlinking the
-      `fxlla` CLI onto PATH from the installer is still pending.
+- [x] Installer: the signed, notarized `.dmg` installs the app; the app bundles
+      the CLI (`Contents/Resources/cli`) and an "Install the fxlla command"
+      action symlinks it into `~/.local/bin`.
 
 ## Phase 2: RAG and knowledge bases
 
-Status: v0 delivered (`fxlla kb`). Remaining items are performance and options.
+Status: delivered (`fxlla kb`). Performance and options landed (sqlite-vec
+index, selectable embedding model); the one remaining option, MLX embeddings,
+was measured and declined.
 
 - [x] Local embeddings (via llama.cpp) and a local store (SQLite).
 - [x] Per-project knowledge bases: index folders and docs, attach to any session.
@@ -132,16 +135,20 @@ Status: v0 delivered (`fxlla kb`). Remaining items are performance and options.
 
 ## Phase 3: Code graph
 
-Status: v0 delivered (`fxlla graph`) for Python via `ast` + SQLite, with an MCP
-server. Remaining items are scale and language coverage.
+Status: delivered (`fxlla graph`): a KuzuDB (Cypher) store, Python via `ast`
+plus JavaScript, TypeScript, Go, Rust, Java, C/C++, and Ruby via tree-sitter,
+with an MCP server.
 
 - [x] Symbol extraction (defs, refs, callers) into a local store.
 - [x] Queries: definition, references, callers.
-- [x] MCP server (`find_definition`, `find_references`, `find_callers`).
+- [x] MCP server (`find_definition`, `find_references`, `find_callers`,
+      `find_impact`, `list_unused`).
 - [x] `fxlla graph index <repo>`.
-- [ ] Multi-language parsing with tree-sitter or SCIP (Python only today).
-- [ ] KuzuDB (embedded graph DB, Cypher) instead of flat SQLite; change-impact
-      and call-graph traversal queries.
+- [x] Multi-language parsing with tree-sitter: JavaScript, TypeScript, Go, Rust,
+      Java, C/C++, and Ruby alongside Python `ast`.
+- [x] KuzuDB (embedded graph DB, Cypher) instead of flat SQLite;
+      `fxlla graph impact` runs change-impact as a Cypher variable-length path
+      over a derived CALLS relationship.
 
 ## Phase 4: Media skills
 
@@ -155,19 +162,23 @@ in opencode or Claude Code invokes it through tool calling.
       Tools: `generate_image`, `generate_video`, `generate_speech`.
       `fxlla media image|video|voice|models` on the CLI, with output validation
       (a zero exit code is not proof of a real render).
-- [ ] More image operations exposed as tools: `edit_image`, `upscale_image`
-      (mflux-cv already ships the edit/upscale CLIs).
+- [x] More image operations exposed as tools: `edit_image`, `upscale_image`
+      (`fxlla media edit|upscale`, mflux-cv qwen-edit and seedvr2).
 - [x] GPU and memory coordination through `fxlla`. Media generation frees the
       gateway's resident models before a job (`POST /admin/unload`) so it does
       not compete with a large LLM for unified memory; the gateway reloads on
       demand. Opt out with `--keep-models` / `FXLLA_MEDIA_KEEP_MODELS`.
-- [ ] Async job model for heavy work: submit returns a job id; the caller polls
-      for status and the output file path. Keeps tool calls fast and lets video
-      run in the background.
-- [ ] Reuse the bandwidth-capped `fxlla pull` for image and video weights,
-      cached under `FXLLA_STORE` like text models.
-- [ ] Set expectations: image generation is fast on this hardware; local video
-      is heavy and best-effort.
+- [x] Async job model for heavy work: `--async` on any generator returns a job
+      id; `fxlla media jobs|job|cancel` and the MCP `media_job_status`,
+      `list_media_jobs`, and `cancel_media_job` follow it. Jobs are serialized so
+      renders never overlap.
+- [x] Media weight pre-fetch: `fxlla pull media:<alias>` and `fxlla media
+      weights` (catalog in `config/media.conf`). Weights land in the Hugging
+      Face cache rather than `FXLLA_STORE` because the toolchains resolve them
+      by repository id, and the Hugging Face CLI does the transfer, so the
+      bandwidth cap does not apply.
+- [x] Set expectations: image generation is fast on this hardware; local video
+      is heavy and runs best as a background job (README, "Background jobs").
 
 ## Cross-cutting
 
@@ -178,11 +189,14 @@ in opencode or Claude Code invokes it through tool calling.
       harness, per-machine results. See evals/README.md.
 - [x] `fxlla doctor`: environment diagnostics (dependencies, PATH, store, GPU
       memory, media prerequisites, server health).
-- [ ] Optional persistence of the wired limit (LaunchDaemon).
+- [x] Optional persistence of the wired limit: `fxlla ram persist` installs a
+      LaunchDaemon that reapplies it at boot; `fxlla ram unpersist` removes it.
 - [x] Shell completions for bash and zsh (`fxlla completions <bash|zsh>`).
 
 ## Open decisions
 
-- Vector store: `sqlite-vec` (simple) vs LanceDB (scale). Phase 2.
-- Graph database: KuzuDB (embedded) is the candidate. Confirm in Phase 3.
+- Vector store: decided - `sqlite-vec` (`FXLLA_KB_INDEX=1`), falling back to
+  the cosine scan when unavailable. LanceDB not needed at this scale.
+- Graph database: decided - KuzuDB (embedded, Cypher), shipped in Phase 3
+  (pinned kuzu==0.11.3).
 - MCP lifecycle owned by the CLI, not the app.

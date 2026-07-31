@@ -2,8 +2,9 @@
 
 The core goal is delivered: fxlla runs the best open-weights models locally on
 Apple Silicon and plugs them into opencode and Claude Code, end to end. This
-document tracks what is left: one real robustness gap, a handful of
-completeness items, and a backlog of later-phase upgrades.
+document tracked what was left: one real robustness gap, a handful of
+completeness items, and a backlog of later-phase upgrades. As of v0.2.0 every
+item is done or explicitly declined; the original notes are kept for the record.
 
 ## Current state
 
@@ -208,8 +209,8 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
   rebuilds all CALLS edges on every index; fine at current scale, profile and
   narrow the join before running over a large monorepo.
 - More media tools: `edit_image` and `upscale_image` are DONE
-  (`fxlla media edit` / `upscale`). Still open: wire Wan 2.2 (mlx-video) as a
-  second video backend alongside LTX (M).
+  (`fxlla media edit` / `upscale`). Wan 2.2 as a second video backend was
+  DECLINED (maintainer, 2026-07-30); see Suggested order item 4.
 - Async media jobs: DONE. `--async` on any generator returns a job id;
   `fxlla media jobs|job|cancel` (and `jobs --prune`) follow it, and the MCP
   generators take `async: true` with `media_job_status`, `list_media_jobs`, and

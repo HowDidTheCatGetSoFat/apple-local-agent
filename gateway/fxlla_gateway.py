@@ -2,7 +2,8 @@
 """fxlla multi-model gateway.
 
 One OpenAI-compatible endpoint that fronts many models. It aggregates the
-downloaded models in /v1/models and, on each request, routes to the backend for
+downloaded chat models in /v1/models (embedding models in the same store are
+excluded - they cannot chat) and, on each request, routes to the backend for
 the requested model, loading it on demand and evicting the least-recently-used
 backend when a load would exceed the RAM budget.
 
@@ -15,6 +16,9 @@ Config via environment:
   FXLLA_BACKEND_PORT_BASE       first internal backend port (default 8100)
   FXLLA_GATEWAY_BUDGET_MB       resident RAM budget (default: ~GPU reservable)
   FXLLA_BIN                     path to the fxlla CLI (default: fxlla on PATH)
+  FXLLA_CTX                     context window llama-server serves for gguf
+                                models (default 8192); reported per model as
+                                "context" in /v1/models
   FXLLA_STATS_FILE              passive metrics time-series (default: the CLI's
                                 stats.jsonl under the state dir)
 """

@@ -15,7 +15,8 @@ run under a python that has them (e.g. `uv run --with kuzu --with tree-sitter
 deferred so the ast extraction and the MCP layer can be imported without them.
 
 Usage (normally driven via `fxlla graph`):
-  codegraph.py index <path...>   index Python files or directories
+  codegraph.py index <path...>   index files or directories (Python via ast,
+                                 other languages via tree-sitter)
   codegraph.py def <name>        where a symbol is defined
   codegraph.py refs <name>       where a symbol is referenced
   codegraph.py callers <name>    which functions call a symbol

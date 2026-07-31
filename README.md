@@ -21,13 +21,14 @@ Built for M-series Macs with large unified memory. Validated on M5 Max
   saturate your connection.
 - Frees RAM on its own after an idle timeout.
 - Adds local models to opencode without touching Claude Code.
-- Ships local tools any client can call over MCP: RAG knowledge bases, a Python
-  code graph, and image, video, and speech generation.
+- Ships local tools any client can call over MCP: RAG knowledge bases, a
+  multi-language code graph, and image, video, and speech generation.
 
 ## Requirements
 
 - Apple Silicon Mac (M-series).
-- Homebrew, `uv`, and `aria2` (installed or set up by `fxlla setup`).
+- Homebrew and `uv` (`brew install uv`); `aria2` is installed by `fxlla setup`
+  if missing.
 - An external disk or a folder with room for the weights.
 
 ## Install
@@ -35,8 +36,9 @@ Built for M-series Macs with large unified memory. Validated on M5 Max
 ```sh
 git clone https://github.com/HowDidTheCatGetSoFat/fxlla.git
 cd fxlla
-ln -sf "$PWD/bin/fxlla" ~/.local/bin/fxlla
+mkdir -p ~/.local/bin && ln -sf "$PWD/bin/fxlla" ~/.local/bin/fxlla
 mkdir -p ~/.config/fxlla && cp config/config.env.example ~/.config/fxlla/config.env
+$EDITOR ~/.config/fxlla/config.env   # optional: FXLLA_STORE, if not ~/.local/share/fxlla/store
 fxlla setup
 ```
 
@@ -75,11 +77,13 @@ Then open opencode and pick the `local` provider.
 | `fxlla serve` / `unserve`     | Multi-model gateway: one endpoint, load on demand |
 | `fxlla status`                | Server, model, and idle status            |
 | `fxlla stats [--watch]`       | Live tok/s, TTFT, RAM (also --json, --last N) |
-| `fxlla ram [auto\|reset]`     | Adjust the GPU memory limit               |
+| `fxlla ram [auto\|reset\|persist\|unpersist\|<MB>]` | Adjust the GPU memory limit |
 | `fxlla eval [model ...]`      | Score chat models on quality and speed    |
 | `fxlla kb ...`                | Local RAG knowledge bases (MCP: rag_search) |
-| `fxlla graph ...`             | Python code graph (MCP: find_definition, ...) |
+| `fxlla graph ...`             | Multi-language code graph (MCP: find_definition, ...) |
 | `fxlla media image\|video\|voice` | Local media generation (MCP: generate_*) |
+| `fxlla logs`                  | Follow the server log                     |
+| `fxlla skills install`        | Install the tool-usage skill pack         |
 | `fxlla doctor`                | Diagnose the environment                  |
 | `fxlla completions <bash\|zsh>` | Print a shell completion script         |
 | `fxlla wire-opencode`         | Register the local provider in opencode   |
@@ -109,7 +113,7 @@ wins over the built-in defaults.
 ## Shell completions
 
 Completion for commands, catalog aliases (`pull`), downloaded models
-(`on`/`off`/`rm`), and `kb`/`graph` subcommands:
+(`on`/`off`/`rm`/`eval`), and `kb`/`graph`/`media`/`skills` subcommands:
 
 ```sh
 # bash: add to ~/.bashrc
@@ -205,7 +209,7 @@ to free RAM. Set `0` to disable. `fxlla status` shows the idle timer.
 ## Multi-model gateway
 
 `fxlla on` serves one model. `fxlla serve` starts a gateway: a single
-OpenAI-compatible endpoint that fronts every downloaded model.
+OpenAI-compatible endpoint that fronts every downloaded chat model.
 
 ```sh
 fxlla serve                 # start the gateway on 127.0.0.1:8080
@@ -213,7 +217,9 @@ fxlla status                # gateway, resident models, RAM budget
 fxlla unserve               # stop it (unloads all backends)
 ```
 
-`GET /v1/models` lists every downloaded model. A request picks one by name:
+`GET /v1/models` lists every downloaded chat model (embedding models are
+excluded; they cannot chat and belong to `fxlla kb`). A request picks one by
+name:
 
 ```sh
 curl -s localhost:8080/v1/chat/completions -d '{"model":"qwen3-coder", ...}'
@@ -371,7 +377,7 @@ fxlla graph impact chunk_text       # transitive callers (blast radius)
 ```
 
 Expose it to your tools as an MCP server (`find_definition`, `find_references`,
-`find_callers`):
+`find_callers`, `find_impact`, `list_unused`):
 
 ```sh
 fxlla graph wire-opencode
@@ -398,12 +404,16 @@ silence, a constant waveform, a large DC offset, and a clip that is silent for
 almost its whole length; thresholds sit far below real speech (which measures a
 peak near 0.95 against a 0.005 limit), so a render you wanted is not rejected.
 Images are checked only for sane dimensions - a blank but well-formed image is not
-detected. Video is checked for a usable stream when `ffprobe` is installed, and
-not at all otherwise; frame count and length are yours to choose, so a one-frame
+detected. Video always gets container checks (present, plausibly sized, a real
+MP4); its stream is inspected only when `ffprobe` is installed. Frame count and
+length are yours to choose, so a one-frame
 or fraction-of-a-second clip is accepted. If a check ever rejects something you
 wanted, pass `--skip-quality` or set `FXLLA_MEDIA_SKIP_QUALITY=1`.
 
-Point `FXLLA_VIDEO_BIN` at your `ltx-2-mlx` binary and `FXLLA_VOICE_PYTHON` at an
+Point `FXLLA_MFLUX_BIN_DIR` at the directory holding the `mflux-*` image CLIs
+when they live in a venv off PATH (unset means PATH, where `fxlla setup
+--media` puts them). Point `FXLLA_VIDEO_BIN` at your `ltx-2-mlx` binary and
+`FXLLA_VOICE_PYTHON` at an
 interpreter with `mlx-audio` (both usually live in a project venv), and
 `FXLLA_MEDIA_HF_HOME` at the weight cache. `fxlla doctor` reports which of these
 are ready. Before a job, media generation asks a running gateway to free its
@@ -487,7 +497,8 @@ reports whether the installed copies are current.
 `fxlla` is the control plane. It serves an OpenAI-compatible endpoint that
 opencode consumes as a `local` provider, alongside Claude and any other
 provider. Claude Code is not modified. On top of that it ships local knowledge
-bases, a Python code graph, and image, video, and speech generation, all exposed
+bases, a multi-language code graph, and image, video, and speech generation,
+all exposed
 as MCP tools any client can call. See `ROADMAP.md` and `docs/roadmap-remaining.md`
 for what is next.
 
@@ -502,7 +513,8 @@ All settings live in `~/.config/fxlla/config.env` or the environment. See
 - Gateway and RAG: `FXLLA_GATEWAY_BUDGET_MB`, `FXLLA_BACKEND_PORT_BASE`,
   `FXLLA_EMBED_PORT`.
 - Media: `FXLLA_MEDIA_MODEL`, `FXLLA_MEDIA_HF_HOME`, `FXLLA_MEDIA_OUT`,
-  `FXLLA_VIDEO_BIN`, `FXLLA_VOICE_PYTHON`, `FXLLA_VOICE_REF`, `FXLLA_VOICE_LANG`.
+  `FXLLA_VIDEO_BIN`, `FXLLA_MFLUX_BIN_DIR`, `FXLLA_VOICE_PYTHON`,
+  `FXLLA_VOICE_REF`, `FXLLA_VOICE_LANG`.
 
 ## Catalog
 

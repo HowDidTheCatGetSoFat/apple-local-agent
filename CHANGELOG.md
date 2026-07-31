@@ -27,6 +27,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Fixed
+- Documentation swept against the code: 48 confirmed staleness findings fixed
+  across README.md, ROADMAP.md, AGENTS.md, SECURITY.md, app/README.md,
+  docs/roadmap-remaining.md, evals/README.md and the module docstrings in
+  rag/core.py, graph/codegraph.py, gateway/fxlla_gateway.py and
+  media/generate.py. The recurring themes: the code graph was still described
+  as Python-only in three places (it parses eight more languages via
+  tree-sitter), ROADMAP carried thirteen unchecked boxes for work that shipped,
+  module docstrings listed a fraction of the environment variables they read
+  and omitted half the subcommands they register, the graph MCP was documented
+  with three tools instead of five, and SECURITY.md named HF_TOKEN as the only
+  credential sent over the network (FXLLA_CIVITAI_TOKEN is another).
+- `FXLLA_STORE` no longer defaults to one author's external volume. A fresh
+  clone followed the README verbatim and died at `fxlla setup`, because the
+  copied config.env hard-coded a disk that exists on exactly one machine. The
+  fallback is now `~/.local/share/fxlla/store` and the example ships the
+  external-disk form commented out.
+- The signed `.dmg` is no longer tracked in the repository. It is a release
+  asset, rebuilt by `app/build.sh` plus `app/package-dmg.sh`; one slipped in
+  through a `git add -A` and is now git-ignored along with the other app build
+  artifacts.
 - The media MCP registration was written with an EMPTY environment through
   `fxlla wire-opencode --all`, so every media tool call from an editor died
   with "FXLLA_STORE is not set". The wiring copied only exported variables,
