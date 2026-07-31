@@ -73,6 +73,24 @@ named when passed to a stage that ignores it, and every stage publishes what it
 runs. Video also got the point stated plainly: cost is stage x steps x
 resolution x duration, and duration is the multiplier people forget.
 
+**Third attempt at the same fact, and the lesson is about where a fact lives,
+not whether it is true.** With the timings published and the estimate riding
+along with each submission, the async behaviour finally worked end to end - the
+submit came back in seconds with "typically 2 min here", the turn ended, the
+next question was answered while the render ran, and the render took 117 s
+against an estimate of 115. But asked "how long does each model take", the
+model went to bash and wrote forty lines of Python to parse the job files by
+hand. Twice. And its version reported `two-stages-hq`, a video stage, as an
+image model, because it matched `--model` and `--stage` in the same loop.
+
+The data was correct, published, and one call away, and it still got
+reimplemented worse. So `fxlla media timings` now exists: the same numbers, at
+the place someone reaching for a shell will actually find them, and the tool
+description says outright that this is the answer to "how long does each model
+take" rather than something to derive. Three placements for one fact - the
+catalog, the submission, and now the CLI - because each covers a different way
+of looking for it.
+
 **A catalog is read once and remembered, which is why the fix did not land.**
 Watching the next run: the measurements shipped at 12:05, and at 12:18 the
 model was still reporting z-image-turbo at "10-15 s". It had called

@@ -1082,19 +1082,44 @@ def cmd_models(args):
         steps = info.get("steps") or "%s+%s" % (info["stage1_steps"],
                                                 info["stage2_steps"])
         print("%-14s%s%-9s %s" % (name, default, steps, info["note"]))
-    seen = observed_timings()
-    if seen:
-        print("\nMEASURED HERE  RUNS   MEDIAN    PER MEGAPIXEL")
-        for key in sorted(seen, key=lambda k: -seen[k]["median_s"]):
-            entry = seen[key]
-            rate = ("%.0f s" % entry["s_per_mp"]) if entry.get("s_per_mp") else "-"
-            print("%-14s %-6s %-9s %s"
-                  % (key, entry["n"], "%.0f s" % entry["median_s"], rate))
-        print("\nSteps compare a model to itself, not to another one: the same "
-              "8 steps\nrun 9x apart on two of these. A model missing above "
-              "has not been timed here.")
+    print("")
+    print_timings()
     print("\n* defaults. Capabilities, video cost and the ideogram4 caption "
           "schema: fxlla media models --json")
+
+
+def print_timings():
+    seen = observed_timings()
+    if not seen:
+        print("Nothing has been timed here yet. Times appear as renders finish;"
+              "\nnone are estimated, and none come from anyone else's hardware.")
+        return
+    print("%-20s %-6s %-9s %s" % ("MEASURED HERE", "RUNS", "MEDIAN",
+                                  "PER MEGAPIXEL"))
+    for key in sorted(seen, key=lambda k: -seen[k]["median_s"]):
+        entry = seen[key]
+        rate = ("%.0f s" % entry["s_per_mp"]) if entry.get("s_per_mp") else "-"
+        print("%-20s %-6s %-9s %s"
+              % (key, entry["n"], "%.0f s" % entry["median_s"], rate))
+    print("\nSteps compare a model to itself, not to another one: the same "
+          "8 steps\nrun 9x apart on two of these. A model missing above has "
+          "not been timed here -\nsay so rather than estimating, and never "
+          "render just to fill this table in.")
+
+
+def cmd_timings(args):
+    """`fxlla media timings`: the measured table on its own.
+
+    It exists because the numbers being published was not enough. Asked how
+    long each model takes, a caller went to bash and wrote forty lines of
+    Python to parse the job files by hand - twice - and its version reported a
+    video stage as an image model. Someone reaching for the shell should find
+    this instead of reimplementing it."""
+    if getattr(args, "json", False):
+        print(json.dumps({"observed": observed_timings(), "cost": _COST_GUIDE},
+                         indent=1))
+        return
+    print_timings()
 
 
 def observed_timings(records=None):
@@ -1582,6 +1607,8 @@ def main():
     ml.add_argument("-j", "--json", action="store_true")
     lr = sub.add_parser("loras")
     lr.add_argument("-j", "--json", action="store_true")
+    ti = sub.add_parser("timings")
+    ti.add_argument("-j", "--json", action="store_true")
     # Introspection for doctor and setup: the ONE place voice-interpreter
     # resolution lives, so shell never re-implements it.
     sub.add_parser("voice-python")
@@ -1622,7 +1649,8 @@ def main():
             print("typically %s here" % _human_seconds(estimate))
         return
     {"image": cmd_image, "video": cmd_video, "voice": cmd_voice,
-     "edit": cmd_edit, "upscale": cmd_upscale, "models": cmd_models, "loras": cmd_loras,
+     "edit": cmd_edit, "upscale": cmd_upscale, "models": cmd_models,
+     "loras": cmd_loras, "timings": cmd_timings,
      "voice-python": lambda _a: print(resolved_voice_python()),
      "jobs": cmd_jobs, "job": cmd_job, "cancel": cmd_cancel}[args.cmd](args)
 

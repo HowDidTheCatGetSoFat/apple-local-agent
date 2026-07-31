@@ -198,7 +198,11 @@ TOOLS = [
                     "it rather than ignoring what they already downloaded.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "list_media_models",
-     "description": "Every image model and every video stage, what each "
+     "description": "THE answer to \"how long does each model take here\" and "
+                    "\"which one should I use\" - call it instead of reading "
+                    "the job files yourself, which one caller did in forty "
+                    "lines of shell and got a video stage listed as an image "
+                    "model. Every image model and every video stage, what each "
                     "supports, and what each COSTS. `observed` is the "
                     "important part: real measured seconds from this machine's "
                     "own finished jobs, per model and per video:<stage>, with "

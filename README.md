@@ -516,7 +516,15 @@ fxlla media jobs                                  # all jobs, newest first
 fxlla media job <id>                              # one job (add --json)
 fxlla media cancel <id>                           # stop a queued or running job
 fxlla media jobs --prune                          # drop finished records
+fxlla media timings                               # what renders have taken here
 ```
+
+`fxlla media timings` is the measured record, computed from those jobs: median
+seconds and seconds-per-megapixel per model and per video stage. Nothing in it
+is estimated and nothing comes from other hardware, so a model with no runs
+shows no number rather than a guess. It is also what the MCP publishes as
+`observed`, which is where a step count stops being a useful proxy — krea2 and
+z-image-turbo both run 8 steps and are 9x apart here.
 
 Jobs run **one at a time**: renders share unified memory with the gateway's
 models, so a second submission waits (`queued`) until the current one finishes.

@@ -60,6 +60,9 @@ finished renders, per model and per video stage, with `n` and `s_per_mp`.
   conversation.** It is cheap, it changes as fxlla is updated, and `observed`
   grows every time a render finishes - one session quoted a catalog it read an
   hour earlier and never saw the measurements that had been added since.
+- **Do not parse the job files to work out timings.** That is what `observed`
+  is, already computed and correct: a hand-rolled version got a video stage
+  listed as an image model. From a shell, `fxlla media timings`.
 - When someone is iterating - trying a layout, checking a composition - render
   small or on a fast model first and commit to the full size afterwards. Nobody
   asked for eight minutes; they asked for a poster.

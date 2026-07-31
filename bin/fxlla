@@ -1810,7 +1810,7 @@ cmd_complete() {
     kb)         printf '%s\n' add search ls rm reindex eval stop mcp wire-opencode ;;
     graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
                   mcp wire-opencode ;;
-    media)      printf '%s\n' image video voice edit upscale models loras weights jobs job cancel mcp wire-opencode ;;
+    media)      printf '%s\n' image video voice edit upscale models loras timings weights jobs job cancel mcp wire-opencode ;;
     skills)     printf '%s\n' install ls status ;;
   esac
 }

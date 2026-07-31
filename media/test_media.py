@@ -1683,6 +1683,35 @@ class TestObservedTimings(unittest.TestCase):
             argparse.Namespace(cmd="image", model="fibo",
                                width=None, height=None), seen))
 
+    def test_timings_is_reachable_on_its_own(self):
+        # It exists because publishing the numbers was not enough: a caller
+        # asked how long each model takes and went to bash to parse the job
+        # files by hand. Whoever reaches for a shell should find this.
+        store = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, store, True)
+        jobs_dir = os.path.join(store, "media", "jobs")
+        os.makedirs(jobs_dir)
+        with open(os.path.join(jobs_dir, "1785500000-abcdef.json"), "w") as fh:
+            json.dump({"id": "1785500000-abcdef", "kind": "image",
+                       "status": "done", "started": 1785500000.0,
+                       "finished": 1785500123.0, "output": None,
+                       "argv": ["image", "--model", "krea2"]}, fh)
+        text = subprocess.check_output(
+            [sys.executable, os.path.join(os.path.dirname(
+                os.path.abspath(__file__)), "generate.py"), "timings"],
+            env=dict(os.environ, FXLLA_STORE=store), text=True)
+        self.assertIn("krea2", text)
+        self.assertIn("123 s", text)
+
+    def test_timings_says_so_when_nothing_has_been_measured(self):
+        store = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, store, True)
+        text = subprocess.check_output(
+            [sys.executable, os.path.join(os.path.dirname(
+                os.path.abspath(__file__)), "generate.py"), "timings"],
+            env=dict(os.environ, FXLLA_STORE=store), text=True)
+        self.assertIn("Nothing has been timed", text)
+
     def test_video_estimates_come_from_the_stage(self):
         seen = media.observed_timings(self._records())
         self.assertEqual(

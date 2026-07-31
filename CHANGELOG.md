@@ -113,6 +113,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   back to PATH and running a different install than the one pointed at.
   `fxlla doctor` checks the directory when the knob is set.
 
+### Added
+- `fxlla media timings`: the measured record on its own - median seconds and
+  seconds-per-megapixel per model and per video stage, from this machine's own
+  finished jobs, with an explicit "nothing has been timed yet" when there is no
+  history. Publishing the numbers in the catalog had not been enough: asked how
+  long each model takes, a caller went to the shell and wrote forty lines of
+  Python to parse the job files by hand, twice, and its version reported a
+  video stage as an image model. Whoever reaches for a shell should find this
+  instead of reimplementing it.
+
 ### Changed
 - The expected duration now travels WITH the submission and the measured one
   with the result, instead of only living in the catalog. A catalog is read
