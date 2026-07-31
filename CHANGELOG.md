@@ -5,6 +5,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Added
+- `fxlla setup --media` installs the media backends the way everything else
+  gets installed: as uv tools at pinned versions (mflux-cv, mlx-audio from
+  PyPI; ltx-2-mlx has no PyPI release, so its pin is a commit on the public
+  repository). Determinism comes from pins, not from bundling bytes -
+  relocatable Python venvs cannot be signed into the app. With the video
+  binary on PATH and the voice interpreter resolved automatically (env
+  override, then the uv tool venv, then python3 - doctor and setup ask
+  generate.py's own resolution instead of re-implementing it), a fresh
+  machine goes from clone to `fxlla media image` with two commands. The one
+  manual piece is voice's reference wav: cloning a voice needs a voice.
+
 ### Fixed
 - opencode's context meter now runs on each model's real window. The
   registration declared no per-model limit, so the meter and the

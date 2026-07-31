@@ -620,6 +620,42 @@ class TestJobs(unittest.TestCase):
         self.assertIn("ValueError: bad input", jobs.describe(rec))
 
 
+class TestVoicePythonResolution(unittest.TestCase):
+    # One resolution, three layers: the env override always wins, the uv tool
+    # venv (installed by `fxlla setup --media`) is the default when present,
+    # bare python3 keeps hand-rolled PATH venvs working.
+    def test_env_override_wins(self):
+        os.environ["FXLLA_VOICE_PYTHON"] = "/my/venv/bin/python"
+        try:
+            self.assertEqual(media.resolved_voice_python(), "/my/venv/bin/python")
+        finally:
+            del os.environ["FXLLA_VOICE_PYTHON"]
+
+    def test_uv_tool_interpreter_when_present(self):
+        saved_run, saved_isfile = media.subprocess.run, media.os.path.isfile
+
+        class _Out:
+            stdout = "/tools\n"
+        media.subprocess.run = lambda *a, **k: _Out()
+        media.os.path.isfile = lambda p: p == "/tools/mlx-audio/bin/python"
+        try:
+            self.assertEqual(media.resolved_voice_python(),
+                             "/tools/mlx-audio/bin/python")
+        finally:
+            media.subprocess.run, media.os.path.isfile = saved_run, saved_isfile
+
+    def test_falls_back_to_python3(self):
+        saved = media.subprocess.run
+
+        def _boom(*_a, **_k):
+            raise OSError("no uv")
+        media.subprocess.run = _boom
+        try:
+            self.assertEqual(media.resolved_voice_python(), "python3")
+        finally:
+            media.subprocess.run = saved
+
+
 class TestBuildVoiceCommand(unittest.TestCase):
     def test_requires_reference(self):
         with self.assertRaises(ValueError):

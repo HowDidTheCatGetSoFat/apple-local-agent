@@ -41,6 +41,11 @@ fxlla setup
 ```
 
 `fxlla setup` installs `mlx-lm` and `llama.cpp` and verifies the environment.
+`fxlla setup --media` also installs the media backends (image, video, voice)
+at pinned versions - determinism comes from pins, not from bundling bytes,
+since relocatable Python venvs cannot be signed into the app. Weights stay
+separate and consent-gated. The one manual piece is voice's reference wav
+(`FXLLA_VOICE_REF`): cloning a voice needs a voice.
 
 ## Quickstart
 

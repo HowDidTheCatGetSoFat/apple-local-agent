@@ -80,7 +80,49 @@ STATE_DIR          $STATE_DIR
 EOF
 }
 
+# Media backends, pinned to the versions the media path was validated against.
+# Determinism comes from pins, not from bundling bytes: relocatable Python
+# venvs cannot be signed into the app, and a multi-GB dmg would help nobody.
+# ltx-2-mlx has no PyPI release, so its pin is a commit on the public repo.
+MEDIA_PIN_IMAGE="mflux-cv==0.18.29"
+MEDIA_PIN_VOICE="mlx-audio==0.4.6"
+MEDIA_PIN_VIDEO="git+https://github.com/dgrauet/ltx-2-mlx.git@e1838a85#subdirectory=packages/ltx-pipelines-mlx"
+
+_setup_media() {
+  info "Setting up media backends (pinned versions)..."
+  if command -v mflux-generate >/dev/null 2>&1; then
+    ok "image backend present (mflux)"
+  else
+    info "Installing image backend: $MEDIA_PIN_IMAGE"; uv tool install "$MEDIA_PIN_IMAGE"
+  fi
+  if command -v ltx-2-mlx >/dev/null 2>&1; then
+    ok "video backend present (ltx-2-mlx)"
+  else
+    info "Installing video backend (dgrauet/ltx-2-mlx, pinned commit)..."
+    uv tool install "$MEDIA_PIN_VIDEO"
+  fi
+  local vp
+  vp="$(python3 "$REPO_ROOT/media/generate.py" voice-python 2>/dev/null || echo python3)"
+  if "$vp" -c 'import mlx_audio' >/dev/null 2>&1; then
+    ok "voice backend present ($vp)"
+  else
+    info "Installing voice backend: $MEDIA_PIN_VOICE"; uv tool install "$MEDIA_PIN_VOICE"
+  fi
+  # The one genuinely personal piece: chatterbox clones a reference voice, so
+  # no install can supply it.
+  if [ -z "${FXLLA_VOICE_REF:-}" ]; then
+    warn "Voice needs a reference wav: record a few seconds of the voice you want and set FXLLA_VOICE_REF=/path/to/it in ~/.config/fxlla/config.env"
+  fi
+  info "Weights are separate (tens of GB) and stay consent-gated: fxlla media weights"
+}
+
 cmd_setup() {
+  local media=0
+  case "${1:-}" in
+    --media) media=1 ;;
+    "") ;;
+    *) die "usage: fxlla setup [--media]" ;;
+  esac
   info "Checking dependencies..."
   command -v uv >/dev/null || die "Missing 'uv'. Install it: brew install uv"
   command -v aria2c >/dev/null || { warn "aria2c missing, installing..."; brew install aria2; }
@@ -97,12 +139,18 @@ cmd_setup() {
     info "Installing llama.cpp (for GGUF models)..."; brew install llama.cpp
   fi
 
+  [ "$media" = 1 ] && _setup_media
+
   local uvbin="$HOME/.local/bin"
   echo ":$PATH:" | grep -q ":$uvbin:" || warn "Add to your shell rc: export PATH=\"$uvbin:\$PATH\""
 
   require_store
   ok "Store ready at $MODELS_DIR"
-  ok "Setup complete. Try: fxlla models"
+  if [ "$media" = 1 ]; then
+    ok "Setup complete. Try: fxlla models  |  fxlla media image \"a cat\""
+  else
+    ok "Setup complete. Try: fxlla models   (media backends: fxlla setup --media)"
+  fi
 }
 
 cmd_models() {
@@ -1377,12 +1425,17 @@ cmd_doctor() {
   else
     _chk warn "video backend not found: $FXLLA_VIDEO_BIN (set FXLLA_VIDEO_BIN)"
   fi
-  if ! command -v "$FXLLA_VOICE_PYTHON" >/dev/null 2>&1; then
-    _chk warn "voice interpreter not found: $FXLLA_VOICE_PYTHON (set FXLLA_VOICE_PYTHON)"
-  elif "$FXLLA_VOICE_PYTHON" -c 'import mlx_audio' >/dev/null 2>&1; then
-    _chk ok "voice backend: $FXLLA_VOICE_PYTHON has mlx-audio"
+  # Ask generate.py which interpreter voice will actually use - resolution
+  # lives there (env override, then the uv tool venv, then python3) and
+  # re-implementing it here is how the two would drift.
+  local _vp
+  _vp="$(python3 "$REPO_ROOT/media/generate.py" voice-python 2>/dev/null || echo "$FXLLA_VOICE_PYTHON")"
+  if ! command -v "$_vp" >/dev/null 2>&1; then
+    _chk warn "voice interpreter not found: $_vp (set FXLLA_VOICE_PYTHON)"
+  elif "$_vp" -c 'import mlx_audio' >/dev/null 2>&1; then
+    _chk ok "voice backend: $_vp has mlx-audio"
   else
-    _chk warn "voice interpreter has no mlx-audio: $FXLLA_VOICE_PYTHON (install it in that venv)"
+    _chk warn "voice interpreter has no mlx-audio: $_vp (run: fxlla setup --media)"
   fi
   if command -v ffprobe >/dev/null 2>&1; then
     _chk ok "ffprobe present (video output is checked for frames)"

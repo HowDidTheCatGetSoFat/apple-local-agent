@@ -77,6 +77,29 @@ DEFAULT_FRAME_RATE = 24
 # mlx-audio installed, so fxlla itself never imports it. Chatterbox ships no
 # speaker conditionals, so a reference voice wav is required.
 VOICE_PYTHON = os.environ.get("FXLLA_VOICE_PYTHON", "python3")
+
+
+def resolved_voice_python():
+    """The interpreter that actually has mlx-audio.
+
+    FXLLA_VOICE_PYTHON always wins. Otherwise `fxlla setup --media` installs
+    mlx-audio as a uv tool, and that venv's python is the one interpreter
+    guaranteed to import it - so it is the default when present. The bare
+    python3 fallback keeps the old behavior for hand-rolled venvs on PATH.
+    Doctor and setup ask THIS function (via the voice-python subcommand)
+    instead of re-implementing the resolution in shell."""
+    explicit = os.environ.get("FXLLA_VOICE_PYTHON")
+    if explicit:
+        return explicit
+    try:
+        root = subprocess.run(["uv", "tool", "dir"], capture_output=True,
+                              text=True, timeout=10).stdout.strip()
+        candidate = os.path.join(root, "mlx-audio", "bin", "python")
+        if root and os.path.isfile(candidate):
+            return candidate
+    except Exception:
+        pass
+    return "python3"
 VOICE_MODEL = os.environ.get("FXLLA_VOICE_MODEL", "YUGOROU/Chatterbox-Multilingual-MLX-4bit")
 VOICE_REF = os.environ.get("FXLLA_VOICE_REF", "")
 VOICE_LANG = os.environ.get("FXLLA_VOICE_LANG", "en")
@@ -265,7 +288,7 @@ def build_voice_command(text, output, ref, model=None, lang=None, speed=1.0,
     if not ref:
         raise ValueError("a reference voice wav is required "
                          "(set FXLLA_VOICE_REF or pass --ref)")
-    return [python or VOICE_PYTHON, backend or VOICE_BACKEND,
+    return [python or resolved_voice_python(), backend or VOICE_BACKEND,
             "--text", text, "--output", output, "--ref", ref,
             "--model", model or VOICE_MODEL, "--lang", lang or VOICE_LANG,
             "--speed", str(speed)]
@@ -516,6 +539,9 @@ def main():
                         help="authorize downloading any missing weights")
 
     sub.add_parser("models")
+    # Introspection for doctor and setup: the ONE place voice-interpreter
+    # resolution lives, so shell never re-implements it.
+    sub.add_parser("voice-python")
     jl = sub.add_parser("jobs")
     jl.add_argument("-j", "--json", action="store_true")
     jl.add_argument("--prune", action="store_true",
@@ -543,6 +569,7 @@ def main():
         return
     {"image": cmd_image, "video": cmd_video, "voice": cmd_voice,
      "edit": cmd_edit, "upscale": cmd_upscale, "models": cmd_models,
+     "voice-python": lambda _a: print(resolved_voice_python()),
      "jobs": cmd_jobs, "job": cmd_job, "cancel": cmd_cancel}[args.cmd](args)
 
 
