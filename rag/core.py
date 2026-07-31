@@ -19,6 +19,7 @@ Usage (normally driven via `fxlla kb`):
 import argparse
 import fcntl
 import glob
+import hashlib
 import json
 import math
 import os
@@ -110,7 +111,12 @@ def _server_model(timeout=_HEALTH_TIMEOUT):
         return None
     if not isinstance(props, dict):
         return None
-    return props.get("model_path") or props.get("model_alias") or None
+    # model_path only. model_alias looks like a usable fallback and is a trap:
+    # llama-server's --alias replaces it with a name of the operator's choosing,
+    # which no path can ever equal, so the one case it would cover - a server
+    # fxlla did not start - is the case most likely to be aliased. Treating a
+    # missing model_path as unverifiable keeps that server working.
+    return props.get("model_path") or None
 
 
 # A server outlives the command that started it, so switching models leaves the
@@ -597,6 +603,20 @@ def _eval_drop(con):
     con.commit()
 
 
+def _corpus_fingerprint(files):
+    """Short digest of the corpus, so two runs can be told apart.
+
+    The corpus is live documentation: editing it moves every score. Reporting the
+    fingerprint turns "are these two numbers comparable" from a judgement call
+    into a string comparison.
+    """
+    digest = hashlib.sha256()
+    for path in files:
+        with open(path, "rb") as fh:
+            digest.update(fh.read())
+    return digest.hexdigest()[:12]
+
+
 def cmd_eval(args):
     with open(EVAL_SET, encoding="utf-8") as fh:
         spec = json.load(fh)
@@ -639,6 +659,7 @@ def cmd_eval(args):
         "model": EMBED_ALIAS,
         "weights": os.path.basename(model) if model else None,
         "dimensions": dim,
+        "corpus": _corpus_fingerprint(files),
         "files": len(files), "chunks": chunks,
         "index_seconds": round(indexed, 2),
         "queries": n, "k": args.k,
@@ -652,7 +673,8 @@ def cmd_eval(args):
         return
 
     print(f"model:    {EMBED_ALIAS} ({summary['weights']}, {dim} dimensions)")
-    print(f"corpus:   {len(files)} files, {chunks} chunks, indexed in {indexed:.1f}s")
+    print(f"corpus:   {len(files)} files, {chunks} chunks, "
+          f"fingerprint {summary['corpus']}, indexed in {indexed:.1f}s")
     print(f"queries:  {n} (k={args.k})")
     print(f"recall@1: {at1}/{n} ({at1 / n:.0%})" if n else "recall@1: n/a")
     print(f"recall@{args.k}: {atk}/{n} ({atk / n:.0%})" if n else "")
@@ -664,9 +686,9 @@ def cmd_eval(args):
         for r in misses:
             print(f"  {r['query']}")
             print(f"    wanted {' or '.join(r['expect'])}, got {', '.join(r['top'])}")
-    print("\nThese numbers rank models against each other on this commit. The "
-          "corpus is the repository's own docs, so editing them moves the "
-          "scores: do not compare runs across commits.")
+    print("\nThese numbers rank models against each other on one corpus. The "
+          "corpus is the repository's own docs, so editing them moves every "
+          "score: compare two runs only when the fingerprint matches.")
 
 
 def main():

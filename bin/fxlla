@@ -395,7 +395,15 @@ cmd_pull() {
   fi
   echo "$repo" > "$dest/.source"
   ok "Done: $dest"
-  ok "Start it with: fxlla on $name"
+  # An embedding model is not a chat model: 'fxlla on embed-small' would try to
+  # serve one, and following that suggestion is exactly how a non-chat model ends
+  # up registered as the local model in an editor.
+  if [ "$(_catalog_field "$q" 4 2>/dev/null || true)" = embed ]; then
+    ok "Select it with: export FXLLA_EMBED_MODEL=$name"
+    ok "Existing knowledge bases need 'fxlla kb reindex <name>' to use it."
+  else
+    ok "Start it with: fxlla on $name"
+  fi
 }
 
 cmd_ls() {
@@ -1372,6 +1380,7 @@ _wire_rag_mcp() {
   local KB_PY; _kb_python
   CFG="$cfg" MCP="$REPO_ROOT/rag/rag_mcp.py" STORE="$FXLLA_STORE" \
   EMBED_PORT="${FXLLA_EMBED_PORT:-8090}" KB_INDEX="${FXLLA_KB_INDEX:-}" \
+  EMBED_MODEL="${FXLLA_EMBED_MODEL:-}" \
   KB_PY_JSON="$(printf '%s\n' "${KB_PY[@]}" | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin]))')" \
   python3 - <<'PY'
 import os, json
@@ -1388,6 +1397,11 @@ mcp["fxlla-rag"] = {
     "environment": {
         "FXLLA_STORE": os.environ["STORE"],
         "FXLLA_EMBED_PORT": os.environ["EMBED_PORT"],
+        # Baked in like the rest: opencode launches rag_mcp.py directly, not
+        # through `fxlla kb mcp`, so this registration is the only thing that
+        # tells it which model. Left out, rag_search would embed with the
+        # default while the base had been reindexed onto another.
+        "FXLLA_EMBED_MODEL": os.environ["EMBED_MODEL"],
         "FXLLA_KB_INDEX": os.environ["KB_INDEX"],
     },
     "enabled": True,
@@ -1564,7 +1578,7 @@ cmd_complete() {
                   skills rm config completions help ;;
     catalog)    _complete_catalog ;;
     downloaded) _complete_downloaded ;;
-    kb)         printf '%s\n' add search ls rm stop mcp wire-opencode ;;
+    kb)         printf '%s\n' add search ls rm reindex eval stop mcp wire-opencode ;;
     graph)      printf '%s\n' index def refs callers impact unused stats ls rm \
                   mcp wire-opencode ;;
     media)      printf '%s\n' image video voice edit upscale models weights jobs job cancel mcp wire-opencode ;;

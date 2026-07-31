@@ -18,13 +18,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   search without offering a way forward. It re-embeds the chunk text already in
   the store rather than re-reading sources that may have changed, in a single
   transaction, so an interrupted run leaves the base exactly as it was.
-- `fxlla kb eval` scores retrieval instead of guessing at it: a golden set of 18
+- `fxlla kb eval` scores retrieval instead of guessing at it: a golden set of 19
   questions over this repository's own documentation, reporting recall@1,
-  recall@k, MRR and median query latency. Measured on the current commit,
-  nomic-embed-text scores recall@1 67%, recall@5 89%, MRR 0.731 at 11 ms per
-  query; bge-small ties at recall@1 but drops to 78% recall@5 and MRR 0.713 at
-  6 ms. The corpus is the repo's own docs, so scores compare models on one
-  commit and not across commits.
+  recall@k, MRR, median query latency and a fingerprint of the corpus. On
+  fingerprint 0c32ee03a384, nomic-embed-text scores recall@1 68%, recall@5 100%,
+  MRR 0.809 at 8 ms per query, against bge-small at 74%, 84%, MRR 0.789 and
+  5 ms - a 37 MB model ahead on the first hit and well behind by the fifth. Read
+  those gaps with care: 19 queries means one query is worth 5.3 points, so the
+  harness separates models that differ clearly and cannot rank two close ones.
+  Since the corpus is live documentation, every edit moves every score;
+  two runs are comparable only when their fingerprints match, which is why one
+  is printed. `CHANGELOG.md` and `docs/JOURNAL.md` are excluded from the corpus
+  for the same reason: they are where results get written down, and including
+  them made each recorded number stale the moment it was recorded.
 
 ### Fixed
 - `fxlla kb` no longer embeds against whatever server happens to hold the port.

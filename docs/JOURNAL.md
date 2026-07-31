@@ -48,20 +48,39 @@ omitting the flag reproduces `--pooling mean` to five decimals on nomic, while
 difference. The README told users to pass `--pooling mean` when running a server
 by hand; that was wrong for the same reason and is fixed.
 
-**The eval.** 18 questions over this repository's own documentation - real prose,
+**The eval.** 19 questions over this repository's own documentation - real prose,
 no invented fixtures, no network - phrased as a person would ask them rather than
-as keyword lookups. On this commit:
+as keyword lookups. On corpus fingerprint `0c32ee03a384`:
 
 | | recall@1 | recall@5 | MRR | median query |
 |---|---|---|---|---|
-| embed (nomic, 768) | 67% | 89% | 0.731 | 11 ms |
-| embed-small (bge-small, 384) | 67% | 78% | 0.713 | 6 ms |
+| embed (nomic, 768) | 68% | 100% | 0.809 | 8 ms |
+| embed-small (bge-small, 384) | 74% | 84% | 0.789 | 5 ms |
 
-A 37 MB model ties the default on recall@1 and gives up 11 points of recall@5 for
-roughly half the latency. That is the kind of trade the catalog notes could never
-have settled. The scores rank models against each other on one commit only: the
-corpus is the repo's own docs, so editing them moves the numbers, and the output
-says so rather than leaving it to be discovered.
+A 37 MB model beats the 100 MB default on recall@1, loses 16 points of recall@5,
+lands 0.02 behind on MRR, and answers in about half the time. That is a real
+trade to weigh, and the catalog notes could never have settled it.
+
+The caveat printed with those numbers cost something to learn. The first version
+of this entry quoted 67% / 89% / 0.731 for nomic. Then writing the entry edited
+the corpus - `docs/JOURNAL.md` and `CHANGELOG.md` were in it - and the same
+command returned 56% / 78% / 0.644. A benchmark whose score moves when you record
+the score is not a benchmark. So those two append-only logs, the files where
+results get written down, are out of the corpus, and the output carries a sha256
+prefix over the corpus bytes: two runs are comparable exactly when the
+fingerprints match, which is a string comparison instead of a judgement call. The
+remaining seven files still shift when edited, and the fingerprint is what makes
+that visible rather than silent.
+
+Two honest weaknesses, both worth stating before anyone leans on these numbers.
+At 7 files and 80 chunks recall@5 saturates: nomic scores 100%, so that column
+cannot show an improvement. And 19 queries means one query is worth 5.3 points,
+so a gap of one or two queries is noise - editing the README alone moved nomic
+from 74% to 68% on recall@1 and flipped which model led. The harness is sound and
+catches a real difference; it is not fine-grained enough to rank two close models,
+and calling a 6-point recall@1 gap a winner would be reading the sample, not the
+models. Widening it is the natural next step if model choice starts mattering
+more than it does today.
 
 Two smaller things worth recording. `.entry`, which `fxlla pull` already writes
 to record the file it fetched, decides which weights to load, so re-pulling a

@@ -1,14 +1,12 @@
 {
-  "note": "Golden retrieval set for `fxlla kb eval`. The corpus is this repository's own documentation: real technical prose about distinct topics, no invented fixtures and no network. Queries are phrased as a person would ask them rather than as keyword lookups, so they exercise the embedding rather than string overlap. `expect` lists every file that legitimately answers the query; a hit is any of them appearing in the top k. Scores compare models against each other at one commit; they are not comparable across commits, because editing the docs changes the corpus.",
+  "note": "Golden retrieval set for `fxlla kb eval`. The corpus is this repository's own documentation: real technical prose about distinct topics, no invented fixtures and no network. Queries are phrased as a person would ask them rather than as keyword lookups, so they exercise the embedding rather than string overlap. `expect` lists every file that legitimately answers the query; a hit is any of them appearing in the top k. CHANGELOG.md and docs/JOURNAL.md are deliberately NOT in the corpus: they are append-only logs, they are where eval results get written down, and including them made every recorded score go stale the moment the result was recorded - the first run of this set scored nomic at 67% recall@1, and writing that number into those two files moved it to 56%. The corpus still shifts when the remaining docs are edited, which is what the fingerprint in the output is for: two runs are comparable only if it matches.",
   "corpus": [
     "README.md",
-    "CHANGELOG.md",
     "ROADMAP.md",
     "AGENTS.md",
     "SECURITY.md",
     "MAINTAINERS.md",
     "COLLABORATORS.md",
-    "docs/JOURNAL.md",
     "docs/roadmap-remaining.md"
   ],
   "queries": [
@@ -37,16 +35,18 @@
     {"q": "how can I tell whether a model is already downloaded to disk?",
      "expect": ["README.md"]},
     {"q": "why was Apple's MLX rejected as the engine for embeddings?",
-     "expect": ["docs/JOURNAL.md"]},
-    {"q": "what went wrong when the code graph was ported to KuzuDB?",
-     "expect": ["docs/JOURNAL.md"]},
+     "expect": ["ROADMAP.md", "docs/roadmap-remaining.md"]},
+    {"q": "why is the graph database stuck on an old version?",
+     "expect": ["docs/roadmap-remaining.md"]},
     {"q": "what work is still sitting in the backlog?",
      "expect": ["docs/roadmap-remaining.md"]},
     {"q": "how does the router pick which loaded model to throw out when memory runs short?",
      "expect": ["ROADMAP.md", "docs/roadmap-remaining.md", "README.md"]},
     {"q": "why does this tool deliberately not implement its own agent loop?",
      "expect": ["ROADMAP.md"]},
-    {"q": "what shipped in the first tagged release?",
-     "expect": ["CHANGELOG.md"]}
+    {"q": "how do I give the GPU more memory so a large model fits?",
+     "expect": ["README.md"]},
+    {"q": "does an idle server shut itself down on its own?",
+     "expect": ["README.md"]}
   ]
 }

@@ -273,9 +273,11 @@ fxlla kb eval                              # the model currently configured
 FXLLA_EMBED_MODEL=embed-small fxlla kb eval
 ```
 
-Those numbers rank models against each other on one commit. The corpus is the
-repo's own docs, so editing them moves the scores; do not compare across
-commits.
+The corpus is live documentation, so editing it moves every score. Each run
+prints a fingerprint of the corpus it used, and two runs are comparable exactly
+when those match. `CHANGELOG.md` and `docs/JOURNAL.md` are left out of it on
+purpose: they are where results get written down, so including them made every
+recorded number stale the moment it was recorded.
 
 ### Reusing a running server
 

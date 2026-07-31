@@ -50,6 +50,23 @@ case "$env_on" in
   *) fail "index on: FXLLA_KB_INDEX=1 in env (got $env_on)" ;;
 esac
 
+# --- the chosen embedding model is baked in too ---
+# opencode launches rag_mcp.py directly rather than through `fxlla kb mcp`, so
+# this registration is the only thing telling it which model to embed with. Left
+# out, rag_search embeds with the default against a base reindexed onto another,
+# which either errors on width or, between two models of equal width, does not.
+case "$env_off" in
+  *'"FXLLA_EMBED_MODEL": ""'*) pass "no model chosen: FXLLA_EMBED_MODEL empty in env" ;;
+  *) fail "no model chosen: FXLLA_EMBED_MODEL empty in env (got $env_off)" ;;
+esac
+XDG_CONFIG_HOME="$CFG" FXLLA_STORE=/tmp FXLLA_EMBED_MODEL=embed-qwen3 \
+  bash "$FXLLA" kb wire-opencode >/dev/null
+env_model="$(field environment)"
+case "$env_model" in
+  *'"FXLLA_EMBED_MODEL": "embed-qwen3"'*) pass "chosen model is forwarded to the MCP" ;;
+  *) fail "chosen model is forwarded to the MCP (got $env_model)" ;;
+esac
+
 # the MCP path always points at rag_mcp.py
 case "$cmd_on" in
   *rag_mcp.py*) pass "command targets rag_mcp.py" ;;
