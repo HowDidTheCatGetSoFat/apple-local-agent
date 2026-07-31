@@ -60,6 +60,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Fixed
+- The app bundled the CLI without `config/media.conf`, for as long as that
+  catalog has existed: an installed app had no weight catalog, so `fxlla media
+  weights` was empty and the download consent gate had nothing to read. The
+  build copied config files by name and drifted; it now globs `*.conf`, which
+  keeps new catalogs bundled by construction (`config.env`, the one file that
+  must never ship, matches neither pattern). `evals/` was missing from the
+  bundle too. CI caught both.
 - Documentation swept against the code: 48 confirmed staleness findings fixed
   across README.md, ROADMAP.md, AGENTS.md, SECURITY.md, app/README.md,
   docs/roadmap-remaining.md, evals/README.md and the module docstrings in

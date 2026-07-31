@@ -39,12 +39,17 @@ cp "$BIN" "$APP/Contents/MacOS/fxllaMenuBar"
 # linking it onto PATH from here works (see "Install the command" in the app).
 CLI_DIR="$APP/Contents/Resources/cli"
 mkdir -p "$CLI_DIR/config"
-for d in bin lib gateway rag graph media skills; do
+for d in bin lib gateway rag graph media skills evals; do
   cp -R "../$d" "$CLI_DIR/"
 done
-# config is copied file by file on purpose: config/config.env is git-ignored and
-# holds the user's tokens, so it must never end up in a distributable bundle.
-cp ../config/models.conf ../config/config.env.example "$CLI_DIR/config/"
+# Config is never copied wholesale: config/config.env is git-ignored and holds
+# the user's tokens, so it must never reach a distributable bundle. Every
+# catalog IS needed though, and naming them one by one drifted - media.conf was
+# missing for as long as it has existed, which ships an app whose consent gate
+# and `media weights` have no catalog to read. A glob over *.conf plus the
+# example keeps new catalogs bundled by construction; config.env matches
+# neither pattern.
+cp ../config/*.conf ../config/config.env.example "$CLI_DIR/config/"
 find "$CLI_DIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$CLI_DIR" -name 'test_*.py' -delete
 if [ -e "$CLI_DIR/config/config.env" ]; then
