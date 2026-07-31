@@ -21,14 +21,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   version: two runs are comparable exactly when both match. Results carry
   server build, weights identity, and machine identity, and go only to the
   state dir, which the harness never reads back. Measured on the first sweep
-  (M5 Max, fingerprint f6ae21eaee7d, harness v2): qwen3-coder 8/10 code, 8/8
-  tools, 4/4 context at 130 tok/s; coder-1.5b 4/10 code at 397 tok/s with its
-  tool calls stranded in the text channel; tiny 1/10 code, which is the
-  discrimination the task set was gated on. The harness's own dogfooding fixed
-  it once before shipping: plain last-fence extraction scored a correct
-  qwen3-coder solution as a SyntaxError because the reply ends in fenced
-  example output, so extraction now takes the last fence that compiles, and
-  that semantic change is why the harness says v2.
+  (M5 Max, fingerprint f6ae21eaee7d, harness v3): redteam-4bit 10/10 code and
+  8/8 tools at 93.5 tok/s and 42 GB resident; qwen3-coder 8/10 and 8/8 at
+  131.2 tok/s and 16 GB; coder-1.5b 4/10 at 399.9 tok/s with its tool calls
+  stranded in the text channel; tiny 1/10 code, which is the discrimination
+  the task set was gated on. Dogfooding on those models fixed code extraction
+  twice before shipping - real replies end in fenced example output (not
+  Python), or in fenced usage examples (which compile), or quote compiling
+  fragments mid-explanation, and each style silently lowered a correct score -
+  so extraction concatenates the compiling fences that bind names, and those
+  semantic changes are why the harness says v3.
 - The embedding model behind `fxlla kb` is selectable. The catalog gained four
   more `embed` entries next to nomic-embed-text v1.5: bge-small (384-dim),
   bge-large and qwen3-embedding (1024-dim), and embeddinggemma (768-dim).

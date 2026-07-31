@@ -26,11 +26,15 @@ demand afterward.
 ## What is measured
 
 - **code (10 tasks)**: write-from-spec and fix-the-bug Python, executed in a
-  sandbox against hidden asserts. Extraction strips think-blocks, then takes
-  the last fenced block THAT COMPILES, falling back to the last fence so a
-  genuine syntax error still surfaces: real models close replies with fenced
-  example output, and plain last-fence scored a correct solution as a
-  SyntaxError (that change is why the harness says v2).
+  sandbox against hidden asserts. Extraction strips think-blocks, then
+  concatenates in reply order every fenced block that compiles AND binds a
+  name (imports, defs, classes, assignments), so later iterations of a
+  function shadow earlier ones while fenced example output, bare demo calls
+  and quoted fragments fall away. Each part of that rule exists because a
+  real model's reply style broke a simpler rule and silently lowered a
+  correct score; the fallbacks (all compiling fences, then the last fence,
+  then the whole reply) keep genuine syntax errors visible. Extraction
+  changes bump the harness version - it is at v3 for exactly this reason.
 - **tools (8 tasks)**: structured `tool_calls` with the right function and
   exact arguments, plus abstention (a question needing no tool), reading a tool
   result from history, and stopping after a permission error. A correct call

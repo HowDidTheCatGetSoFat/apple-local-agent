@@ -37,9 +37,61 @@ class TestExtraction(unittest.TestCase):
     def test_think_block_is_stripped(self):
         self.assertEqual(run.strip_think("<think>x\ny</think>answer"), "answer")
 
-    def test_last_fence_wins(self):
-        content = "First try:\n```python\nbad = 1\n```\nActually:\n```py\ngood = 2\n```"
-        self.assertEqual(run.extract_code(content), "good = 2")
+    @staticmethod
+    def _exec(code):
+        scope = {}
+        exec(compile(code, "<t>", "exec"), scope)
+        return scope
+
+    def test_iterated_versions_resolve_to_the_last(self):
+        # Two versions of the same function: concatenation in reply order means
+        # the later definition shadows the earlier - Python's own semantics,
+        # asserted by executing what extraction returns rather than by string
+        # equality against one block.
+        content = ("First try:\n```python\ndef f():\n    return 1\n```\n"
+                   "Actually:\n```py\ndef f():\n    return 2\n```")
+        scope = self._exec(run.extract_code(content))
+        self.assertEqual(scope["f"](), 2)
+
+    def test_trailing_usage_fence_does_not_replace_the_solution(self):
+        # Measured on redteam-4bit: the solution in an early fence, then a
+        # fenced USAGE example that compiles. Taking only the last compiling
+        # fence extracted the call without the definition and scored six
+        # correct solutions as NameError.
+        content = ("```python\ndef f():\n    return 41 + 1\n```\n"
+                   "Example:\n```python\nresult = f()\n```")
+        scope = self._exec(run.extract_code(content))
+        self.assertEqual(scope["f"](), 42)
+        self.assertEqual(scope["result"], 42)
+
+    def test_definitions_split_across_fences_all_land(self):
+        content = ("```python\nimport json\n```\nand then\n"
+                   "```python\ndef g(x):\n    return json.dumps(x)\n```")
+        scope = self._exec(run.extract_code(content))
+        self.assertEqual(scope["g"]([1]), "[1]")
+
+    def test_quoted_explanatory_fragment_is_dropped(self):
+        # Measured on redteam-4bit explaining a bugfix: a compiling but
+        # non-self-contained fragment (`if a[mid] < x:` alone) quoted mid
+        # prose. Concatenating it executes the fragment at import and the
+        # NameError buries a correct solution that follows.
+        content = ("The bug is here:\n"
+                   "```python\nif a[mid] < x:\n    lo = mid\n```\n"
+                   "The fix:\n"
+                   "```python\ndef find(a, x):\n    return 0 if a else -1\n```")
+        scope = self._exec(run.extract_code(content))
+        self.assertEqual(scope["find"]([1], 1), 0)
+
+    def test_bare_demo_call_before_the_definition_is_dropped(self):
+        # Also measured: a demo call quoted BEFORE the definition while
+        # explaining old behavior. A bare call binds nothing, so it is not
+        # part of the program the reply builds.
+        content = ("Calling it twice shows the bug:\n"
+                   "```python\nadd_tag('a')\n```\n"
+                   "Fixed version:\n"
+                   "```python\ndef add_tag(tag):\n    return [tag]\n```")
+        scope = self._exec(run.extract_code(content))
+        self.assertEqual(scope["add_tag"]("a"), ["a"])
 
     def test_bare_fence_and_no_fence(self):
         self.assertEqual(run.extract_code("```\nx = 1\n```"), "x = 1")
@@ -52,7 +104,9 @@ class TestExtraction(unittest.TestCase):
         content = ("```python\ndef f():\n    return 1\n```\n"
                    "Running it prints:\n"
                    "```\nOriginal: 'aa' -> Encoded: 'a2'\n```")
-        self.assertEqual(run.extract_code(content), "def f():\n    return 1")
+        extracted = run.extract_code(content)
+        self.assertIn("def f():", extracted)
+        self.assertNotIn("Original", extracted)
 
     def test_nothing_compiles_keeps_the_last_fence(self):
         # The syntax error must surface in the detail, not be masked by

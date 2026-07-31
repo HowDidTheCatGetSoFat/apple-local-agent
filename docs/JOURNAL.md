@@ -24,42 +24,50 @@ from the embedding work, replayed on a new port. Results carry the tasks
 fingerprint, a harness version, server build, weights identity and machine
 identity, and land only under the state dir, which the harness never reads.
 
-**First sweep** (M5 Max 128 GB, AC power, fingerprint f6ae21eaee7d, harness
-v2, all mlx):
+**The sweep** (M5 Max 128 GB, AC power, fingerprint f6ae21eaee7d, harness
+v3, all mlx; tiny and redteam-4bit run by name):
 
-| model | load_s | first_s | ttft | tok/s | code | tools | instr | ctx | tokens |
-|---|---|---|---|---|---|---|---|---|---|
-| coder-1.5b | 0.7 | 0.7 | 134 | 396.8 | 4/10 | 2/8 | 3/8 | 4/4 | 3526 |
-| coder-3b | 0.7 | 1.1 | 184 | 220.1 | 4/10 | 0/8 | 6/8 | 4/4 | 5271 |
-| qwen3-coder | 1.7 | 1.8 | 317 | 129.8 | 8/10 | 8/8 | 6/8 | 4/4 | 8203 |
-| tiny (named) | 0.9 | 0.5 | 94 | 620.7 | 1/10 | 3/8 | 3/8 | 3/4 | 5709 |
+| model | load_s | first_s | ttft | tok/s | rss_gb | code | tools | instr | ctx | tokens |
+|---|---|---|---|---|---|---|---|---|---|---|
+| tiny | 1.7 | 0.6 | 104 | 587.5 | 0.5 | 1/10 | 3/8 | 3/8 | 3/4 | 5709 |
+| coder-1.5b | 1.2 | 0.5 | 127 | 399.9 | 1.1 | 4/10 | 2/8 | 3/8 | 4/4 | 3526 |
+| coder-3b | 0.8 | 1.1 | 189 | 224.8 | 1.9 | 4/10 | 0/8 | 6/8 | 4/4 | 5271 |
+| qwen3-coder | 0.7 | 7.2 | 284 | 131.2 | 16.3 | 8/10 | 8/8 | 6/8 | 4/4 | 8203 |
+| redteam-4bit | 0.9 | 17.5 | 353 | 93.5 | 42.1 | 10/10 | 8/8 | 7/8 | 4/4 | 7878 |
 
-The gate the task set had to pass: tiny near zero on code (1/10) while a 30B
-is not (8/10). It discriminates. And the table already answers real questions:
-qwen3-coder is the only model whose tool calls arrive as structured
-tool_calls - the smaller Qwen2.5 models emit correct calls into the TEXT
-channel, which opencode never sees, and coder-1.5b leaks `<|im_end|>` into
-its content. Both are serving-layer facts the "as deployed" charter exists to
-surface: the remedy is a template/engine fix, not a smarter model, and the
-report says which failure you are looking at.
+The gate the task set had to pass: tiny near zero on code (1/10) while the
+big coders are not. It discriminates - and it already changed an answer. The
+80B-A3B (redteam-4bit) beats the daily driver on code AND instructions with
+structured tool calls intact, at 93.5 vs 131.2 tok/s and 42 vs 16 GB
+resident: a real trade the catalog prose never surfaced. The smaller Qwen2.5
+models emit correct tool calls into the TEXT channel, which opencode never
+sees, and coder-1.5b leaks `<|im_end|>` into its content - serving-layer
+facts the "as deployed" charter exists to surface, where the remedy is a
+template/engine fix, not a smarter model.
 
-**Three things the harness itself got wrong first, all fixed by measurement:**
+**What the harness itself got wrong first, all caught by measurement:**
 
 1. **load_s was a lie for mlx.** A 16 GB model reported load_s 0.75, because
    mlx_lm.server answers HTTP instantly and loads weights on the FIRST
-   request - first_s 7.3 is where the 16 GB went. llama-server is the
-   opposite: /health flips only after the load. The table now shows both
-   columns and the footer says to compare cold costs as the sum, never
-   load_s alone across engines.
-2. **Last-fence extraction scored a correct solution as a SyntaxError.**
-   qwen3-coder writes the solution early and closes with a fenced block of
-   example output; "the last fence is the answer" extracted the demo.
-   Extraction now takes the last fence that COMPILES, which also correctly
-   kept two genuine failures as failures (one reply whose only code block
-   contains `"__"__main__`, one whose real solution fails an assert the
-   SyntaxError had been masking). Extraction semantics changed, so the
-   harness version bumped to v2 - the first real use of its own
-   comparability rule, against this session's own v1 history lines.
+   request - first_s is where the load went (7.3s for 16 GB, 17.5s for the
+   42 GB model). llama-server is the opposite: /health flips only after the
+   load. The table shows both columns and the footer says to compare cold
+   costs as the sum, never load_s alone across engines.
+2. **Code extraction took three rounds of measurement, one per reply style.**
+   Plain last-fence: qwen3-coder closes replies with fenced example OUTPUT,
+   so the demo got extracted as code and a correct solution scored as a
+   SyntaxError. Last fence that compiles (v2): redteam-4bit closes with a
+   fenced USAGE example that compiles fine, so v2 extracted
+   `print(topo_sort(...))` without the definition and scored SIX correct
+   solutions as NameError - 4/10 for a model whose true score is 10/10. Plain
+   concatenation of compiling fences: the same model QUOTES compiling but
+   non-self-contained fragments while explaining a bug (`if a[mid] < x:`
+   alone), which crash the import. The rule that survives all three measured
+   styles is v3: concatenate, in reply order, the compiling fences that BIND
+   names (imports, defs, classes, assignments) - later definitions shadow
+   earlier ones by Python's own semantics, and output text, bare demo calls
+   and quoted fragments fall away. Every miss was a wrong LOW score, which is
+   the quiet kind: nothing looks broken, a strong model just looks mediocre.
 3. **The fork-orphan test was impossible to write as behavior.** RLIMIT_NPROC
    counts the user's TOTAL processes, so under the sandbox a fork can never
    succeed on a workstation and no orphan can exist to observe. The killpg

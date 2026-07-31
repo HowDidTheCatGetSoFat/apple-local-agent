@@ -18,6 +18,7 @@ and coexistence policy and pipes one "alias|dest|engine|size_mb|role" line per
 model on stdin. Standard library only.
 """
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -45,7 +46,14 @@ import sandbox
 # of the comparability rule.
 # v2: extract_code takes the last fence that COMPILES, not the last fence -
 #     measured on qwen3-coder, whose replies end in fenced example output.
-EVAL_HARNESS_VERSION = 2
+# v3: extract_code concatenates the compiling fences that BIND names, in
+#     order. Both single-fence rules were measured wrong (qwen3-coder closes
+#     with fenced example OUTPUT; redteam-4bit closes with a fenced USAGE
+#     example that compiles, so last-compiling extracted the call without the
+#     definition), and plain concatenation broke on a third measured style:
+#     explanatory fragments that compile but are not self-contained, quoted
+#     while discussing the bug.
+EVAL_HARNESS_VERSION = 3
 
 EVAL_PORT = int(os.environ.get("FXLLA_EVAL_PORT", "8097"))
 FXLLA_BIN = os.environ.get("FXLLA_BIN", os.path.join(REPO_ROOT, "bin", "fxlla"))
@@ -160,24 +168,51 @@ def strip_think(content):
     return _THINK_RE.sub("", content or "").strip()
 
 
+def _binds_names(tree):
+    """True when any top-level statement durably binds a name: an import, a
+    def, a class, or an assignment. Distinguishes code that IS part of a
+    program from quoted fragments and bare demo calls."""
+    return any(isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef,
+                                 ast.AsyncFunctionDef, ast.ClassDef,
+                                 ast.Assign, ast.AnnAssign, ast.AugAssign))
+               for node in tree.body)
+
+
 def extract_code(content):
-    """The last fenced block THAT COMPILES wins. Plain last-fence was measured
-    wrong on a real model: qwen3-coder writes the solution early and closes
-    with a fenced block of EXAMPLE OUTPUT, which is not Python. Walking the
-    fences backwards and taking the first that parses models "the last complete
-    piece of code in the reply"; when nothing parses, the last fence is kept so
-    the syntax error surfaces in the detail instead of being masked. No fence
-    at all means the whole content."""
+    """The compiling fences that BIND names, concatenated in reply order.
+
+    Three reply styles measured on real models shaped this rule, each of
+    which broke a simpler one. qwen3-coder closes with fenced EXAMPLE OUTPUT
+    (not Python): plain last-fence extracted the demo as code. redteam-4bit
+    closes with a fenced USAGE example that compiles: last-compiling-fence
+    extracted `print(topo_sort(...))` without the definition and scored six
+    correct solutions as NameError. The same model also QUOTES compiling but
+    non-self-contained fragments while explaining a bug (`if a[mid] < x:` on
+    its own): plain concatenation executed the fragment and crashed the
+    import. Keeping the fences that bind names takes the imports, defs,
+    classes and assignments in order - a later iteration of a function
+    shadows an earlier one, Python's own semantics - and drops output text,
+    bare demo calls, and quoted fragments. Fallbacks preserve failure
+    visibility: no binding fence means all compiling fences, nothing
+    compiling means the last fence so the syntax error surfaces, no fence at
+    all means the whole content."""
     text = strip_think(content)
     blocks = _FENCE_RE.findall(text)
     if not blocks:
         return text
-    for block in reversed(blocks):
+    compiling, binding = [], []
+    for block in blocks:
         try:
-            compile(block, "<reply>", "exec")
-            return block.strip()
+            tree = ast.parse(block)
         except SyntaxError:
             continue
+        compiling.append(block.strip())
+        if _binds_names(tree):
+            binding.append(block.strip())
+    if binding:
+        return "\n\n".join(binding)
+    if compiling:
+        return "\n\n".join(compiling)
     return blocks[-1].strip()
 
 
