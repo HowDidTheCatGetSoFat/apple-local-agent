@@ -187,6 +187,27 @@ def load_models(path=None):
 MODELS = load_models()
 
 
+# Models whose backend REJECTS a size off its grid, and the grid. Not a
+# universal rule: most latent creators divide by 8 and silently accept
+# anything, so a blanket multiple-of-16 check would refuse sizes that work.
+# Ideogram 4 raises (mflux Ideogram4LatentCreator.DIMENSION_STEP = 16), and it
+# raises after the weights are resident - a 1080-wide poster died minutes in,
+# which is what this catches in a millisecond.
+_DIM_STEP = {"ideogram4": 16}
+
+
+def _check_dim_step(model_name, width, height):
+    step = _DIM_STEP.get(model_name)
+    if not step:
+        return
+    for label, value in (("width", width), ("height", height)):
+        if value and value % step:
+            raise ValueError(
+                "%s needs %s to be a multiple of %d, got %d: use %d or %d"
+                % (model_name, label, step, value,
+                   value - value % step, value - value % step + step))
+
+
 def _require_cap(spec, cap, flag, model_name=""):
     """Refuse a flag the chosen model cannot take, naming both.
 
@@ -340,7 +361,7 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
             # nothing runs through a shell.
             parts[0] = os.path.expanduser(path)
             if not os.path.isfile(parts[0]):
-                raise ValueError("LoRA not found: %s" % path)
+                parts[0] = resolve_lora_name(path)
         cmd += ["--lora"] + parts
     if lora_style:
         _require_cap(spec, "lora-style", "--lora-style", model_name)
@@ -410,6 +431,7 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
     else:
         if width or height:
             _require_cap(spec, "dimensions", "--width/--height", model_name)
+        _check_dim_step(model_name, width, height)
         if width:
             cmd += ["--width", str(width)]
         if height:
@@ -910,7 +932,11 @@ def cmd_models(args):
         print(json.dumps({
             "default": DEFAULT_MODEL,
             "models": {n: {"cli": s["cli"], "steps": s["steps"],
-                           "caps": sorted(s["caps"]), "note": s["note"]}
+                           "caps": sorted(s["caps"]), "note": s["note"],
+                           # Only where the backend enforces it; absent means
+                           # any size. Stated here so a caller sizes a poster
+                           # correctly instead of learning it from a crash.
+                           **({"dim_step": _DIM_STEP[n]} if n in _DIM_STEP else {})}
                        for n, s in MODELS.items()},
             "lora_styles": list(LORA_STYLES),
             "prompt_formats": {"ideogram4": IDEOGRAM_PROMPT_FORMAT},
@@ -1066,6 +1092,32 @@ def _hf_cache_loras():
                 continue
         found.append((repo, total // (1024 * 1024), base))
     return found
+
+
+def resolve_lora_name(name):
+    """A bare LoRA filename resolved against the search directories.
+
+    `list_loras` reports a path and a name, and a caller that reads the name is
+    behaving reasonably - one asked for "Krea2-realism-V1.safetensors" and got
+    "LoRA not found", having been shown that exact string a moment earlier.
+    Only names with no directory part are resolved: a path the caller spelled
+    out is theirs to get right, and guessing at it would hide a typo."""
+    if os.sep in name or (os.altsep and os.altsep in name):
+        raise ValueError("LoRA not found: %s" % name)
+    matches = []
+    for root in lora_dirs():
+        if not os.path.isdir(root):
+            continue
+        for base, _dirs, names in os.walk(root):
+            if name in names:
+                matches.append(os.path.join(base, name))
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise ValueError("LoRA not found: %s (searched: %s). Names come from "
+                         "`fxlla media loras`." % (name, ", ".join(lora_dirs())))
+    raise ValueError("LoRA name is ambiguous: %s matches %s. Give the full path."
+                     % (name, ", ".join(matches)))
 
 
 def find_loras():

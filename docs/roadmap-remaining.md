@@ -213,7 +213,7 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
   DECLINED (maintainer, 2026-07-30); see Suggested order item 4.
 - Async media jobs: DONE. `--async` on any generator returns a job id;
   `fxlla media jobs|job|cancel` (and `jobs --prune`) follow it, and the MCP
-  generators take `async: true` with `media_job_status`, `list_media_jobs`, and
+  generators use it by default, with `media_job_status`, `list_media_jobs`, and
   `cancel_media_job`. A detached worker per job serializes on a lock file, so
   renders never run two at a time against the gateway's resident models.
 - Evals: DONE (2026-07-31, see docs/JOURNAL.md). `fxlla eval` scores chat

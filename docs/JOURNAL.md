@@ -2,6 +2,57 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-31: A render that takes minutes, behind a transport that waits seconds
+
+Read the same editor session again after the day's fixes landed and found the
+tools failing a second way, one the earlier reading could not have shown
+because it only appears once the tools work well enough to be used for real
+renders.
+
+**The server went deaf.** A poster render was submitted synchronously. The MCP
+read loop was `for line in sys.stdin` with the tool call handled inline, so
+while mflux ran, the server read nothing: every later call queued behind it and
+came back to the model as `MCP error -32001: Request timed out` - including the
+`media_job_status` and `list_media_jobs` calls asking about that very render.
+The model, unable to tell a timeout from a failure, submitted the same render
+three more times. Four renders competing for the same GPU, none of them
+visible.
+
+Two changes, and the ordering matters. Handling each tool call on its own
+thread stops the server going deaf - but alone it fixes nothing the caller can
+perceive, because a four-minute render still outlasts the client's timeout. So
+a render is now submitted as a background job and awaited for a bounded window
+(`FXLLA_MCP_WAIT_S`, default 45): finished in time, the path comes back as
+before; not finished, the job id does, with a sentence saying it is still
+running and not to submit it again. `media_job_status` caps its own wait at the
+same window for the same reason - the model asked to block 120 seconds and got
+a timeout, which told it nothing at all.
+
+The 45 is measured, not chosen: in that session a 45 s call returned its result
+and calls past roughly 69 s were reported timed out. It is a knob because the
+number belongs to whatever client is calling, not to us.
+
+**Where the bound comes from is the general lesson.** A blocking interface is
+only correct while the work fits inside someone else's patience, and that
+someone is not in our repo. When the work can exceed it, the honest move is to
+return a handle and a status, because the alternative is not a slow answer but
+an ambiguous one - and an agent resolves ambiguity by retrying.
+
+Two smaller findings from the same reading, both the same shape as yesterday's:
+
+- `list_loras` reports a path and a name; the model passed the name and got
+  "LoRA not found: Krea2-realism-V1.safetensors", having been shown that exact
+  string a moment earlier. A bare filename now resolves against the search
+  directories. A name with a directory part in it still does not - a path the
+  caller spelled out is theirs to get right, and guessing would hide a typo.
+- A 1080-wide poster died on `width must be a multiple of 16` after the
+  weights were resident. Ideogram 4 is the only model that enforces this
+  (mflux's other latent creators divide by 8 and silently accept anything, so a
+  blanket check would refuse sizes that work), so the grid is declared per
+  model, validated before anything spawns, and reported as `dim_step` from
+  `list_media_models` - the failure now costs a millisecond, and is avoidable
+  before it costs even that.
+
 ## 2026-07-31: The media surface, rebuilt from a transcript
 
 Released v0.2.0, then read a real editor session and found the media tools had

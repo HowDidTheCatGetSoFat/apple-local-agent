@@ -1444,6 +1444,88 @@ class TestAspectConflict(unittest.TestCase):
         self.assertNotIn("--width", only_aspect)
 
 
+class TestDimensionGrid(unittest.TestCase):
+    # Ideogram 4 raises on a size off its 16-pixel grid, and raises only after
+    # its weights are resident: a 1080-wide poster died minutes in. Most other
+    # latent creators divide by 8 and silently accept anything, so this must
+    # stay a per-model rule and not become a blanket check.
+    def test_a_size_off_the_grid_is_refused_before_spawning(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(media.MODELS["ideogram4"], "p", "/o.png",
+                                width=1080, height=1920, model_name="ideogram4")
+        message = str(ctx.exception)
+        self.assertIn("1080", message)
+        self.assertIn("1088", message)  # names a size that works
+
+    def test_a_size_on_the_grid_passes(self):
+        cmd = media.build_command(media.MODELS["ideogram4"], "p", "/o.png",
+                                  width=1088, height=1920, model_name="ideogram4")
+        self.assertEqual(cmd[cmd.index("--width") + 1], "1088")
+
+    def test_models_without_a_grid_take_any_size(self):
+        cmd = media.build_command(media.MODELS["z-image-turbo"], "p", "/o.png",
+                                  width=1080, height=1920,
+                                  model_name="z-image-turbo")
+        self.assertEqual(cmd[cmd.index("--width") + 1], "1080")
+
+    def test_the_constraint_is_reported_by_the_catalog(self):
+        # Discoverable, or the caller only learns it from a failed render.
+        self.assertEqual(media._DIM_STEP.get("ideogram4"), 16)
+
+
+class TestLoraNameResolution(unittest.TestCase):
+    # list_loras reports a path AND a name; a caller that passes the name back
+    # was told "LoRA not found" by the same tool that had just printed it.
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        nested = os.path.join(self.dir, "sub")
+        os.makedirs(nested)
+        for path in (os.path.join(self.dir, "style.safetensors"),
+                     os.path.join(nested, "deep.safetensors")):
+            open(path, "wb").close()
+        saved = os.environ.get("FXLLA_LORA_DIRS")
+        os.environ["FXLLA_LORA_DIRS"] = self.dir
+        self.addCleanup(lambda: os.environ.__setitem__("FXLLA_LORA_DIRS", saved)
+                        if saved is not None
+                        else os.environ.pop("FXLLA_LORA_DIRS", None))
+
+    def _lora_arg(self, ref):
+        cmd = media.build_command(media.MODELS["krea2"], "p", "/o.png",
+                                  loras=[ref], model_name="krea2")
+        return cmd[cmd.index("--lora") + 1:cmd.index("--lora") + 3]
+
+    def test_a_bare_name_resolves_to_its_path(self):
+        self.assertEqual(self._lora_arg("style.safetensors"),
+                         [os.path.join(self.dir, "style.safetensors")])
+
+    def test_the_scale_survives_resolution(self):
+        self.assertEqual(self._lora_arg("deep.safetensors,0.7"),
+                         [os.path.join(self.dir, "sub", "deep.safetensors"), "0.7"])
+
+    def test_an_unknown_name_names_where_it_looked(self):
+        with self.assertRaises(ValueError) as ctx:
+            self._lora_arg("nope.safetensors")
+        self.assertIn(self.dir, str(ctx.exception))
+
+    def test_a_spelled_out_path_is_not_guessed_at(self):
+        # Resolving one would hide a typo in a path the caller chose - and a
+        # wrong path is not a name lookup, so the answer must not read as one.
+        wrong = os.path.join(self.dir, "wrong", "style.safetensors")
+        with self.assertRaises(ValueError) as ctx:
+            self._lora_arg(wrong)
+        self.assertIn(wrong, str(ctx.exception))
+        self.assertNotIn("searched", str(ctx.exception))
+
+    def test_an_ambiguous_name_names_the_candidates(self):
+        twin = os.path.join(self.dir, "sub", "style.safetensors")
+        open(twin, "wb").close()
+        with self.assertRaises(ValueError) as ctx:
+            self._lora_arg("style.safetensors")
+        self.assertIn("ambiguous", str(ctx.exception))
+        self.assertIn(twin, str(ctx.exception))
+
+
 class TestMfluxBinDir(unittest.TestCase):
     # The image knob: one directory for the whole mflux family, since image
     # alone is eight per-model CLIs and a single-binary knob cannot cover it.

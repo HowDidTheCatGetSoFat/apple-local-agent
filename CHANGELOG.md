@@ -31,10 +31,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   It now tells a model to look before choosing (`list_media_models`,
   `list_loras`), which model suits which kind of request, when each option is
   worth setting, how Ideogram 4's JSON caption works and where to get its
-  schema, that controls stack and how to chain a depth pass into one, and to
-  block on `wait_s` instead of polling a job. The old text predated all of
-  that and actively taught polling, which is what produced 47 status calls in
-  one real session.
+  schema, that controls stack and how to chain a depth pass into one, and how
+  a long render reports itself. The old text predated all of that and actively
+  taught polling, which is what produced 47 status calls in one real session.
 - ControlNet and depth, both stackable. Their weight rows list BOTH repos
   each needs - the adapter and the base model - because listing only the
   adapter let the consent gate pass on 4 GB while mflux then pulled 58 GB of
@@ -115,6 +114,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Fixed
+- One media render made the MCP server deaf to everything else. Tool calls were
+  handled inline in the stdin read loop, so while mflux ran the server read
+  nothing: later calls came back as `MCP error -32001: Request timed out`,
+  including the `media_job_status` and `list_media_jobs` calls asking about
+  that render. A model that cannot tell a timeout from a failure retries, and
+  one submitted the same render three more times. Calls now run on their own
+  thread, and a render is submitted as a background job awaited for a bounded
+  window (`FXLLA_MCP_WAIT_S`, default 45 s, measured against a client that
+  returned a 45 s call and timed out past ~69 s): it returns the path when it
+  finishes in time and the job id with a still-running line when it does not.
+  `media_job_status` caps its wait at the same window - a request to block 120
+  seconds came back as a timeout, which said nothing - and a job that is still
+  going says so, along with not to submit it again. Pass `async: false` for the
+  old hold-the-call-open behaviour.
+- A LoRA named the way `list_loras` reports it - the bare filename - was
+  refused with "LoRA not found" by the same tool that had just printed it. Bare
+  names now resolve against the search directories, and an ambiguous one names
+  the candidates. A name containing a directory part is still taken literally,
+  so a wrong path is reported rather than guessed at.
+- Ideogram 4 rejects any dimension off a 16-pixel grid, and did so only after
+  its weights were resident: a 1080-wide poster failed minutes in. Models that
+  enforce a grid now declare it, it is checked before anything spawns, and
+  `list_media_models` reports it as `dim_step` so the size can be right the
+  first time. Models whose backends accept any size are unaffected.
 - The app bundled the CLI without `config/media.conf`, for as long as that
   catalog has existed: an installed app had no weight catalog, so `fxlla media
   weights` was empty and the download consent gate had nothing to read. The

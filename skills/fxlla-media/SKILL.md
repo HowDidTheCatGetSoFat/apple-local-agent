@@ -51,10 +51,13 @@ use it.
 - `negative` - what must NOT appear. Cheap and effective against the usual
   offenders: text, watermark, extra fingers, blur.
 - `aspect` OR `width`/`height`, never both - they conflict and the call is
-  refused. Aspect for standard framing, dimensions for exact pixels.
+  refused. Aspect for standard framing, dimensions for exact pixels. Some
+  models only accept sizes on a grid; `list_media_models` reports `dim_step`
+  for those, and 1080 wide is not a multiple of 16.
 - `init_image` - start from an existing image instead of from noise.
-- `loras` - `"path,0.8"` or a HuggingFace repo id; the scale after the comma is
-  optional, and the option repeats. `lora_style` picks a built-in style.
+- `loras` - `"path,0.8"`, the bare filename `list_loras` shows, or a
+  HuggingFace repo id; the scale after the comma is optional, and the option
+  repeats. `lora_style` picks a built-in style.
 
 ## Ideogram 4 and placed text
 
@@ -84,14 +87,23 @@ each step - sequencing them is yours.
 
 ## Long renders
 
-Pass `async: true` for video and any slow render: it returns a job id
-immediately. Then call `media_job_status` with `wait_s` to **block until it
-finishes**. Do not call it repeatedly in a loop: a render takes minutes, and
-polling burns a call per second while looking like a runaway.
+A render runs as a background job. If it finishes quickly you get the output
+path back and there is nothing more to do. If it does not, you get a job id and
+a line saying the job is still running - **that is the render working, not a
+failure**. Call `media_job_status` with that id; keep calling it while it says
+running. Each call blocks for the server's wait window, so this is not a busy
+loop.
 
-`list_media_jobs` shows all of them, `cancel_media_job` stops one. Jobs run one
-at a time, so a submission may sit in `queued` while another finishes. That is
-expected, not a failure.
+The one thing never to do is generate again because a call did not return a
+path. That starts a second render competing with the first for the same GPU,
+and both get slower. If you are unsure whether something is already going,
+`list_media_jobs` answers it.
+
+`cancel_media_job` stops one. Jobs run one at a time, so a submission may sit
+in `queued` while another finishes. That is expected.
+
+Pass `async: false` only when you specifically need the path in the same call
+and know the render is short; a long one will outlast your own timeout.
 
 ## Video
 

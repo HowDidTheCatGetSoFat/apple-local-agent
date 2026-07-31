@@ -5,15 +5,22 @@ Newline-delimited JSON-RPC, no dependencies. Image (mflux-cv), video (ltx-2-mlx)
 speech (mlx-audio), edit, and upscale tools, so opencode or Claude Code can
 render media locally.
 
-Generation is synchronous by default and can take tens of seconds (video much
-longer); the call blocks until the file is written. Pass `async: true` to submit a
-background job and get a job id back immediately, then poll `media_job_status`
+A render takes tens of seconds and video takes minutes, which is longer than an
+MCP client will wait for a response. So a render is submitted as a background job
+and awaited for FXLLA_MCP_WAIT_S seconds: it returns the path if it finished in
+that window and the job id if it did not, to be followed with `media_job_status`
 (or `list_media_jobs`, `cancel_media_job`). Background jobs run one at a time.
+
+Each tool call runs on its own thread. The read loop used to run them inline, so
+one render made the server deaf: every later call - including the status calls
+asking about that very render - timed out, and the caller, seeing timeouts,
+resubmitted the same render three more times.
 """
 import json
 import os
 import subprocess
 import sys
+import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEDIA = os.path.join(HERE, "generate.py")
@@ -21,7 +28,10 @@ MEDIA = os.path.join(HERE, "generate.py")
 TOOLS = [
     {"name": "generate_image",
      "description": "Generate an image from a text prompt using the local "
-                    "mflux-cv toolchain. Returns the path to the written PNG.",
+                    "mflux-cv toolchain. Returns the PNG path, or a job id and "
+                    "a status line when the render outlasts the wait window - "
+                    "in which case follow it with media_job_status rather than "
+                    "generating again.",
      "inputSchema": {"type": "object", "properties": {
          "prompt": {"type": "string"},
          "model": {"type": "string",
@@ -43,8 +53,9 @@ TOOLS = [
          "init_image": {"type": "string",
                         "description": "Start from this image (img2img)."},
          "loras": {"type": "array", "items": {"type": "string"},
-                   "description": "LoRAs to apply. Each entry is a path or a "
-                                  "HuggingFace repo id, optionally with a "
+                   "description": "LoRAs to apply. Each entry is a path, a "
+                                  "bare filename as list_loras reports it, or "
+                                  "a HuggingFace repo id, optionally with a "
                                   "scale after a comma: \"style.safetensors,0.8\". "
                                   "See list_media_models for which models "
                                   "support them."},
@@ -130,17 +141,19 @@ TOOLS = [
                    "description": "Target shortest edge in pixels or a factor, e.g. 2x."},
      }, "required": ["image"]}},
     {"name": "media_job_status",
-     "description": "Status of a background media job: queued, running, done, "
-                    "failed, or cancelled, plus the output path once done. "
-                    "Pass wait_s to BLOCK until it finishes instead of polling "
-                    "in a loop.",
+     "description": "Status of a background media job. Blocks while the job "
+                    "runs and returns the finished record - output path, or "
+                    "the error - as soon as it lands. If it comes back saying "
+                    "the job is still running, call this again: that is the "
+                    "render still going, not a failure, and resubmitting it "
+                    "starts a second one.",
      "inputSchema": {"type": "object", "properties": {
          "job_id": {"type": "string"},
          "wait_s": {"type": "number",
-                    "description": "Block up to this many seconds for the job "
-                                   "to finish. Prefer this over repeated "
-                                   "calls; a render takes minutes and polling "
-                                   "it wastes a call per second."},
+                    "description": "Seconds to block, capped at the server's "
+                                   "wait window (FXLLA_MCP_WAIT_S). Asking for "
+                                   "more does not wait longer, it only risks "
+                                   "your own client timing out."},
      }, "required": ["job_id"]}},
     {"name": "list_loras",
      "description": "LoRAs found on this machine and the built-in styles. Each entry carries base_model: the architecture it was trained for, prefixed with ~ when inferred from the weights rather than declared. Apply one only to its own base - a krea2 adapter does nothing useful on z-image. Check here before "
@@ -149,8 +162,9 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "list_media_models",
      "description": "Image models available locally, each with the options it "
-                    "supports (negative prompt, LoRA, dimensions, ...), the "
-                    "built-in LoRA styles, which model is the default, and "
+                    "supports (negative prompt, LoRA, dimensions, ...), "
+                    "dim_step where the model only accepts sizes on a grid, "
+                    "the built-in LoRA styles, which model is the default, and "
                     "prompt_formats: the JSON caption schema for models that "
                     "take one (ideogram4), with an example. Call this instead "
                     "of guessing model names, flags, or prompt structure.",
@@ -165,11 +179,14 @@ TOOLS = [
      }, "required": ["job_id"]}},
 ]
 
-# Every generator tool takes an optional async flag: submitting returns a job id
-# immediately instead of blocking, which matters for video (minutes long). Poll
-# with media_job_status.
-_ASYNC_DOC = ("Submit as a background job and return a job id immediately "
-              "instead of waiting. Poll it with media_job_status.")
+# Every generator tool takes an async flag, and it defaults to on: holding a
+# call open for a render that takes minutes only produces a client timeout, and
+# a timeout reads as a failure, so the caller renders it again.
+_ASYNC_DOC = ("Default true: the render runs as a background job and this "
+              "returns the output path if it finishes quickly, or the job id "
+              "to follow with media_job_status if it does not. Set false only "
+              "to hold the call open until the file is written, which a long "
+              "render will outlast.")
 _SKIP_QUALITY_DOC = ("Accept output that fails the content checks (silence, a "
                      "container with no frames). Use only after a check rejected "
                      "something you actually wanted.")
@@ -201,11 +218,77 @@ _VOICE_FLAGS = [("ref", "--ref"), ("lang", "--lang"), ("speed", "--speed"),
 _EDIT_FLAGS = [("image", "--image"), ("seed", "--seed"), ("quantize", "--quantize")]
 
 
+# How long a tool call may block before the client gives up on it. Measured
+# against opencode in one session: a 45 s call returned its result, calls that
+# ran past ~69 s came back to the model as "MCP error -32001: Request timed
+# out" while the render kept going invisibly. Staying under that is what makes
+# a slow render report progress instead of vanishing.
+WAIT_S = float(os.environ.get("FXLLA_MCP_WAIT_S", "45"))
+
+
 def _exec(cmd, failure):
     proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
     if proc.returncode != 0:
         return "error: " + (proc.stderr.strip() or failure)
     return proc.stdout.strip() or "error: no output"
+
+
+def _job_record(job_id, wait_s):
+    cmd = [sys.executable, MEDIA, "job", str(job_id), "--json"]
+    if wait_s:
+        cmd += ["--wait", str(wait_s)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
+    if proc.returncode != 0:
+        return None
+    try:
+        return json.loads(proc.stdout.strip())
+    except ValueError:
+        return None
+
+
+def _still_running(job_id, status):
+    return ("job %s is %s and has not finished. Call media_job_status with "
+            "job_id \"%s\" to keep waiting - do NOT submit the render again, "
+            "it is already going." % (job_id, status, job_id))
+
+
+def _spawn(cmd, args, failure):
+    """Run one generation and return a path, an error, or a job id.
+
+    Submitted as a background job unless the caller says otherwise, then
+    awaited for WAIT_S. A render that outlives the window is reported as a
+    running job rather than held open until the client times out - which is
+    what used to happen, and the caller could not tell a timeout from a
+    failure, so it resubmitted."""
+    if args.get("skip_quality"):
+        cmd = cmd + ["--skip-quality"]
+    # Absent and explicit null both mean "use the default", which is the job
+    # path; only a literal false opts out.
+    background = args.get("async")
+    if background is not None and not background:
+        # Explicitly opted out: the caller wants the path in this response and
+        # accepts that a long render may outlast its own timeout.
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
+        if proc.returncode != 0:
+            return "error: " + (proc.stderr.strip() or failure)
+        return proc.stdout.strip() or "error: no output path returned"
+    proc = subprocess.run(cmd + ["--async"], capture_output=True, text=True,
+                          env=os.environ)
+    if proc.returncode != 0:
+        return "error: " + (proc.stderr.strip() or failure)
+    job_id = proc.stdout.strip()
+    if not job_id:
+        return "error: no job id returned"
+    rec = _job_record(job_id, WAIT_S)
+    if rec is None:
+        return job_id
+    status = rec.get("status")
+    if status == "done":
+        return rec.get("output") or job_id
+    if status in ("failed", "cancelled"):
+        return "error: job %s %s: %s" % (job_id, status,
+                                         (rec.get("error") or "").strip()[-800:])
+    return _still_running(job_id, status)
 
 
 def _run(subcmd, positional, flags, args):
@@ -226,25 +309,24 @@ def _run(subcmd, positional, flags, args):
             cmd += [flag, str(val)]
     if args.get("save_depth"):
         cmd.append("--save-depth-map")
-    if args.get("async"):
-        cmd.append("--async")
-    if args.get("skip_quality"):
-        cmd.append("--skip-quality")
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
-    if proc.returncode != 0:
-        return "error: " + (proc.stderr.strip() or "generation failed")
-    return proc.stdout.strip() or "error: no output path returned"
+    return _spawn(cmd, args, "generation failed")
 
 
 def run_job_status(args):
     job_id = args.get("job_id")
     if not job_id:
         return "error: job_id is required"
-    cmd = [sys.executable, MEDIA, "job", str(job_id), "--json"]
-    wait_s = args.get("wait_s")
-    if wait_s:
-        cmd += ["--wait", str(wait_s)]
-    return _exec(cmd, "unknown job")
+    # Capped, for the same reason the render is: a request to wait 120 s came
+    # back to the model as a timeout, not as a status, and told it nothing.
+    # An explicit 0 still means "answer now" rather than the default wait.
+    raw = args.get("wait_s")
+    wait_s = WAIT_S if raw is None else min(float(raw), WAIT_S)
+    rec = _job_record(job_id, wait_s)
+    if rec is None:
+        return "error: unknown job: %s" % job_id
+    if rec.get("status") in ("queued", "running"):
+        return _still_running(job_id, rec["status"])
+    return json.dumps(rec)
 
 
 def run_list_loras(_args):
@@ -315,14 +397,7 @@ def run_upscale(args):
     scale = args.get("scale")
     if scale is not None:
         cmd += ["--scale", str(scale)]
-    if args.get("async"):
-        cmd.append("--async")
-    if args.get("skip_quality"):
-        cmd.append("--skip-quality")
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
-    if proc.returncode != 0:
-        return "error: " + (proc.stderr.strip() or "upscale failed")
-    return proc.stdout.strip() or "error: no output path returned"
+    return _spawn(cmd, args, "upscale failed")
 
 
 def handle(msg):
@@ -350,7 +425,13 @@ def handle(msg):
                   "list_media_jobs": run_list_jobs,
                   "cancel_media_job": run_cancel_job}.get(tool)
         if runner:
-            text = runner(params.get("arguments", {}))
+            # A runner that raises on its own thread would drop the response
+            # and leave the caller waiting on a request that can never arrive -
+            # indistinguishable from the hang this server was fixed to avoid.
+            try:
+                text = runner(params.get("arguments", {}))
+            except Exception as exc:  # noqa: BLE001 - report, never drop
+                text = "error: %s: %s" % (type(exc).__name__, exc)
             return _ok(mid, {"content": [{"type": "text", "text": text}]})
         return _err(mid, -32601, "unknown tool")
     if method and method.startswith("notifications/"):
@@ -368,7 +449,19 @@ def _err(mid, code, message):
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}}
 
 
+_WRITE = threading.Lock()
+
+
+def _emit(resp):
+    if resp is None:
+        return
+    with _WRITE:
+        sys.stdout.write(json.dumps(resp) + "\n")
+        sys.stdout.flush()
+
+
 def main():
+    running = []
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -377,10 +470,24 @@ def main():
             msg = json.loads(line)
         except Exception:
             continue
-        resp = handle(msg)
-        if resp is not None:
-            sys.stdout.write(json.dumps(resp) + "\n")
-            sys.stdout.flush()
+        # Tool calls go to their own thread so a render never stops the server
+        # from reading. Responses carry the request id, so the client matches
+        # them whatever order they arrive in. initialize and tools/list stay
+        # inline: they are instant, and a client waits for initialize before
+        # sending anything else.
+        if msg.get("method") == "tools/call":
+            worker = threading.Thread(target=lambda m=msg: _emit(handle(m)),
+                                      daemon=True)
+            running.append(worker)
+            worker.start()
+            running = [t for t in running if t.is_alive()]
+        else:
+            _emit(handle(msg))
+    # Stdin ended. Finish what is in flight first: returning here would let the
+    # interpreter exit and take the daemon threads with it, so calls already
+    # accepted would never be answered.
+    for worker in running:
+        worker.join()
 
 
 if __name__ == "__main__":

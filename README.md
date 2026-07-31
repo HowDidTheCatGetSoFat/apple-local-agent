@@ -520,9 +520,14 @@ fxlla media jobs --prune                          # drop finished records
 
 Jobs run **one at a time**: renders share unified memory with the gateway's
 models, so a second submission waits (`queued`) until the current one finishes.
-State lives next to the outputs, in `<media out>/jobs`. Over MCP, pass
-`async: true` to any generator and poll with `media_job_status`, plus
-`list_media_jobs` and `cancel_media_job`.
+State lives next to the outputs, in `<media out>/jobs`. Over MCP every render
+goes through this queue: the tool returns the output path if the render lands
+within `FXLLA_MCP_WAIT_S` (default 45) and the job id if it does not, which
+`media_job_status` then follows. That bound exists because a call held open
+longer than the client waits comes back as a timeout, and a timeout reads as a
+failure — one model, unable to tell the two apart, submitted the same render
+four times. `list_media_jobs` and `cancel_media_job` complete the set; pass
+`async: false` to hold a call open for a render you know is short.
 
 ## Tools and skills
 
