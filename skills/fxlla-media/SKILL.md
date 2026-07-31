@@ -137,7 +137,12 @@ up behind a render you are not making any faster by watching it.
 
 Pick the result up on the next turn, or when they ask, or after doing something
 else useful. `media_job_status` answers instantly and `list_media_jobs` shows
-everything in flight.
+everything in flight. On macOS the finished job also posts a desktop
+notification, so the user learns it landed without asking you.
+
+If your client can run a command in the background and wake you when it exits,
+that is strictly better: run `fxlla media image ...` that way and you will be
+told the moment it finishes, instead of either waiting or being asked.
 
 Two things never to do:
 

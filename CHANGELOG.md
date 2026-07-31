@@ -114,6 +114,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Added
+- A finished or failed background render posts a desktop notification on macOS
+  with what it produced and how long it took (`FXLLA_MEDIA_NOTIFY=0` disables
+  it). An MCP tool call is request/response and an agent turn ends when the
+  model stops calling tools, so nothing on the server side can reopen a turn to
+  announce a render - an assistant can only report it when asked, and a render
+  that takes eight minutes is one nobody is still watching. Prompt text is
+  escaped into the AppleScript literal rather than interpolated, since a prompt
+  carries quotes and backslashes.
 - `fxlla media timings`: the measured record on its own - median seconds and
   seconds-per-megapixel per model and per video stage, from this machine's own
   finished jobs, with an explicit "nothing has been timed yet" when there is no

@@ -519,6 +519,15 @@ fxlla media jobs --prune                          # drop finished records
 fxlla media timings                               # what renders have taken here
 ```
 
+A finished or failed job posts a **desktop notification** on macOS with what it
+produced and how long it took (`FXLLA_MEDIA_NOTIFY=0` to stop it). That is
+there because an MCP tool call is request/response and an agent turn ends when
+the model stops calling tools — nothing on the server side can reopen a turn to
+announce a render, so an assistant can only tell you when you ask. If your
+client can run work in the background and wake itself when it finishes (Claude
+Code does; `--async` composes with it), use that instead and the notification
+is redundant.
+
 `fxlla media timings` is the measured record, computed from those jobs: median
 seconds and seconds-per-megapixel per model and per video stage. Nothing in it
 is estimated and nothing comes from other hardware, so a model with no runs

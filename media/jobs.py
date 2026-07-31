@@ -203,19 +203,63 @@ def run(job_id):
         try:
             proc = subprocess.run([sys.executable, GENERATE] + list(rec["argv"]),
                                   capture_output=True, text=True, env=os.environ)
+        # A failure is announced too: eight minutes of waiting for nothing is
+        # exactly what someone needs told, and silence reads as still running.
         except Exception as exc:  # the generator could not even start
-            _update(job_id, status="failed", finished=time.time(), error=str(exc))
+            notify(_update(job_id, status="failed", finished=time.time(),
+                           error=str(exc)))
             return
         if proc.returncode != 0:
-            _update(job_id, status="failed", finished=time.time(),
-                    error=(proc.stderr.strip() or "generation failed")[-800:])
+            notify(_update(job_id, status="failed", finished=time.time(),
+                           error=(proc.stderr.strip() or "generation failed")[-800:]))
             return
         lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
         if not lines:
-            _update(job_id, status="failed", finished=time.time(),
-                    error="generator returned no output path")
+            notify(_update(job_id, status="failed", finished=time.time(),
+                           error="generator returned no output path"))
             return
-        _update(job_id, status="done", finished=time.time(), output=lines[-1])
+        notify(_update(job_id, status="done", finished=time.time(),
+                       output=lines[-1]))
+
+
+def _as(text):
+    """A Python string as an AppleScript string literal.
+
+    json.dumps gets the quote and backslash escaping right, which is the point
+    - a prompt carries both, and one interpolated raw would end the literal and
+    turn the rest of somebody's prompt into script. ensure_ascii=False because
+    AppleScript has no \\uXXXX escape and would print it verbatim."""
+    return json.dumps(text, ensure_ascii=False)
+
+
+def notify(rec):
+    """Tell the desktop the render landed.
+
+    A tool call is request/response and an agent turn ends when the model stops
+    calling tools, so nothing in MCP can reopen a finished turn to announce
+    this - the model can only answer when asked. That leaves the person
+    watching, and a render that takes eight minutes is one they have stopped
+    watching. Best effort and silent: a headless or cron run has no desktop and
+    that is not a failure of the render."""
+    if not rec or sys.platform != "darwin":
+        return
+    if os.environ.get("FXLLA_MEDIA_NOTIFY", "1") in ("0", "false", ""):
+        return
+    took = ""
+    if rec.get("started") and rec.get("finished"):
+        took = " in %ds" % round(rec["finished"] - rec["started"])
+    failed = rec.get("status") == "failed"
+    title = "fxlla: %s %s%s" % (rec.get("kind", "render"),
+                                "failed" if failed else "ready", took)
+    body = (rec.get("summary") or rec["id"]) if failed else (
+        os.path.basename(rec.get("output") or "") or rec["id"])
+    try:
+        subprocess.run(
+            ["osascript", "-e", "display notification %s with title %s"
+             % (_as(body[:120]), _as(title))],
+            capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def _fmt_age(rec):

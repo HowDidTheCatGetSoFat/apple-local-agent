@@ -73,6 +73,22 @@ named when passed to a stage that ignores it, and every stage publishes what it
 runs. Video also got the point stated plainly: cost is stage x steps x
 resolution x duration, and duration is the multiplier people forget.
 
+**Where the asynchrony actually stops.** Asked whether opencode could just be
+async about a tool call, the answer is that it is not opencode's to give: an
+MCP tool call is request/response, and more fundamentally an agent turn ends
+when the model stops calling tools. Nothing on the server side can reopen a
+finished turn to announce anything. So "the model tells you when the render
+lands" does not exist at this layer - someone has to ask.
+
+Two things follow. A harness CAN do it, because it owns the turn: Claude Code
+runs a command in the background and re-invokes the model when it exits, and
+`--async` composes with that directly. And where the harness cannot, the person
+is the only remaining channel, so a finished or failed job now posts a desktop
+notification with what it made and how long it took. Escaped into the
+AppleScript literal, not interpolated - a prompt carries quotes and
+backslashes, and one raw quote would close the string and leave the rest of
+somebody's prompt to be interpreted as script.
+
 **Third attempt at the same fact, and the lesson is about where a fact lives,
 not whether it is true.** With the timings published and the estimate riding
 along with each submission, the async behaviour finally worked end to end - the

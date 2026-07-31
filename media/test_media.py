@@ -1746,6 +1746,93 @@ def _models_json_with_store(store):
         env=dict(os.environ, FXLLA_STORE=store), text=True)
 
 
+class TestJobNotification(unittest.TestCase):
+    # A tool call is request/response and an agent turn ends when the model
+    # stops calling tools, so nothing in MCP can reopen a finished turn to
+    # announce a render. The desktop is the only channel left.
+    def setUp(self):
+        self.sent = []
+        self.real_run = jobs.subprocess.run
+        jobs.subprocess.run = lambda cmd, **kw: self.sent.append(cmd)
+        self.addCleanup(setattr, jobs.subprocess, "run", self.real_run)
+        self.real_platform = jobs.sys.platform
+        jobs.sys.platform = "darwin"
+        self.addCleanup(setattr, jobs.sys, "platform", self.real_platform)
+
+    def _rec(self, **over):
+        rec = {"id": "1785500000-abcdef", "kind": "image", "status": "done",
+               "output": "/out/fxlla-krea2-1785500000.png", "summary": "s",
+               "started": 1785500000.0, "finished": 1785500123.0}
+        rec.update(over)
+        return rec
+
+    def test_a_finished_render_says_what_and_how_long(self):
+        jobs.notify(self._rec())
+        script = self.sent[0][-1]
+        self.assertIn("fxlla-krea2-1785500000.png", script)
+        self.assertIn("123s", script)
+        self.assertIn("ready", script)
+
+    def test_a_failure_is_announced_too(self):
+        # Eight minutes of waiting for nothing is what most needs saying, and
+        # silence reads as still running.
+        jobs.notify(self._rec(status="failed", output=None))
+        self.assertIn("failed", self.sent[0][-1])
+
+    def test_quotes_in_a_prompt_cannot_escape_the_script(self):
+        jobs.notify(self._rec(status="failed", output=None,
+                              summary='a "quoted" \\ prompt'))
+        script = self.sent[0][-1]
+        self.assertIn('\\"quoted\\"', script)
+        # One unescaped quote would close the literal and leave the rest of
+        # somebody's prompt to be interpreted as AppleScript.
+        self.assertEqual(script.count('"') % 2, 0)
+
+    def test_it_stays_quiet_where_there_is_no_desktop(self):
+        jobs.sys.platform = "linux"
+        jobs.notify(self._rec())
+        self.assertEqual(self.sent, [])
+
+    def test_it_can_be_turned_off(self):
+        saved = os.environ.get("FXLLA_MEDIA_NOTIFY")
+        os.environ["FXLLA_MEDIA_NOTIFY"] = "0"
+        self.addCleanup(lambda: os.environ.__setitem__("FXLLA_MEDIA_NOTIFY", saved)
+                        if saved is not None
+                        else os.environ.pop("FXLLA_MEDIA_NOTIFY", None))
+        jobs.notify(self._rec())
+        self.assertEqual(self.sent, [])
+
+    def test_a_missing_record_is_not_a_crash(self):
+        jobs.notify(None)
+        self.assertEqual(self.sent, [])
+
+    def test_the_worker_announces_both_outcomes(self):
+        # The notify() calls have to be wired into run(), not merely exist.
+        class Proc(object):
+            def __init__(self, rc, out):
+                self.returncode, self.stdout, self.stderr = rc, out, "boom"
+
+        for rc, stdout, expected in ((0, "/out/x.png\n", "done"),
+                                     (1, "", "failed")):
+            jobs_dir = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, jobs_dir, True)
+            saved_dir, jobs.JOBS_DIR = jobs.JOBS_DIR, jobs_dir
+            self.addCleanup(setattr, jobs, "JOBS_DIR", saved_dir)
+            announced = []
+            saved_notify, jobs.notify = jobs.notify, announced.append
+            self.addCleanup(setattr, jobs, "notify", saved_notify)
+            jobs.subprocess.run = lambda cmd, **kw: Proc(rc, stdout)
+            rec = jobs._write({"id": "1785500000-abcdef", "kind": "image",
+                               "status": "queued", "argv": ["image", "x"],
+                               "summary": "x", "output": None, "error": None,
+                               "pid": None, "created": 1785500000.0,
+                               "started": None, "finished": None, "log": ""})
+            jobs.run("1785500000-abcdef")
+            self.assertEqual([r["status"] for r in announced], [expected])
+            jobs.notify = saved_notify
+            jobs.JOBS_DIR = saved_dir
+
+
 class TestLoraNameResolution(unittest.TestCase):
     # list_loras reports a path AND a name; a caller that passes the name back
     # was told "LoRA not found" by the same tool that had just printed it.
