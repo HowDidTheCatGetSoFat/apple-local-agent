@@ -261,7 +261,9 @@ def free_gpu(reason, keep=False):
 def build_command(spec, prompt, output, steps=None, seed=None, width=None,
                   height=None, aspect=None, quantize=None, low_ram=False,
                   metadata=False, negative=None, prompt_file=None, loras=None,
-                  lora_style=None, init_image=None, model_name=""):
+                  lora_style=None, init_image=None, model_name="", guidance=None,
+                  controls=None, controlnet_strength=None, depth_image=None,
+                  save_depth=False):
     """Assemble the mflux-cv argument vector for one image generation.
 
     Optional flags are checked against the model's declared capabilities
@@ -325,6 +327,49 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
     if lora_style:
         _require_cap(spec, "lora-style", "--lora-style", model_name)
         cmd += ["--lora-style", lora_style]
+    if guidance is not None:
+        _require_cap(spec, "guidance", "--guidance", model_name)
+        cmd += ["--guidance", str(guidance)]
+    # Controlnet comes in two shapes and they are not interchangeable: FLUX
+    # takes a checkpoint plus a control image as separate repeatable flags,
+    # Z-Image takes one combined "type:path[:strength]" spec. Both stack, so
+    # the caps decide which form this model speaks rather than inventing a
+    # lossy abstraction over the pair.
+    for ctl in controls or []:
+        if "control-spec" in spec.get("caps", ()):
+            cmd += ["--control", str(ctl)]
+        else:
+            _require_cap(spec, "controlnet-image", "--control", model_name)
+            parts = split_ref(ctl)
+            image = os.path.expanduser(parts[0])
+            if not os.path.isfile(image):
+                # The two families take different forms and confusing them is
+                # the likely mistake, so say which one this model speaks
+                # rather than only that a file is missing.
+                if ":" in parts[0] and not os.path.exists(parts[0]):
+                    raise ValueError(
+                        "'%s' looks like the z-controlnet form "
+                        "(type:path[:strength]); model '%s' takes "
+                        "IMAGE[,CHECKPOINT] instead" % (parts[0], model_name))
+                raise ValueError("control image not found: %s" % parts[0])
+            cmd += ["--controlnet-image-path", image]
+            if len(parts) > 1:
+                _require_cap(spec, "controlnet", "--controlnet-path", model_name)
+                cmd += ["--controlnet-path", parts[1]]
+    if controlnet_strength is not None:
+        _require_cap(spec, "controlnet-strength", "--controlnet-strength", model_name)
+        cmd += ["--controlnet-strength", str(controlnet_strength)]
+    if depth_image:
+        _require_cap(spec, "depth-image", "--depth-image", model_name)
+        depth_image = os.path.expanduser(depth_image)
+        if not os.path.isfile(depth_image):
+            raise ValueError("depth image not found: %s" % depth_image)
+        cmd += ["--depth-image-path", depth_image]
+    if save_depth:
+        # The derived map is the input to a later controlnet step, so it has
+        # to be reachable rather than discarded inside the render.
+        _require_cap(spec, "save-depth", "--save-depth-map", model_name)
+        cmd += ["--save-depth-map"]
     if steps is not None:
         _require_cap(spec, "steps", "--steps", model_name)
         cmd += ["--steps", str(steps)]
@@ -356,6 +401,102 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
     if metadata:
         cmd += ["--metadata"]
     return cmd
+
+
+# Ideogram 4 accepts a JSON caption instead of prose: a scene broken into
+# elements, each optionally placed with a bounding box. The rules below are
+# mflux's own (mflux/models/ideogram4/.../caption.py), checked here so a
+# malformed caption is named before a render starts rather than surfacing as
+# a schema warning mid-run. The trap worth catching is the axis order: bbox is
+# [y_min, x_min, y_max, x_max] - Y FIRST - in an integer 0..1000 space, which
+# nobody guesses right.
+IDEOGRAM_TOP_KEYS = {"high_level_description", "style_description",
+                     "compositional_deconstruction"}
+IDEOGRAM_STYLE_KEYS = {"aesthetics", "lighting", "photo", "art_style",
+                       "medium", "color_palette"}
+IDEOGRAM_ELEMENT_KEYS = {"type", "bbox", "text", "desc", "color_palette"}
+IDEOGRAM_ELEMENT_TYPES = {"obj", "text"}
+
+
+def _check_color_palette(palette, path, problems):
+    if not isinstance(palette, list):
+        problems.append("%s: expected a list" % path)
+        return
+    if len(palette) > 5:
+        problems.append("%s: at most 5 colors, got %d" % (path, len(palette)))
+    for i, color in enumerate(palette):
+        if not (isinstance(color, str) and len(color) == 7 and color.startswith("#")):
+            problems.append("%s[%d]: expected #RRGGBB, got %r" % (path, i, color))
+
+
+def check_ideogram_caption(text):
+    """Problems with an Ideogram 4 JSON caption, empty when it is fine.
+
+    Prose is also valid input, so anything that is not a JSON object is left
+    alone: only something that parses as one is held to the schema."""
+    try:
+        caption = json.loads(text)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(caption, dict):
+        return []
+    problems = []
+    unknown = set(caption) - IDEOGRAM_TOP_KEYS
+    if unknown:
+        problems.append("unknown top-level keys: %s (known: %s)"
+                        % (", ".join(sorted(unknown)), ", ".join(sorted(IDEOGRAM_TOP_KEYS))))
+    style = caption.get("style_description")
+    if isinstance(style, dict):
+        bad = set(style) - IDEOGRAM_STYLE_KEYS
+        if bad:
+            problems.append("style_description: unknown keys: %s" % ", ".join(sorted(bad)))
+        if "color_palette" in style:
+            _check_color_palette(style["color_palette"],
+                                 "style_description.color_palette", problems)
+    comp = caption.get("compositional_deconstruction")
+    if comp is not None and not isinstance(comp, dict):
+        problems.append("compositional_deconstruction: expected an object")
+        comp = None
+    elements = (comp or {}).get("elements")
+    if elements is not None and not isinstance(elements, list):
+        problems.append("compositional_deconstruction.elements: expected a list")
+        elements = None
+    for i, element in enumerate(elements or []):
+        path = "elements[%d]" % i
+        if not isinstance(element, dict):
+            problems.append("%s: expected an object" % path)
+            continue
+        bad = set(element) - IDEOGRAM_ELEMENT_KEYS
+        if bad:
+            problems.append("%s: unknown keys: %s" % (path, ", ".join(sorted(bad))))
+        kind = element.get("type")
+        if kind not in IDEOGRAM_ELEMENT_TYPES:
+            problems.append("%s.type: expected one of %s, got %r"
+                            % (path, ", ".join(sorted(IDEOGRAM_ELEMENT_TYPES)), kind))
+        if kind == "text" and not isinstance(element.get("text"), str):
+            problems.append("%s: a text element needs a 'text' string" % path)
+        if "color_palette" in element:
+            _check_color_palette(element["color_palette"],
+                                 "%s.color_palette" % path, problems)
+        if "bbox" in element:
+            bbox = element["bbox"]
+            if not isinstance(bbox, list) or len(bbox) != 4:
+                problems.append("%s.bbox: expected [y_min, x_min, y_max, x_max]" % path)
+                continue
+            if not all(type(v) is int for v in bbox):
+                problems.append("%s.bbox: all four values must be integers" % path)
+                continue
+            y_min, x_min, y_max, x_max = bbox
+            if not all(0 <= v <= 1000 for v in bbox):
+                problems.append("%s.bbox: values live in a 0..1000 space, got %s"
+                                % (path, bbox))
+            if y_min > y_max:
+                problems.append("%s.bbox: y_min %d > y_max %d (the order is "
+                                "[y_min, x_min, y_max, x_max], Y first)"
+                                % (path, y_min, y_max))
+            if x_min > x_max:
+                problems.append("%s.bbox: x_min %d > x_max %d" % (path, x_min, x_max))
+    return problems
 
 
 # A structurally valid file can still be garbage: silent speech, a one-frame
@@ -395,7 +536,9 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                    height=None, aspect=None, quantize=None, low_ram=False,
                    metadata=False, output=None, keep_models=False,
                    negative=None, prompt_file=None, loras=None,
-                   lora_style=None, init_image=None):
+                   lora_style=None, init_image=None, guidance=None,
+                   controls=None, controlnet_strength=None, depth_image=None,
+                   save_depth=False):
     if not prompt:
         raise ValueError("prompt is required")
     model = model or DEFAULT_MODEL
@@ -403,6 +546,14 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
     if spec is None:
         raise ValueError("unknown model '%s'; try one of: %s"
                          % (model, ", ".join(sorted(MODELS))))
+    # A JSON caption is only meaningful to ideogram4, and a malformed one
+    # would otherwise reach the backend and come back as a schema warning
+    # after the render had already started.
+    if model.startswith("ideogram"):
+        problems = check_ideogram_caption(prompt)
+        if problems:
+            raise ValueError("the JSON caption has %d problem(s):\n  %s"
+                             % (len(problems), "\n  ".join(problems)))
     os.makedirs(OUT_DIR, exist_ok=True)
     output = resolve_output(output, model, "png")
     free_gpu("image", keep_models)
@@ -412,7 +563,9 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                         metadata=metadata, negative=negative,
                         prompt_file=prompt_file, loras=loras,
                         lora_style=lora_style, init_image=init_image,
-                        model_name=model)
+                        model_name=model, guidance=guidance, controls=controls,
+                        controlnet_strength=controlnet_strength,
+                        depth_image=depth_image, save_depth=save_depth)
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "%s failed" % spec["cli"])[-800:])
@@ -614,7 +767,9 @@ def cmd_image(args):
         output=args.output, keep_models=args.keep_models,
         negative=args.negative, prompt_file=args.prompt_file,
         loras=args.loras, lora_style=args.lora_style,
-        init_image=args.init_image)
+        init_image=args.init_image, guidance=args.guidance,
+        controls=args.controls, controlnet_strength=args.controlnet_strength,
+        depth_image=args.depth_image, save_depth=args.save_depth)
     print(path)
     facts = quality.image_facts(path)
     if facts.get("width"):
@@ -782,6 +937,17 @@ def main():
                     metavar="PATH[,SCALE]",
                     help="apply a LoRA; repeatable. Comma form, not spaces: "
                          "a multi-value flag would swallow the prompt.")
+    im.add_argument("--guidance", type=float,
+                    help="guidance scale (model default: 3.5 typical, 10 depth)")
+    # Both controlnet families stack; the model's caps decide the wire form.
+    im.add_argument("--control", action="append", dest="controls",
+                    metavar="IMAGE[,CHECKPOINT] or TYPE:PATH[:STRENGTH]",
+                    help="control input; repeatable to stack several")
+    im.add_argument("--controlnet-strength", dest="controlnet_strength", type=float)
+    im.add_argument("--depth-image", dest="depth_image",
+                    help="use this depth map instead of deriving one")
+    im.add_argument("--save-depth-map", dest="save_depth", action="store_true",
+                    help="write the derived depth map so a later step can use it")
     im.add_argument("--lora-style", dest="lora_style",
                     help="one of mflux's built-in LoRA styles (see: fxlla media loras)")
     im.add_argument("--low-ram", action="store_true")

@@ -49,7 +49,27 @@ TOOLS = [
          "lora_style": {"type": "string",
                         "description": "A built-in LoRA style (storyboard, "
                                        "portrait, identity, ...); see "
-                                       "list_media_models."},
+                                       "list_loras."},
+         "guidance": {"type": "number",
+                      "description": "Guidance scale. Higher follows the prompt "
+                                     "more literally. Model default is usually "
+                                     "3.5, 10 for depth."},
+         "controls": {"type": "array", "items": {"type": "string"},
+                      "description": "Control inputs, repeatable to STACK "
+                                     "several (e.g. depth + canny). Form "
+                                     "depends on the model: \"image.png\" or "
+                                     "\"image.png,checkpoint\" for the "
+                                     "controlnet model, \"type:path[:strength]\" "
+                                     "(e.g. pose:pose.png:0.8) for "
+                                     "z-controlnet. Use list_media_models to "
+                                     "see which a model takes."},
+         "controlnet_strength": {"type": "number",
+                                 "description": "Global multiplier over all controls."},
+         "depth_image": {"type": "string",
+                         "description": "Use this depth map instead of deriving one."},
+         "save_depth": {"type": "boolean",
+                        "description": "Write the derived depth map so a later "
+                                       "controlnet step can use it as input."},
      }, "required": ["prompt"]}},
     {"name": "generate_video",
      "description": "Generate a short video from a text prompt using the local "
@@ -119,6 +139,12 @@ TOOLS = [
                                    "calls; a render takes minutes and polling "
                                    "it wastes a call per second."},
      }, "required": ["job_id"]}},
+    {"name": "list_loras",
+     "description": "LoRAs available locally (downloaded with `fxlla pull "
+                    "civitai:<id>`) and the built-in styles. Check here before "
+                    "generating: if a LoRA fits what the user asked for, offer "
+                    "it rather than ignoring what they already downloaded.",
+     "inputSchema": {"type": "object", "properties": {}}},
     {"name": "list_media_models",
      "description": "Image models available locally, each with the options it "
                     "supports (negative prompt, LoRA, dimensions, ...), plus "
@@ -153,7 +179,10 @@ for _tool in TOOLS:
 _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
                 ("width", "--width"), ("height", "--height"), ("aspect", "--aspect"),
                 ("quantize", "--quantize"), ("negative", "--negative"),
-                ("prompt_file", "--prompt-file"),
+                ("prompt_file", "--prompt-file"), ("guidance", "--guidance"),
+                ("controls", "--control"),
+                ("controlnet_strength", "--controlnet-strength"),
+                ("depth_image", "--depth-image"),
                 ("init_image", "--init-image"), ("loras", "--lora"),
                 ("lora_style", "--lora-style")]
 _VIDEO_FLAGS = [("stage", "--stage"), ("seconds", "--seconds"),
@@ -191,6 +220,8 @@ def _run(subcmd, positional, flags, args):
                 cmd += [flag, str(item)]
         else:
             cmd += [flag, str(val)]
+    if args.get("save_depth"):
+        cmd.append("--save-depth-map")
     if args.get("async"):
         cmd.append("--async")
     if args.get("skip_quality"):
@@ -210,6 +241,10 @@ def run_job_status(args):
     if wait_s:
         cmd += ["--wait", str(wait_s)]
     return _exec(cmd, "unknown job")
+
+
+def run_list_loras(_args):
+    return _exec([sys.executable, MEDIA, "loras"], "could not list loras")
 
 
 def run_list_models(_args):
@@ -306,6 +341,7 @@ def handle(msg):
                   "upscale_image": run_upscale,
                   "media_job_status": run_job_status,
                   "list_media_models": run_list_models,
+                  "list_loras": run_list_loras,
                   "list_media_jobs": run_list_jobs,
                   "cancel_media_job": run_cancel_job}.get(tool)
         if runner:

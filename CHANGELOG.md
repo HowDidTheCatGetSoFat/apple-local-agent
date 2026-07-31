@@ -6,6 +6,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- ControlNet and depth, both stackable. `--control` is repeatable, and the
+  two families are not interchangeable, so the model's capabilities decide the
+  wire form: FLUX takes a control image plus an optional checkpoint
+  (`IMAGE[,CHECKPOINT]`), Z-Image takes one combined spec
+  (`type:path[:strength]`). Passing the wrong form says which one that model
+  takes instead of only reporting a missing file. `--depth-image` supplies a
+  depth map and `--save-depth-map` writes the derived one, so it can feed a
+  later control step. All reachable from the MCP.
+- `--guidance` for image models, which was missing entirely.
+- Ideogram 4 JSON captions are validated before a render starts, against
+  mflux's own schema: elements typed `obj` or `text`, palettes of at most five
+  `#RRGGBB` colors, and bounding boxes as `[y_min, x_min, y_max, x_max]`
+  integers in a 0..1000 space. That axis order is the trap - Y comes first -
+  and getting it wrong used to surface as a mid-render schema warning. Prose
+  prompts are untouched: only something that parses as a JSON object is held
+  to the schema.
+- `list_loras` on the MCP, so downloaded LoRAs are discoverable and get
+  offered rather than ignored.
+- mage-flow is back in the catalog. It was dropped for being gated on
+  HuggingFace, which was the wrong call: the weights are perfectly usable once
+  downloaded, and the catalog note now says what the gate requires.
 - Image models are a declarative catalog (`config/media-models.conf`) instead
   of a hardcoded table, and the list grew from 8 to 12 with ideogram4, fibo,
   ernie and ernie-turbo. Each row records what its CLI actually accepts, read

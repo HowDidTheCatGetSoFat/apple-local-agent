@@ -1,6 +1,7 @@
 import contextlib
 import importlib
 import io
+import json
 import os
 import shutil
 import struct
@@ -252,8 +253,8 @@ class TestMCP(unittest.TestCase):
         self.assertEqual({t["name"] for t in r["result"]["tools"]},
                          {"generate_image", "generate_video", "generate_speech",
                           "edit_image", "upscale_image", "media_job_status",
-                          "list_media_models", "list_media_jobs",
-                          "cancel_media_job"})
+                          "list_loras", "list_media_models",
+                          "list_media_jobs", "cancel_media_job"})
 
     def test_discovery_and_waiting_exist(self):
         # Both come from watching a real session: the model read the source
@@ -760,6 +761,166 @@ class TestModelCatalog(unittest.TestCase):
         spec = {"cli": "mflux-generate-x", "caps": {"negative"}, "steps": None}
         cmd = media.build_command(spec, "cat", "/o.png", negative="blurry")
         self.assertEqual(cmd[cmd.index("--negative-prompt") + 1], "blurry")
+
+
+class TestIdeogramCaption(unittest.TestCase):
+    # Ideogram 4 takes a JSON caption with placed elements. The rules are
+    # mflux's own; validating here names a malformed caption before a render
+    # starts instead of after it, as a schema warning.
+    def _caption(self, elements):
+        return json.dumps({"high_level_description": "poster",
+                           "compositional_deconstruction": {"elements": elements}})
+
+    def test_prose_is_left_alone(self):
+        self.assertEqual(media.check_ideogram_caption("a cat on a beach"), [])
+        self.assertEqual(media.check_ideogram_caption('"just a string"'), [])
+
+    def test_a_well_formed_caption_passes(self):
+        good = self._caption([
+            {"type": "text", "bbox": [100, 200, 300, 800], "text": "HOLA",
+             "color_palette": ["#ff0000"]},
+            {"type": "obj", "bbox": [0, 0, 1000, 1000], "desc": "sky"}])
+        self.assertEqual(media.check_ideogram_caption(good), [])
+
+    def test_axis_order_is_caught(self):
+        # [y_min, x_min, y_max, x_max] - Y first - is the trap nobody guesses.
+        problems = media.check_ideogram_caption(
+            self._caption([{"type": "text", "bbox": [900, 100, 200, 400], "text": "X"}]))
+        self.assertTrue(any("Y first" in p for p in problems))
+
+    def test_coordinate_space_is_caught(self):
+        problems = media.check_ideogram_caption(
+            self._caption([{"type": "obj", "bbox": [0, 0, 1200, 50]}]))
+        self.assertTrue(any("0..1000" in p for p in problems))
+
+    def test_floats_are_rejected(self):
+        problems = media.check_ideogram_caption(
+            self._caption([{"type": "obj", "bbox": [0.0, 0, 100, 50]}]))
+        self.assertTrue(any("integers" in p for p in problems))
+
+    def test_bad_length_is_caught(self):
+        problems = media.check_ideogram_caption(
+            self._caption([{"type": "obj", "bbox": [0, 0, 100]}]))
+        self.assertTrue(any("y_min, x_min, y_max, x_max" in p for p in problems))
+
+    def test_element_type_and_text_requirement(self):
+        problems = media.check_ideogram_caption(
+            self._caption([{"type": "thing"}, {"type": "text"}]))
+        self.assertTrue(any("obj, text" in p for p in problems))
+        self.assertTrue(any("needs a 'text' string" in p for p in problems))
+
+    def test_unknown_keys_and_palette_limits(self):
+        problems = media.check_ideogram_caption(json.dumps({"nonsense": 1}))
+        self.assertTrue(any("unknown top-level keys" in p for p in problems))
+        problems = media.check_ideogram_caption(self._caption(
+            [{"type": "obj", "color_palette": ["#fff", "#000000", "#000000",
+                                               "#000000", "#000000", "#000000"]}]))
+        self.assertTrue(any("at most 5 colors" in p for p in problems))
+        self.assertTrue(any("#RRGGBB" in p for p in problems))
+
+    def test_generate_image_refuses_a_bad_caption(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.generate_image(
+                self._caption([{"type": "text", "bbox": [900, 0, 100, 10], "text": "x"}]),
+                model="ideogram4")
+        self.assertIn("JSON caption", str(ctx.exception))
+
+
+class TestControlAndDepth(unittest.TestCase):
+    # Two controlnet families that are NOT interchangeable: FLUX takes a
+    # checkpoint plus a control image as separate repeatable flags, Z-Image
+    # takes one combined spec. Both stack.
+    def _img(self):
+        p = os.path.join(tempfile.mkdtemp(), "ctl.png")
+        open(p, "wb").write(media.PNG_MAGIC + b"0" * 64)
+        return p
+
+    def _flux(self):
+        return {"cli": "x", "steps": None,
+                "caps": {"controlnet", "controlnet-image", "controlnet-strength"}}
+
+    def _zimage(self):
+        return {"cli": "x", "steps": None,
+                "caps": {"control-spec", "controlnet-strength"}}
+
+    def test_flux_form_splits_image_and_checkpoint(self):
+        p = self._img()
+        cmd = media.build_command(self._flux(), "c", "/o.png",
+                                  controls=["%s,InstantX/FLUX.1-dev-Controlnet-Canny" % p],
+                                  model_name="controlnet")
+        self.assertEqual(cmd[cmd.index("--controlnet-image-path") + 1], p)
+        self.assertEqual(cmd[cmd.index("--controlnet-path") + 1],
+                         "InstantX/FLUX.1-dev-Controlnet-Canny")
+
+    def test_flux_form_stacks(self):
+        a, b = self._img(), self._img()
+        cmd = media.build_command(self._flux(), "c", "/o.png", controls=[a, b],
+                                  model_name="controlnet")
+        self.assertEqual(cmd.count("--controlnet-image-path"), 2)
+
+    def test_zimage_form_passes_the_spec_through_and_stacks(self):
+        cmd = media.build_command(self._zimage(), "c", "/o.png",
+                                  controls=["pose:pose.png:0.8", "depth:d.png"],
+                                  model_name="z-controlnet")
+        self.assertEqual(cmd.count("--control"), 2)
+        self.assertIn("pose:pose.png:0.8", cmd)
+        # The combined spec must NOT be split into the FLUX flags.
+        self.assertNotIn("--controlnet-image-path", cmd)
+
+    def test_a_z_image_spec_survives_a_comma(self):
+        # split_ref splits on commas and the z-image spec uses colons, so a
+        # path containing a comma must NOT be torn apart: that branch never
+        # runs for this family, and this pins it.
+        cmd = media.build_command(self._zimage(), "c", "/o.png",
+                                  controls=["pose:/a,b/p.png:0.8"],
+                                  model_name="z-controlnet")
+        self.assertEqual(cmd[cmd.index("--control") + 1], "pose:/a,b/p.png:0.8")
+
+    def test_a_flux_path_containing_a_colon_still_works(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "a:b.png")
+        open(p, "wb").write(media.PNG_MAGIC)
+        cmd = media.build_command(self._flux(), "c", "/o.png", controls=[p],
+                                  model_name="controlnet")
+        self.assertEqual(cmd[cmd.index("--controlnet-image-path") + 1], p)
+
+    def test_the_wrong_form_says_which_one_this_model_takes(self):
+        # Confusing the two families is the likely mistake; "file not found"
+        # alone would send someone hunting for a path problem.
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(self._flux(), "c", "/o.png",
+                                controls=["pose:p.png:0.8"], model_name="controlnet")
+        self.assertIn("z-controlnet form", str(ctx.exception))
+        self.assertIn("IMAGE[,CHECKPOINT]", str(ctx.exception))
+
+    def test_a_missing_control_image_is_named(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(self._flux(), "c", "/o.png",
+                                controls=["/no/such.png"], model_name="controlnet")
+        self.assertIn("/no/such.png", str(ctx.exception))
+
+    def test_a_model_without_control_refuses(self):
+        plain = {"cli": "x", "steps": None, "caps": {"negative"}}
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(plain, "c", "/o.png", controls=[self._img()],
+                                model_name="z-image-turbo")
+        self.assertIn("z-image-turbo", str(ctx.exception))
+
+    def test_depth_map_can_be_supplied_and_saved(self):
+        spec = {"cli": "x", "steps": None, "caps": {"depth-image", "save-depth"}}
+        d = self._img()
+        cmd = media.build_command(spec, "c", "/o.png", depth_image=d,
+                                  save_depth=True, model_name="depth")
+        self.assertEqual(cmd[cmd.index("--depth-image-path") + 1], d)
+        self.assertIn("--save-depth-map", cmd)
+
+    def test_guidance(self):
+        spec = {"cli": "x", "steps": None, "caps": {"guidance"}}
+        cmd = media.build_command(spec, "c", "/o.png", guidance=7.5, model_name="m")
+        self.assertEqual(cmd[cmd.index("--guidance") + 1], "7.5")
+        bare = {"cli": "x", "steps": None, "caps": set()}
+        with self.assertRaises(ValueError):
+            media.build_command(bare, "c", "/o.png", guidance=7.5, model_name="m")
 
 
 class TestLoRA(unittest.TestCase):
