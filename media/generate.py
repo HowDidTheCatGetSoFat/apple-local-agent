@@ -445,8 +445,14 @@ def _check_color_palette(palette, path, problems, max_colors):
         problems.append("%s: at most %d colors, got %d"
                         % (path, max_colors, len(palette)))
     for i, color in enumerate(palette):
-        if not (isinstance(color, str) and len(color) == 7 and color.startswith("#")):
-            problems.append("%s[%d]: expected #RRGGBB, got %r" % (path, i, color))
+        # Uppercase is mflux's rule, not a preference: it rejects "#f2b134"
+        # and accepts "#F2B134", and the difference is invisible unless
+        # something says so.
+        if not (isinstance(color, str) and len(color) == 7
+                and color.startswith("#")
+                and all(c in "0123456789ABCDEF" for c in color[1:])):
+            problems.append("%s[%d]: expected an UPPERCASE #RRGGBB hex color, "
+                            "got %r" % (path, i, color))
 
 
 def check_ideogram_caption(text):

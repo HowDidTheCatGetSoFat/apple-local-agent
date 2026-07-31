@@ -398,6 +398,63 @@ fxlla media edit "make it snow" --image photo.png     # instruction-based edit
 fxlla media upscale --image photo.png --scale 2x      # diffusion super-resolution
 ```
 
+`fxlla media models` lists what each model supports, because they differ: only
+some take a LoRA, an init image, or a control input. Asking for an option a
+model cannot take is refused by name, with the models that can.
+
+### Placing text with Ideogram 4
+
+Ideogram 4 accepts a JSON caption instead of prose, which is how you say where
+things go rather than hoping. Elements are typed `obj` or `text`, and a bbox is
+`[y_min, x_min, y_max, x_max]` - **Y first** - as integers in a 0..1000 space.
+Hex colors must be UPPERCASE. fxlla validates all of it before the render
+starts, so a mistake is named instead of arriving as a schema warning minutes
+in; a plain prose prompt still works and is left alone.
+
+```sh
+cat > poster.json <<'JSON'
+{
+  "high_level_description": "A vintage poster of a chrome lighter, flame lit.",
+  "style_description": {
+    "aesthetics": "mid-century travel poster, flat vector shapes",
+    "lighting": "warm rim light from the flame, soft vignette",
+    "medium": "screen print with limited ink layers",
+    "art_style": "retro Swiss poster design, clean negative space",
+    "color_palette": ["#0D3B45", "#F2B134", "#E8E3D3"]
+  },
+  "compositional_deconstruction": {
+    "background": "flat deep teal field with a faint radial glow",
+    "elements": [
+      {"type": "text", "bbox": [80, 120, 240, 880], "text": "ZIPPO",
+       "desc": "condensed display type, letter-spaced",
+       "color_palette": ["#E8E3D3"]},
+      {"type": "obj", "bbox": [300, 330, 760, 670],
+       "desc": "chrome lighter standing upright, lid open, tall flame"},
+      {"type": "text", "bbox": [820, 200, 900, 800], "text": "BUILT TO LAST",
+       "desc": "small uppercase tagline, wide letter spacing",
+       "color_palette": ["#F2B134"]}
+    ]
+  }
+}
+JSON
+fxlla media image "$(cat poster.json)" --model ideogram4 --aspect 3:4
+```
+
+### Controls and LoRAs
+
+```sh
+fxlla media loras                                     # what you can apply
+fxlla media image "a portrait" --lora style.safetensors,0.8 --lora-style portrait
+fxlla media image "a street" --model controlnet --control edges.png
+fxlla media image "a room" --model z-controlnet \
+    --control pose:pose.png:0.8 --control depth:depth.png    # controls stack
+fxlla media image "a hallway" --model depth --init-image room.png --save-depth-map
+```
+
+`--save-depth-map` prints the derived map's path on a second line, so a depth
+pass can feed a later control pass. Chaining across steps is the caller's job:
+fxlla exposes each step and its outputs, and deliberately has no agent loop.
+
 Generated audio is checked for content, not just for a valid header, because a
 TTS run that emits silence writes a perfectly well-formed WAV. The checks flag
 silence, a constant waveform, a large DC offset, and a clip that is silent for

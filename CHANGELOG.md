@@ -22,7 +22,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 - Ideogram 4 JSON captions are validated before a render starts, against
   mflux's own schema: elements typed `obj` or `text`, palettes of at most five
   `#RRGGBB` colors, and bounding boxes as `[y_min, x_min, y_max, x_max]`
-  integers in a 0..1000 space. That axis order is the trap - Y comes first -
+  integers in a 0..1000 space, and hex colors uppercase. That axis order is
+  the trap - Y comes first -
   and getting it wrong used to surface as a mid-render schema warning. Prose
   prompts are untouched: only something that parses as a JSON object is held
   to the schema.

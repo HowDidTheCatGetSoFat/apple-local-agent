@@ -778,7 +778,7 @@ class TestIdeogramCaption(unittest.TestCase):
     def test_a_well_formed_caption_passes(self):
         good = self._caption([
             {"type": "text", "bbox": [100, 200, 300, 800], "text": "HOLA",
-             "color_palette": ["#ff0000"]},
+             "color_palette": ["#FF0000"]},
             {"type": "obj", "bbox": [0, 0, 1000, 1000], "desc": "sky"}])
         self.assertEqual(media.check_ideogram_caption(good), [])
 
@@ -812,7 +812,7 @@ class TestIdeogramCaption(unittest.TestCase):
     def test_style_palette_allows_sixteen_but_elements_only_five(self):
         # mflux's own limits differ by context; hardcoding 5 falsely rejected
         # a valid caption, and a false rejection blocks a working render.
-        sixteen = ["#%06x" % i for i in range(16)]
+        sixteen = ["#%06X" % i for i in range(16)]
         ok = json.dumps({"high_level_description": "x",
                          "style_description": {"color_palette": sixteen},
                          "compositional_deconstruction": {"elements": []}})
@@ -824,6 +824,38 @@ class TestIdeogramCaption(unittest.TestCase):
         self.assertTrue(any("at most 5" in p
                             for p in media.check_ideogram_caption(too_many)))
 
+    def test_hex_colors_must_be_uppercase(self):
+        # mflux's own rule: it accepts "#F2B134" and rejects "#f2b134". The
+        # difference is invisible unless something names it, and a caption
+        # that looked fine here would come back with warnings from mflux.
+        lower = json.dumps({"high_level_description": "x",
+                            "style_description": {"color_palette": ["#f2b134"]},
+                            "compositional_deconstruction": {"elements": []}})
+        problems = media.check_ideogram_caption(lower)
+        self.assertTrue(any("UPPERCASE" in p for p in problems))
+        upper = lower.replace("#f2b134", "#F2B134")
+        self.assertEqual(media.check_ideogram_caption(upper), [])
+
+    def test_a_realistic_caption_passes_end_to_end(self):
+        # The example shipped in the docs, kept honest: if the schema tightens
+        # and this stops validating, the documented prompt is wrong too.
+        caption = json.dumps({
+            "high_level_description": "A vintage poster of a chrome lighter.",
+            "style_description": {
+                "aesthetics": "mid-century poster, flat vector shapes",
+                "lighting": "warm rim light, soft vignette",
+                "medium": "screen print",
+                "art_style": "retro Swiss design",
+                "color_palette": ["#0D3B45", "#F2B134", "#E8E3D3"]},
+            "compositional_deconstruction": {
+                "background": "flat teal field with a faint radial glow",
+                "elements": [
+                    {"type": "text", "bbox": [80, 120, 240, 880], "text": "ZIPPO",
+                     "desc": "condensed display type", "color_palette": ["#E8E3D3"]},
+                    {"type": "obj", "bbox": [300, 330, 760, 670],
+                     "desc": "chrome lighter, lid open, tall flame"}]}})
+        self.assertEqual(media.check_ideogram_caption(caption), [])
+
     def test_a_missing_composition_section_is_flagged(self):
         problems = media.check_ideogram_caption(
             json.dumps({"high_level_description": "just a description"}))
@@ -833,7 +865,7 @@ class TestIdeogramCaption(unittest.TestCase):
         problems = media.check_ideogram_caption(json.dumps({"nonsense": 1}))
         self.assertTrue(any("unknown top-level keys" in p for p in problems))
         problems = media.check_ideogram_caption(self._caption(
-            [{"type": "obj", "color_palette": ["#fff", "#000000", "#000000",
+            [{"type": "obj", "color_palette": ["#FFF", "#000000", "#000000",
                                                "#000000", "#000000", "#000000"]}]))
         self.assertTrue(any("at most 5 colors" in p for p in problems))
         self.assertTrue(any("#RRGGBB" in p for p in problems))
