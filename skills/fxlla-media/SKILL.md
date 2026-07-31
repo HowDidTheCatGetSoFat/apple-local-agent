@@ -50,6 +50,12 @@ finished renders, per model and per video stage, with `n` and `s_per_mp`.
   wrong by 25x and stated it as fact.
 - **A model missing from `observed` has never been timed here.** Say you do not
   know. An invented number is worse than an absent one, because it gets used.
+- **Cost is time, not money.** Everything runs on this machine; there is no
+  per-render charge and no tier. A `$`/`$$`/`$$$` column is a fiction.
+- **Re-read `list_media_models` rather than quoting it from earlier in the
+  conversation.** It is cheap, it changes as fxlla is updated, and `observed`
+  grows every time a render finishes - one session quoted a catalog it read an
+  hour earlier and never saw the measurements that had been added since.
 - When someone is iterating - trying a layout, checking a composition - render
   small or on a fast model first and commit to the full size afterwards. Nobody
   asked for eight minutes; they asked for a poster.

@@ -73,6 +73,31 @@ named when passed to a stage that ignores it, and every stage publishes what it
 runs. Video also got the point stated plainly: cost is stage x steps x
 resolution x duration, and duration is the multiplier people forget.
 
+**A catalog is read once and remembered, which is why the fix did not land.**
+Watching the next run: the measurements shipped at 12:05, and at 12:18 the
+model was still reporting z-image-turbo at "10-15 s". It had called
+`list_media_models` at 11:33, before `observed` existed, and never called it
+again - it had no reason to, since it believed it already knew. In between it
+shelled out to Python three times to subtract two timestamps out of the job
+files by hand, which is precisely the number the catalog now publishes.
+
+Putting a fact somewhere correct is not the same as putting it where it will be
+read. So the expected duration now rides along with the submission itself -
+"job X is running, typically 2 min here", scaled by canvas from the
+per-megapixel rate - and `media_job_status` returns `elapsed_s` on a finished
+job. Neither can go stale in a conversation, because both are computed at the
+moment they are handed over. Error pattern 7 has a sharper form than I had
+written: it is not only that a capability must be discoverable, it is that a
+fact which changes has to arrive at the moment it is used, not once at the
+start.
+
+The same run also showed the model inventing a `$`/`$$`/`$$$` column for
+renders that cost no money at all, twice, and burning 243 s on `z-image` after
+guessing that "zit" meant it - the user meant `z-image-turbo`, four times
+faster. The dollar column is now denied in the text; the guess is not
+something fxlla can fix, but publishing what each name costs makes it cheaper
+to check than to assume.
+
 **The wait window turned out to be dead weight, and the measurements are what
 showed it.** "No puede quedar trabado esperando" - and it was, because I had
 built it to. Renders returned after a bounded 45 second wait so a fast one

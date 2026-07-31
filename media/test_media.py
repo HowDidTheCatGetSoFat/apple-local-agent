@@ -1657,6 +1657,39 @@ class TestObservedTimings(unittest.TestCase):
     def test_no_history_reports_nothing_rather_than_a_guess(self):
         self.assertEqual(media.observed_timings([]), {})
 
+    def test_an_estimate_scales_with_the_canvas(self):
+        # Same model at four times the area is not the same wait, and a caller
+        # told "57 s" for a poster would be wrong by the area ratio.
+        seen = media.observed_timings(self._records())
+        small = media._expected_seconds(
+            argparse.Namespace(cmd="image", model="krea2",
+                               width=1024, height=1024), seen)
+        large = media._expected_seconds(
+            argparse.Namespace(cmd="image", model="krea2",
+                               width=2048, height=2048), seen)
+        self.assertAlmostEqual(large / small, 4.0, places=3)
+
+    def test_an_estimate_falls_back_to_the_median_without_a_size(self):
+        seen = media.observed_timings(self._records())
+        self.assertEqual(
+            media._expected_seconds(
+                argparse.Namespace(cmd="image", model="krea2",
+                                   width=None, height=None), seen),
+            seen["krea2"]["median_s"])
+
+    def test_a_model_never_timed_here_gets_no_estimate(self):
+        seen = media.observed_timings(self._records())
+        self.assertIsNone(media._expected_seconds(
+            argparse.Namespace(cmd="image", model="fibo",
+                               width=None, height=None), seen))
+
+    def test_video_estimates_come_from_the_stage(self):
+        seen = media.observed_timings(self._records())
+        self.assertEqual(
+            media._expected_seconds(
+                argparse.Namespace(cmd="video", stage="distilled"), seen),
+            55.0)
+
     def test_the_catalog_carries_the_measurements_and_the_warning(self):
         # Against a store with a real job record, so a catalog that reported an
         # empty `observed` would fail here rather than look correct.

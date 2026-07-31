@@ -114,6 +114,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Changed
+- The expected duration now travels WITH the submission and the measured one
+  with the result, instead of only living in the catalog. A catalog is read
+  once and remembered: one session read it at 11:33, quoted those numbers for
+  an hour, and never saw the measurements added at 12:05 - so the numbers being
+  wrong outlived the fix. Submitting a render answers with the job id and
+  "typically N here", scaled by canvas where a per-megapixel rate exists, and
+  `media_job_status` adds `elapsed_s` to a finished job, which a caller
+  previously shelled out to Python to compute by subtracting two timestamps.
 - A media render never holds the call open now: `FXLLA_MCP_WAIT_S` defaults to
   0 and the tool returns a job id immediately. The 45 second window it replaced
   was dead weight - the quickest render measured on this hardware is 55 s, so

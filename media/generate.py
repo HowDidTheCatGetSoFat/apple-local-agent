@@ -1015,7 +1015,10 @@ _COST_GUIDE = (
     "model and by video:<stage>, with n samples and s_per_mp for images so it "
     "scales to your canvas. A model absent from `observed` has never been "
     "timed here: say that you do not know rather than estimating, because an "
-    "invented figure was wrong by 25x."
+    "invented figure was wrong by 25x. Cost here is time and GPU, never money: "
+    "there is no per-render charge, so a $/$$/$$$ column is a fiction. Read "
+    "this again rather than quoting an earlier reply - `observed` grows with "
+    "every finished render."
 )
 
 
@@ -1138,6 +1141,32 @@ def observed_timings(records=None):
             entry["s_per_mp"] = round(_median(rates), 1)
         out[key] = entry
     return out
+
+
+def _human_seconds(seconds):
+    if seconds < 90:
+        return "%d s" % round(seconds)
+    return "%d min" % round(seconds / 60.0)
+
+
+def _expected_seconds(args, seen=None):
+    """How long this request has taken here before, or None.
+
+    Scaled by canvas where there is a per-megapixel rate, since the same model
+    at four times the area is not the same wait."""
+    seen = observed_timings() if seen is None else seen
+    if args.cmd == "video":
+        entry = seen.get("video:" + getattr(args, "stage", DEFAULT_STAGE))
+        return entry["median_s"] if entry else None
+    if args.cmd != "image":
+        return None
+    entry = seen.get(getattr(args, "model", None) or DEFAULT_MODEL)
+    if not entry:
+        return None
+    width, height = getattr(args, "width", None), getattr(args, "height", None)
+    if width and height and entry.get("s_per_mp"):
+        return entry["s_per_mp"] * (width * height) / 1e6
+    return entry["median_s"]
 
 
 def _median(values):
@@ -1581,6 +1610,13 @@ def main():
         # background job runs exactly the same generator as the direct call.
         argv = [a for a in sys.argv[1:] if a != "--async"]
         print(jobs.submit(args.cmd, argv, _summary(args))["id"])
+        # The expected wait, on the line after the id. A catalog is read once
+        # and remembered: one caller read it at 11:33, kept quoting those
+        # numbers for an hour, and never saw the measurements added at 12:05.
+        # A figure that arrives WITH the submission cannot go stale that way.
+        estimate = _expected_seconds(args)
+        if estimate:
+            print("typically %s here" % _human_seconds(estimate))
         return
     {"image": cmd_image, "video": cmd_video, "voice": cmd_voice,
      "edit": cmd_edit, "upscale": cmd_upscale, "models": cmd_models, "loras": cmd_loras,

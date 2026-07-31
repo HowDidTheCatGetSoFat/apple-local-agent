@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEDIA = os.path.join(HERE, "generate.py")
@@ -304,16 +305,23 @@ def _job_record(job_id, wait_s):
         return None
 
 
-def _still_running(job_id, status):
+def _still_running(job_id, status, note="", elapsed=None):
     """What to say about a job that has not landed yet.
 
     It tells the caller to STOP, not to wait: holding the conversation open for
     a render that takes minutes blocks whoever is driving it from doing
-    anything else, and no amount of polling makes the render faster."""
-    return ("job %s is %s. Tell the user the job id and finish your turn - do "
-            "NOT wait for it and do NOT submit it again. Check it with "
-            "media_job_status when they next ask, or when you have something "
-            "else to do first." % (job_id, status))
+    anything else, and no amount of polling makes the render faster. The
+    expected duration rides along, because a catalog read once at the start of
+    a session is still being quoted an hour later."""
+    parts = ["job %s is %s" % (job_id, status)]
+    if elapsed is not None:
+        parts.append("%d s elapsed" % round(elapsed))
+    if note:
+        parts.append(note)
+    return ("%s. Tell the user the job id and how long it is expected to take, "
+            "then finish your turn - do NOT wait for it and do NOT submit it "
+            "again. Check it with media_job_status when they next ask, or when "
+            "you have something else to do first." % ", ".join(parts))
 
 
 def _spawn(cmd, args, failure):
@@ -340,19 +348,26 @@ def _spawn(cmd, args, failure):
                           env=os.environ)
     if proc.returncode != 0:
         return "error: " + (proc.stderr.strip() or failure)
-    job_id = proc.stdout.strip()
-    if not job_id:
+    # Line one is the id; anything after is what the submission wants to tell
+    # the caller, such as how long this has taken here before.
+    lines = proc.stdout.strip().splitlines()
+    if not lines:
         return "error: no job id returned"
+    job_id, note = lines[0].strip(), " ".join(l.strip() for l in lines[1:])
     rec = _job_record(job_id, WAIT_S)
     if rec is None:
-        return job_id
+        # The job was submitted; only reading it back failed. Returning a bare
+        # id here threw away the estimate that came with the submission, which
+        # is the one number guaranteed to reach a caller that will not re-read
+        # the catalog.
+        return _still_running(job_id, "submitted", note)
     status = rec.get("status")
     if status == "done":
         return rec.get("output") or job_id
     if status in ("failed", "cancelled"):
         return "error: job %s %s: %s" % (job_id, status,
                                          (rec.get("error") or "").strip()[-800:])
-    return _still_running(job_id, status)
+    return _still_running(job_id, status, note)
 
 
 def _run(subcmd, positional, flags, args):
@@ -388,8 +403,16 @@ def run_job_status(args):
     rec = _job_record(job_id, wait_s)
     if rec is None:
         return "error: unknown job: %s" % job_id
+    started, finished = rec.get("started"), rec.get("finished")
     if rec.get("status") in ("queued", "running"):
-        return _still_running(job_id, rec["status"])
+        elapsed = (time.time() - started) if started else None
+        return _still_running(job_id, rec["status"], elapsed=elapsed)
+    # How long it actually took, computed here. Without it a caller wanting to
+    # report the wait shelled out to python to subtract two timestamps - and
+    # this is the one place a real measurement is guaranteed to reach a caller
+    # that never re-reads the catalog.
+    if started is not None and finished is not None and finished > started:
+        rec = dict(rec, elapsed_s=round(finished - started, 1))
     return json.dumps(rec)
 
 

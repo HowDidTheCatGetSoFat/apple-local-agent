@@ -107,6 +107,33 @@ elapsed=$(( $(date +%s) - start ))
 if [ "$elapsed" -lt 30 ]; then pass "wait_s is capped at the server window ($elapsed s)"
 else fail "wait_s is capped at the server window ($elapsed s)"; fi
 
+# --- a finished job reports how long it took --------------------------------
+# A caller that wanted to report the wait shelled out to python to subtract two
+# timestamps, and it is the one place a real measurement reaches someone who
+# read the catalog once at the start of the session and never again.
+DONE_ID="1785500001-abcdef"
+cat > "$JOBS/$DONE_ID.json" <<EOF
+{"id":"$DONE_ID","kind":"image","status":"done","argv":["image","x"],
+ "summary":"x","output":"/tmp/x.png","error":null,"pid":$SLEEPER,
+ "created":1785500000.0,"started":1785500000.0,"finished":1785500123.0,
+ "log":"$JOBS/$DONE_ID.log"}
+EOF
+done_out="$(FXLLA_STORE="$STORE" python3 "$MCP" <<EOF
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"media_job_status","arguments":{"job_id":"$DONE_ID"}}}
+EOF
+)"
+case "$done_out" in
+  *'elapsed_s'*123*) pass "a finished job reports its measured duration";;
+  *) fail "a finished job reports its measured duration";;
+esac
+
+# --- a running job says how long it has been going --------------------------
+case "$status_line" in
+  *"elapsed"*) pass "a running job reports how long it has been going";;
+  *) fail "a running job reports how long it has been going";;
+esac
+
 # --- an unknown job is an error, not a hang --------------------------------
 out2="$(FXLLA_STORE="$STORE" FXLLA_MCP_WAIT_S=3 python3 "$MCP" <<EOF
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
@@ -187,6 +214,46 @@ for tool in m.TOOLS:
 PY
 then pass "every generator takes and forwards an output path"
 else fail "every generator takes and forwards an output path"; fi
+
+# --- the expected duration rides along with the job id ----------------------
+# A catalog is read once and remembered: one caller read it at 11:33, quoted
+# those numbers for an hour, and never saw the measurements added at 12:05. A
+# figure attached to the submission itself cannot go stale that way.
+if python3 - "$ROOT" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/media")
+import media_mcp as m
+
+
+class Submit:
+    returncode = 0
+    stdout = "1785500000-abcdef\ntypically 2 min here"
+    stderr = ""
+
+
+class Missing:
+    returncode = 1
+    stdout = ""
+    stderr = "unknown job"
+
+
+calls = []
+
+
+def fake_run(cmd, **kw):
+    calls.append(cmd)
+    return Submit() if "--async" in cmd else Missing()
+
+
+m.subprocess.run = fake_run
+text = m.run_generate({"prompt": "p"})
+if "typically 2 min here" not in text:
+    sys.exit("the submission dropped its estimate: %s" % text)
+if "1785500000-abcdef" not in text:
+    sys.exit("the submission dropped its job id: %s" % text)
+PY
+then pass "the expected duration comes back with the job id"
+else fail "the expected duration comes back with the job id"; fi
 
 # --- every tool still advertises itself ------------------------------------
 tools="$(FXLLA_STORE="$STORE" python3 "$MCP" <<'EOF'
