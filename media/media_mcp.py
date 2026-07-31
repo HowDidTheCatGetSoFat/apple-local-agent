@@ -68,8 +68,9 @@ TOOLS = [
          "depth_image": {"type": "string",
                          "description": "Use this depth map instead of deriving one."},
          "save_depth": {"type": "boolean",
-                        "description": "Write the derived depth map so a later "
-                                       "controlnet step can use it as input."},
+                        "description": "Also write the derived depth map. Its "
+                                       "path is returned on a second line, so "
+                                       "a later control step can use it."},
      }, "required": ["prompt"]}},
     {"name": "generate_video",
      "description": "Generate a short video from a text prompt using the local "

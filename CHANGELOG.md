@@ -6,7 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
-- ControlNet and depth, both stackable. `--control` is repeatable, and the
+- ControlNet and depth, both stackable. Their weight rows list BOTH repos
+  each needs - the adapter and the base model - because listing only the
+  adapter let the consent gate pass on 4 GB while mflux then pulled 58 GB of
+  FLUX base weights mid-render, which is precisely the transfer the gate
+  exists to stop. `--control` is repeatable, and the
   two families are not interchangeable, so the model's capabilities decide the
   wire form: FLUX takes a control image plus an optional checkpoint
   (`IMAGE[,CHECKPOINT]`), Z-Image takes one combined spec

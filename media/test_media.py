@@ -809,6 +809,26 @@ class TestIdeogramCaption(unittest.TestCase):
         self.assertTrue(any("obj, text" in p for p in problems))
         self.assertTrue(any("needs a 'text' string" in p for p in problems))
 
+    def test_style_palette_allows_sixteen_but_elements_only_five(self):
+        # mflux's own limits differ by context; hardcoding 5 falsely rejected
+        # a valid caption, and a false rejection blocks a working render.
+        sixteen = ["#%06x" % i for i in range(16)]
+        ok = json.dumps({"high_level_description": "x",
+                         "style_description": {"color_palette": sixteen},
+                         "compositional_deconstruction": {"elements": []}})
+        self.assertEqual(media.check_ideogram_caption(ok), [])
+        too_many = json.dumps({
+            "high_level_description": "x",
+            "compositional_deconstruction": {"elements": [
+                {"type": "obj", "color_palette": sixteen[:6]}]}})
+        self.assertTrue(any("at most 5" in p
+                            for p in media.check_ideogram_caption(too_many)))
+
+    def test_a_missing_composition_section_is_flagged(self):
+        problems = media.check_ideogram_caption(
+            json.dumps({"high_level_description": "just a description"}))
+        self.assertTrue(any("compositional_deconstruction" in p for p in problems))
+
     def test_unknown_keys_and_palette_limits(self):
         problems = media.check_ideogram_caption(json.dumps({"nonsense": 1}))
         self.assertTrue(any("unknown top-level keys" in p for p in problems))
@@ -913,6 +933,27 @@ class TestControlAndDepth(unittest.TestCase):
                                   save_depth=True, model_name="depth")
         self.assertEqual(cmd[cmd.index("--depth-image-path") + 1], d)
         self.assertIn("--save-depth-map", cmd)
+
+    def test_prompt_file_replaces_the_prompt_flag(self):
+        # mflux declares them mutually exclusive ("--prompt-file: not allowed
+        # with argument --prompt"), verified against the real CLI, so sending
+        # both made every --prompt-file render die in argparse.
+        spec = {"cli": "x", "steps": None, "caps": {"prompt-file"}}
+        f = os.path.join(tempfile.mkdtemp(), "p.txt")
+        open(f, "w").write("a cat")
+        cmd = media.build_command(spec, "ignored", "/o.png", prompt_file=f,
+                                  model_name="m")
+        self.assertIn("--prompt-file", cmd)
+        self.assertNotIn("--prompt", cmd)
+        self.assertEqual(cmd[cmd.index("--prompt-file") + 1], f)
+
+    def test_the_depth_map_path_is_derivable(self):
+        # mflux writes "<base>_depth_map<ext>"; the caller needs it to chain a
+        # control step, so it cannot stay an internal naming convention.
+        self.assertEqual(media.depth_map_path("/a/b/img.png"),
+                         "/a/b/img_depth_map.png")
+        self.assertEqual(media.depth_map_path("/a/b/img"),
+                         "/a/b/img_depth_map.png")
 
     def test_guidance(self):
         spec = {"cli": "x", "steps": None, "caps": {"guidance"}}

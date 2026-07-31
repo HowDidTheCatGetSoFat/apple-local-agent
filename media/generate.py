@@ -70,6 +70,17 @@ EDIT_BIN = os.environ.get("FXLLA_EDIT_BIN", "")
 UPSCALE_BIN = os.environ.get("FXLLA_UPSCALE_BIN", "")
 
 
+def depth_map_path(output):
+    """Where mflux writes the derived depth map: "<base>_depth_map<ext>",
+    beside the image (mflux/callbacks/instances/depth_saver.py).
+
+    Computed and reported rather than left implicit, because the point of
+    --save-depth-map is feeding the map into a later control step, and a
+    caller that cannot find the file cannot chain anything."""
+    base, ext = os.path.splitext(output)
+    return "%s_depth_map%s" % (base, ext or ".png")
+
+
 def resolve_output(output, kind, ext):
     """Where a render should land: OUT_DIR when nothing was asked for, a
     generated name INSIDE the path when it is an existing directory, and the
@@ -272,7 +283,16 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
     cmd = [mflux_cli(spec["cli"])]
     if spec.get("base_model"):
         cmd += ["--base-model", spec["base_model"]]
-    cmd += ["--prompt", prompt, "--output", output]
+    if prompt_file:
+        # mflux declares these mutually exclusive ("--prompt-file: not allowed
+        # with argument --prompt"), so sending both made every --prompt-file
+        # render die in argparse.
+        _require_cap(spec, "prompt-file", "--prompt-file", model_name)
+        if not os.path.isfile(prompt_file):
+            raise ValueError("prompt file not found: %s" % prompt_file)
+        cmd += ["--prompt-file", prompt_file, "--output", output]
+    else:
+        cmd += ["--prompt", prompt, "--output", output]
     # Every optional flag goes through the capability gate, not just the ones
     # added most recently: a model whose CLI lacks --seed or a fixed quantize
     # is exactly what this catalog exists to express, and forwarding the flag
@@ -289,11 +309,6 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
     if negative:
         _require_cap(spec, "negative", "--negative-prompt", model_name)
         cmd += ["--negative-prompt", negative]
-    if prompt_file:
-        _require_cap(spec, "prompt-file", "--prompt-file", model_name)
-        if not os.path.isfile(prompt_file):
-            raise ValueError("prompt file not found: %s" % prompt_file)
-        cmd += ["--prompt-file", prompt_file]
     if init_image:
         _require_cap(spec, "init-image", "--init-image", model_name)
         if not os.path.isfile(init_image):
@@ -418,12 +433,17 @@ IDEOGRAM_ELEMENT_KEYS = {"type", "bbox", "text", "desc", "color_palette"}
 IDEOGRAM_ELEMENT_TYPES = {"obj", "text"}
 
 
-def _check_color_palette(palette, path, problems):
+def _check_color_palette(palette, path, problems, max_colors):
+    """max_colors differs by context in mflux's own verifier: 16 for the
+    overall style palette, 5 per element. Hardcoding 5 falsely rejected a
+    valid caption, which is worse than missing one - it blocks a render that
+    would have worked."""
     if not isinstance(palette, list):
         problems.append("%s: expected a list" % path)
         return
-    if len(palette) > 5:
-        problems.append("%s: at most 5 colors, got %d" % (path, len(palette)))
+    if len(palette) > max_colors:
+        problems.append("%s: at most %d colors, got %d"
+                        % (path, max_colors, len(palette)))
     for i, color in enumerate(palette):
         if not (isinstance(color, str) and len(color) == 7 and color.startswith("#")):
             problems.append("%s[%d]: expected #RRGGBB, got %r" % (path, i, color))
@@ -452,7 +472,10 @@ def check_ideogram_caption(text):
             problems.append("style_description: unknown keys: %s" % ", ".join(sorted(bad)))
         if "color_palette" in style:
             _check_color_palette(style["color_palette"],
-                                 "style_description.color_palette", problems)
+                                 "style_description.color_palette", problems, 16)
+    if "compositional_deconstruction" not in caption:
+        problems.append("compositional_deconstruction: missing (mflux expects "
+                        "it in a JSON caption)")
     comp = caption.get("compositional_deconstruction")
     if comp is not None and not isinstance(comp, dict):
         problems.append("compositional_deconstruction: expected an object")
@@ -477,7 +500,7 @@ def check_ideogram_caption(text):
             problems.append("%s: a text element needs a 'text' string" % path)
         if "color_palette" in element:
             _check_color_palette(element["color_palette"],
-                                 "%s.color_palette" % path, problems)
+                                 "%s.color_palette" % path, problems, 5)
         if "bbox" in element:
             bbox = element["bbox"]
             if not isinstance(bbox, list) or len(bbox) != 4:
@@ -771,6 +794,13 @@ def cmd_image(args):
         controls=args.controls, controlnet_strength=args.controlnet_strength,
         depth_image=args.depth_image, save_depth=args.save_depth)
     print(path)
+    # The derived depth map is a second artifact and the reason --save-depth-map
+    # exists, so it goes on stdout next to the image: a caller chaining a
+    # control step needs the path, not the naming convention.
+    if args.save_depth:
+        derived = depth_map_path(path)
+        if os.path.isfile(derived):
+            print(derived)
     facts = quality.image_facts(path)
     if facts.get("width"):
         print("size: %dx%d, %d KB" % (facts["width"], facts["height"],
