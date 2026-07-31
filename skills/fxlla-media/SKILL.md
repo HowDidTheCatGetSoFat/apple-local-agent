@@ -40,12 +40,25 @@ deliberately:
 Say which model you chose and why, in one short clause. If the user names one,
 use it.
 
+**Cost is part of the choice.** A big canvas on a 20 or 50 step model is
+minutes, not seconds. When someone is iterating - trying a layout, checking a
+composition - render small or on a fast model first and only then commit to the
+full size. Nobody asked for eight minutes; they asked for a poster.
+
 ## Options worth setting
 
 - `seed` - set one whenever the user might want this image again or a variation
   of it, and report it. Without a seed a good result is unrepeatable.
-- `steps` - more is slower and usually better. The distilled models have a low
-  default for a reason; leave it unless quality is the complaint.
+- `steps` - the cost knob, and roughly linear: `list_media_models` reports
+  `default_steps` per model and they span 4 to 50, which on a large canvas is
+  the difference between a minute and most of ten. Leave it alone unless
+  quality is the complaint. **If speed is the complaint, change model, not
+  steps** - a distilled model at its own default beats a slow one starved of
+  steps, which pays the same wait for a worse image.
+- `preset` - `ideogram4` only, and the ONLY way to set its cost: the preset
+  fixes step count and guidance together, which is why that model refuses
+  `steps` and `guidance` outright. `V4_TURBO_12` to iterate on a layout,
+  `V4_DEFAULT_20` normally, `V4_QUALITY_48` when the typography has to land.
 - `guidance` - how literally the prompt is followed. Raise it when the model
   drifts from the request, lower it when the output looks stiff or over-baked.
 - `negative` - what must NOT appear. Cheap and effective against the usual
@@ -110,6 +123,17 @@ Pass `async: false` only when you specifically need the path in the same call
 and know the render is short; a long one will outlast your own timeout.
 
 ## Video
+
+**Video is the most expensive thing here**, and its cost is the product of four
+things: `stage`, the step count under it, the resolution, and the duration -
+every frame gets sampled, so twice the seconds is twice the work. Iterate short
+and on `distilled`, then commit to the real length.
+
+`stage` is the main knob: `distilled` (fast default), `one-stage` (better at
+small sizes), `two-stage`, `two-stages-hq` (slowest). Each has its own step
+control and ignores the other - `one-stage` takes `steps`, the rest take
+`stage1_steps` and `stage2_steps`. Passing the wrong one is refused and names
+the right one. `list_media_models` reports all of it under `video`.
 
 `generate_video` takes `seconds` for duration - prefer it over `frames`, and do
 not pass both. It returns the path plus the MEASURED duration, frame count and

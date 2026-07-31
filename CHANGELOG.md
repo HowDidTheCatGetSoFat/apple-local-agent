@@ -114,6 +114,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Fixed
+- Nothing told a caller what a render would cost, for image or for video, so
+  the choice that decides between one minute and ten was made blind - an eight
+  minute poster looked identical to a fast one until it had been waited for.
+  `list_media_models` now reports `default_steps` per image model, the count it
+  will really run (they span 4 to 50), and a `video` section with each stage,
+  its step counts, and how duration multiplies the work. Video also gained the
+  step knobs it never had: `--steps` (one-stage), `--stage1-steps` and
+  `--stage2-steps` (the two-stage pipelines), each refused with the right one
+  named when passed to a stage that ignores it, per ltx's own `--help`.
+- Ideogram 4 accepted `--steps` and `--guidance` and discarded both - its
+  presets fix them, which its CLI says in a warning nothing was reading. So a
+  request for 12 steps waited for the preset's 20 and was told nothing. Both
+  are now refused by name, and `--preset` is exposed instead: `V4_TURBO_12`,
+  `V4_DEFAULT_20`, `V4_QUALITY_48`, reported with their step counts. A flag
+  that is accepted and ignored is worse than one that is refused.
 - No MCP generator exposed `output`, so over MCP there was no way to say where
   a file should go: "save it in ~/Downloads" was accepted and silently dropped,
   every render landed in the media directory, and the reported path looked like

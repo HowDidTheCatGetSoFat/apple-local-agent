@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import importlib
 import io
@@ -1479,6 +1480,115 @@ class TestDimensionGrid(unittest.TestCase):
     def test_the_constraint_is_reported_by_the_catalog(self):
         # Discoverable, or the caller only learns it from a failed render.
         self.assertEqual(media._DIM_STEP.get("ideogram4"), 16)
+
+
+class TestIdeogramPreset(unittest.TestCase):
+    # Ideogram 4's argparse takes --steps and --guidance and then warns that
+    # both are ignored, because its presets fix them. Listing those as caps let
+    # a caller ask for 12 steps, wait for the preset's 20, and be told nothing.
+    def test_steps_is_refused_because_it_would_be_ignored(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(media.MODELS["ideogram4"], "p", "/o.png",
+                                steps=12, model_name="ideogram4")
+        self.assertIn("--steps", str(ctx.exception))
+
+    def test_guidance_is_refused_for_the_same_reason(self):
+        with self.assertRaises(ValueError):
+            media.build_command(media.MODELS["ideogram4"], "p", "/o.png",
+                                guidance=5.0, model_name="ideogram4")
+
+    def test_the_preset_is_how_cost_is_set(self):
+        cmd = media.build_command(media.MODELS["ideogram4"], "p", "/o.png",
+                                  preset="v4_turbo_12", model_name="ideogram4")
+        self.assertEqual(cmd[cmd.index("--preset") + 1], "V4_TURBO_12")
+
+    def test_an_unknown_preset_lists_the_real_ones(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(media.MODELS["ideogram4"], "p", "/o.png",
+                                preset="fast", model_name="ideogram4")
+        self.assertIn("V4_DEFAULT_20", str(ctx.exception))
+
+    def test_no_other_model_takes_a_preset(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(media.MODELS["krea2"], "p", "/o.png",
+                                preset="V4_TURBO_12", model_name="krea2")
+        self.assertIn("ideogram4", str(ctx.exception))
+
+
+class TestDefaultStepsAreReported(unittest.TestCase):
+    # Cost is roughly linear in steps and the defaults span 4 to 50, so a blank
+    # tells a caller nothing: an eight-minute render and a one-minute one look
+    # identical until both have been waited for.
+    def test_every_model_reports_what_it_will_run(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            media.cmd_models(argparse.Namespace(json=True))
+        models = json.loads(out.getvalue())["models"]
+        missing = [n for n, m in models.items() if not m.get("default_steps")]
+        self.assertEqual(missing, [], "no step count for: %s" % missing)
+
+    def test_a_catalog_pin_wins_over_the_backend_default(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            media.cmd_models(argparse.Namespace(json=True))
+        models = json.loads(out.getvalue())["models"]
+        self.assertEqual(models["z-image-turbo"]["default_steps"],
+                         media.MODELS["z-image-turbo"]["steps"])
+
+    def test_the_presets_travel_with_the_model_that_has_them(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            media.cmd_models(argparse.Namespace(json=True))
+        models = json.loads(out.getvalue())["models"]
+        self.assertEqual(models["ideogram4"]["presets"]["V4_TURBO_12"], 12)
+        self.assertNotIn("presets", models["krea2"])
+
+
+class TestVideoStepKnobs(unittest.TestCase):
+    # Video had no cost surface at all: the stage was the only visible control
+    # and the step counts under it were unreachable, so "make it faster" had
+    # exactly one answer regardless of what was actually expensive.
+    def test_one_stage_takes_steps(self):
+        cmd = media.build_video_command("p", "/o.mp4", stage="one-stage",
+                                        bin_path="ltx", steps=12)
+        self.assertEqual(cmd[cmd.index("--steps") + 1], "12")
+
+    def test_the_two_stage_pipelines_take_stage_steps(self):
+        for stage in ("distilled", "two-stage", "two-stages-hq"):
+            cmd = media.build_video_command("p", "/o.mp4", stage=stage,
+                                            bin_path="ltx", stage1_steps=12,
+                                            stage2_steps=2)
+            self.assertEqual(cmd[cmd.index("--stage1-steps") + 1], "12", stage)
+            self.assertEqual(cmd[cmd.index("--stage2-steps") + 1], "2", stage)
+
+    def test_a_knob_the_stage_ignores_is_refused_and_names_the_right_one(self):
+        # Per ltx's own --help, --steps is one-stage only. Forwarding it
+        # anywhere else is accepted and discarded, which is the exact failure
+        # the image capability gate exists to prevent.
+        with self.assertRaises(ValueError) as ctx:
+            media.build_video_command("p", "/o.mp4", stage="distilled",
+                                      bin_path="ltx", steps=12)
+        self.assertIn("--stage1-steps", str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx:
+            media.build_video_command("p", "/o.mp4", stage="one-stage",
+                                      bin_path="ltx", stage1_steps=12)
+        self.assertIn("--steps", str(ctx.exception))
+
+    def test_no_step_flags_when_none_asked_for(self):
+        cmd = media.build_video_command("p", "/o.mp4", bin_path="ltx")
+        for flag in ("--steps", "--stage1-steps", "--stage2-steps"):
+            self.assertNotIn(flag, cmd)
+
+    def test_every_stage_publishes_its_cost(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            media.cmd_models(argparse.Namespace(json=True))
+        video = json.loads(out.getvalue())["video"]
+        self.assertEqual(video["default_stage"], media.DEFAULT_STAGE)
+        self.assertEqual(sorted(video["stages"]), sorted(media.VIDEO_STAGES))
+        for name, info in video["stages"].items():
+            self.assertTrue(info.get("steps") or info.get("stage1_steps"), name)
+            self.assertIn(info["steps_flag"], ("steps", "stage1_steps"), name)
 
 
 class TestLoraNameResolution(unittest.TestCase):

@@ -199,6 +199,23 @@ MODELS = load_models()
 # which is what this catches in a millisecond.
 _DIM_STEP = {"ideogram4": 16}
 
+# Ideogram 4's sampler presets, which fix the step count AND the guidance
+# schedule - hence no --steps or --guidance on this model. Names and counts
+# from mflux's Ideogram4Scheduler.PRESETS.
+IDEOGRAM_PRESETS = {"V4_TURBO_12": 12, "V4_DEFAULT_20": 20, "V4_QUALITY_48": 48}
+
+# Steps each model actually runs when nothing is passed, from mflux's
+# MODEL_INFERENCE_STEPS. Reported, never sent: this is the cost signal a caller
+# needs to choose between models, and without it an eight-minute render and a
+# one-minute render look identical from the outside. Where fxlla pins a value
+# in the catalog, that pin wins and is what gets reported.
+_MFLUX_DEFAULT_STEPS = {
+    "dev": 25, "schnell": 4, "krea2": 8, "qwen": 20, "fibo": 50,
+    "z-image": 50, "z-image-turbo": 9, "z-controlnet": 8, "controlnet": 25,
+    "depth": 25, "ernie": 50, "ernie-turbo": 8, "boogu": 4,
+    "flux2-klein": 4, "mage-flow": 20, "ideogram4": 20,
+}
+
 
 def _check_dim_step(model_name, width, height):
     step = _DIM_STEP.get(model_name)
@@ -231,6 +248,29 @@ def _require_cap(spec, cap, flag, model_name=""):
 VIDEO_STAGES = ("distilled", "one-stage", "two-stage", "two-stages-hq")
 DEFAULT_STAGE = "distilled"
 DEFAULT_FRAME_RATE = 24
+
+# What each stage costs and which step knob moves it, quoted from ltx-2-mlx's
+# own `generate --help`. Video had no cost surface at all: the only thing a
+# caller could see was "distilled, the fast path", so the pipeline that decides
+# whether a clip takes one minute or twenty was picked blind, and the step
+# counts underneath it were not reachable from fxlla at all.
+VIDEO_STAGE_INFO = {
+    "distilled": {
+        "steps_flag": "stage1_steps", "stage1_steps": 30, "stage2_steps": 3,
+        "note": "Half-res distilled + upscale + distilled refine, no CFG. "
+                "The fast default."},
+    "one-stage": {
+        "steps_flag": "steps", "steps": 8,
+        "note": "Dev model + CFG at full resolution, no upscaler. Better than "
+                "distilled at small sizes, slower than two-stage at large."},
+    "two-stage": {
+        "steps_flag": "stage1_steps", "stage1_steps": 30, "stage2_steps": 3,
+        "note": "Dev + CFG at half-res, upscale, distilled refine. Needs the "
+                "q8 model."},
+    "two-stages-hq": {
+        "steps_flag": "stage1_steps", "stage1_steps": 15, "stage2_steps": 3,
+        "note": "HQ two-stage (res_2s sampler for stage 1). The slowest."},
+}
 
 # Voice runs through a separate interpreter (FXLLA_VOICE_PYTHON) that has
 # mlx-audio installed, so fxlla itself never imports it. Chatterbox ships no
@@ -302,7 +342,7 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
                   metadata=False, negative=None, prompt_file=None, loras=None,
                   lora_style=None, init_image=None, model_name="", guidance=None,
                   controls=None, controlnet_strength=None, depth_image=None,
-                  save_depth=False):
+                  save_depth=False, preset=None):
     """Assemble the mflux-cv argument vector for one image generation.
 
     Optional flags are checked against the model's declared capabilities
@@ -413,6 +453,12 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
         # to be reachable rather than discarded inside the render.
         _require_cap(spec, "save-depth", "--save-depth-map", model_name)
         cmd += ["--save-depth-map"]
+    if preset:
+        _require_cap(spec, "preset", "--preset", model_name)
+        if preset.upper() not in IDEOGRAM_PRESETS:
+            raise ValueError("unknown preset %s: one of %s"
+                             % (preset, ", ".join(sorted(IDEOGRAM_PRESETS))))
+        cmd += ["--preset", preset.upper()]
     if steps is not None:
         _require_cap(spec, "steps", "--steps", model_name)
         cmd += ["--steps", str(steps)]
@@ -596,7 +642,7 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                    negative=None, prompt_file=None, loras=None,
                    lora_style=None, init_image=None, guidance=None,
                    controls=None, controlnet_strength=None, depth_image=None,
-                   save_depth=False):
+                   save_depth=False, preset=None):
     if not prompt:
         raise ValueError("prompt is required")
     model = model or DEFAULT_MODEL
@@ -623,7 +669,8 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                         lora_style=lora_style, init_image=init_image,
                         model_name=model, guidance=guidance, controls=controls,
                         controlnet_strength=controlnet_strength,
-                        depth_image=depth_image, save_depth=save_depth)
+                        depth_image=depth_image, save_depth=save_depth,
+                        preset=preset)
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "%s failed" % spec["cli"])[-800:])
@@ -634,7 +681,8 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
 def build_video_command(prompt, output, stage=DEFAULT_STAGE, frames=None,
                         frame_rate=DEFAULT_FRAME_RATE, width=None, height=None,
                         seed=None, low_ram=False, model=None, bin_path=None,
-                        images=None):
+                        images=None, steps=None, stage1_steps=None,
+                        stage2_steps=None):
     """Assemble the ltx-2-mlx argument vector for one video generation.
 
     generate requires exactly one stage flag (distilled is the fast default) and
@@ -642,6 +690,29 @@ def build_video_command(prompt, output, stage=DEFAULT_STAGE, frames=None,
     if stage not in VIDEO_STAGES:
         raise ValueError("unknown stage '%s'; try one of: %s"
                          % (stage, ", ".join(VIDEO_STAGES)))
+    # Each stage has ONE step knob and ignores the other, per ltx's --help
+    # ("--steps: Denoising steps for one-stage"). Forwarding the wrong one
+    # would be accepted and discarded, which is the failure the image
+    # capability gate exists to prevent - the same rule, applied to video.
+    wanted = VIDEO_STAGE_INFO[stage]["steps_flag"]
+    for name, value in (("steps", steps), ("stage1_steps", stage1_steps),
+                        ("stage2_steps", stage2_steps)):
+        if value is None:
+            continue
+        allowed = (name == wanted
+                   or (name == "stage2_steps" and wanted == "stage1_steps"))
+        if not allowed:
+            raise ValueError(
+                "stage '%s' ignores --%s; its step knob is --%s"
+                % (stage, name.replace("_", "-"), wanted.replace("_", "-")))
+    if steps is not None:
+        cmd_steps = ["--steps", str(steps)]
+    else:
+        cmd_steps = []
+    if stage1_steps is not None:
+        cmd_steps += ["--stage1-steps", str(stage1_steps)]
+    if stage2_steps is not None:
+        cmd_steps += ["--stage2-steps", str(stage2_steps)]
     cmd = [bin_path or VIDEO_BIN, "generate", "--%s" % stage,
            "--prompt", prompt, "--output", output,
            "--frame-rate", str(frame_rate if frame_rate is not None else DEFAULT_FRAME_RATE)]
@@ -669,7 +740,7 @@ def build_video_command(prompt, output, stage=DEFAULT_STAGE, frames=None,
         cmd += ["--seed", str(seed)]
     if low_ram:
         cmd += ["--low-ram"]
-    return cmd
+    return cmd + cmd_steps
 
 
 def validate_video_output(path):
@@ -688,7 +759,8 @@ def validate_video_output(path):
 def generate_video(prompt, stage=DEFAULT_STAGE, frames=None,
                    frame_rate=DEFAULT_FRAME_RATE, width=None, height=None,
                    seed=None, low_ram=False, model=None, output=None,
-                   keep_models=False, images=None):
+                   keep_models=False, images=None, steps=None,
+                   stage1_steps=None, stage2_steps=None):
     if not prompt:
         raise ValueError("prompt is required")
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -697,7 +769,9 @@ def generate_video(prompt, stage=DEFAULT_STAGE, frames=None,
     cmd = build_video_command(prompt, output, stage=stage, frames=frames,
                               frame_rate=frame_rate, width=width, height=height,
                               seed=seed, low_ram=low_ram, model=model,
-                              images=images)
+                              images=images, steps=steps,
+                              stage1_steps=stage1_steps,
+                              stage2_steps=stage2_steps)
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "video generation failed")[-800:])
@@ -827,7 +901,8 @@ def cmd_image(args):
         loras=args.loras, lora_style=args.lora_style,
         init_image=args.init_image, guidance=args.guidance,
         controls=args.controls, controlnet_strength=args.controlnet_strength,
-        depth_image=args.depth_image, save_depth=args.save_depth)
+        depth_image=args.depth_image, save_depth=args.save_depth,
+        preset=args.preset)
     print(path)
     # The derived depth map is a second artifact and the reason --save-depth-map
     # exists, so it goes on stdout next to the image: a caller chaining a
@@ -854,7 +929,8 @@ def cmd_video(args):
         args.prompt, stage=args.stage, frames=frames, frame_rate=args.frame_rate,
         width=args.width, height=args.height, seed=args.seed, low_ram=args.low_ram,
         model=args.model, output=args.output, keep_models=args.keep_models,
-        images=args.images)
+        images=args.images, steps=args.steps, stage1_steps=args.stage1_steps,
+        stage2_steps=args.stage2_steps)
     print(path)
     # The measured result, not the request: a caller reading back its own
     # --frames has no way to know what the backend actually produced, and one
@@ -937,24 +1013,54 @@ def cmd_models(args):
             "default": DEFAULT_MODEL,
             "models": {n: {"cli": s["cli"], "steps": s["steps"],
                            "caps": sorted(s["caps"]), "note": s["note"],
+                           # What it will actually run if nothing is passed.
+                           # Cost is roughly linear in this, and the models
+                           # differ by more than 10x - without it a caller
+                           # cannot tell a one-minute render from an
+                           # eight-minute one until it has waited for both.
+                           "default_steps": s["steps"] or _MFLUX_DEFAULT_STEPS.get(n),
                            # Only where the backend enforces it; absent means
                            # any size. Stated here so a caller sizes a poster
                            # correctly instead of learning it from a crash.
-                           **({"dim_step": _DIM_STEP[n]} if n in _DIM_STEP else {})}
+                           **({"dim_step": _DIM_STEP[n]} if n in _DIM_STEP else {}),
+                           **({"presets": IDEOGRAM_PRESETS}
+                              if "preset" in s["caps"] else {})}
                        for n, s in MODELS.items()},
             "lora_styles": list(LORA_STYLES),
             "prompt_formats": {"ideogram4": IDEOGRAM_PROMPT_FORMAT},
+            # Video belongs here too. It was left out, so the only thing a
+            # caller could see about the pipeline that decides between a short
+            # wait and a very long one was the word "distilled".
+            "video": {
+                "default_stage": DEFAULT_STAGE,
+                "frame_rate": DEFAULT_FRAME_RATE,
+                "stages": VIDEO_STAGE_INFO,
+                "cost": "Wall time scales with stage, step count, resolution "
+                        "AND duration: seconds x frame_rate is the frame count, "
+                        "and every frame is sampled. A long clip at a slow "
+                        "stage is the most expensive thing here - iterate "
+                        "short and distilled, then commit.",
+            },
         }, indent=1))
         return
     print("%-14s %-9s %s" % ("MODEL", "STEPS", "NOTE"))
     for name in sorted(MODELS):
         spec = MODELS[name]
         default = " *" if name == DEFAULT_MODEL else "  "
-        print("%-14s%s%-9s %s" % (name, default,
-                                  spec["steps"] if spec["steps"] else "cli",
+        # The step count it will really run, not a blank: cost is roughly
+        # linear in it and these span 4 to 50, which is the difference between
+        # a minute and most of ten.
+        steps = spec["steps"] or _MFLUX_DEFAULT_STEPS.get(name)
+        print("%-14s%s%-9s %s" % (name, default, steps if steps else "cli",
                                   spec["note"]))
-    print("\n* default (FXLLA_MEDIA_MODEL). Capabilities per model: "
-          "fxlla media models --json")
+    print("\nVIDEO STAGES   STEPS     NOTE")
+    for name, info in VIDEO_STAGE_INFO.items():
+        default = " *" if name == DEFAULT_STAGE else "  "
+        steps = info.get("steps") or "%s+%s" % (info["stage1_steps"],
+                                                info["stage2_steps"])
+        print("%-14s%s%-9s %s" % (name, default, steps, info["note"]))
+    print("\n* defaults. Capabilities, video cost and the ideogram4 caption "
+          "schema: fxlla media models --json")
 
 
 def lora_dirs():
@@ -1247,6 +1353,12 @@ def main():
                          "a multi-value flag would swallow the prompt.")
     im.add_argument("--guidance", type=float,
                     help="guidance scale (model default: 3.5 typical, 10 depth)")
+    im.add_argument("--preset",
+                    help="ideogram4 sampler preset, which sets its step count "
+                         "and guidance together: %s"
+                         % ", ".join("%s (%d steps)" % (n, s) for n, s
+                                     in sorted(IDEOGRAM_PRESETS.items(),
+                                               key=lambda kv: kv[1])))
     # Both controlnet families stack; the model's caps decide the wire form.
     im.add_argument("--control", action="append", dest="controls",
                     metavar="IMAGE[,CHECKPOINT] or TYPE:PATH[:STRENGTH]",
@@ -1264,7 +1376,19 @@ def main():
 
     vi = sub.add_parser("video")
     vi.add_argument("prompt")
-    vi.add_argument("--stage", choices=VIDEO_STAGES, default=DEFAULT_STAGE)
+    vi.add_argument("--stage", choices=VIDEO_STAGES, default=DEFAULT_STAGE,
+                    help="pipeline, and the main cost knob: %s"
+                         % "; ".join("%s (%s)" % (n, i["note"].split(".")[0])
+                                     for n, i in VIDEO_STAGE_INFO.items()))
+    # The step counts under each stage. Video had none of these: the pipeline
+    # was the only cost control and its steps were unreachable.
+    vi.add_argument("--steps", type=int,
+                    help="denoising steps, one-stage only (default 8)")
+    vi.add_argument("--stage1-steps", dest="stage1_steps", type=int,
+                    help="stage 1 steps for the two-stage pipelines "
+                         "(default 30, 15 for two-stages-hq)")
+    vi.add_argument("--stage2-steps", dest="stage2_steps", type=int,
+                    help="stage 2 steps for the two-stage pipelines (default 3)")
     vi.add_argument("--frames", type=int)
     # Duration is what a person asks for; frames is what the backend takes.
     # Without this the caller does the multiplication, and one got it wrong by

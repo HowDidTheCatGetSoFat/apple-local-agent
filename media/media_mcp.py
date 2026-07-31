@@ -39,7 +39,14 @@ TOOLS = [
                                   "list_media_models for the list, what each "
                                   "supports, and the JSON caption schema that "
                                   "ideogram4 accepts as its prompt."},
-         "steps": {"type": "integer"},
+         "steps": {"type": "integer",
+                   "description": "Sampling steps. Cost is roughly linear in "
+                                  "this and the defaults span 4 to 50, so "
+                                  "check default_steps in list_media_models "
+                                  "before raising it - and pick a distilled "
+                                  "model instead of cutting steps on a slow "
+                                  "one, which trades quality for the same "
+                                  "wait."},
          "seed": {"type": "integer"},
          "width": {"type": "integer"},
          "height": {"type": "integer"},
@@ -67,6 +74,14 @@ TOOLS = [
                       "description": "Guidance scale. Higher follows the prompt "
                                      "more literally. Model default is usually "
                                      "3.5, 10 for depth."},
+         "preset": {"type": "string",
+                    "enum": ["V4_TURBO_12", "V4_DEFAULT_20", "V4_QUALITY_48"],
+                    "description": "ideogram4 only, and the ONLY way to set its "
+                                   "cost: the preset fixes both step count and "
+                                   "guidance schedule, which is why that model "
+                                   "takes neither steps nor guidance. 12 steps "
+                                   "for a draft, 20 the default, 48 when the "
+                                   "typography has to be right."},
          "controls": {"type": "array", "items": {"type": "string"},
                       "description": "Control inputs, repeatable to STACK "
                                      "several (e.g. depth + canny). Form "
@@ -95,7 +110,23 @@ TOOLS = [
          "prompt": {"type": "string"},
          "stage": {"type": "string",
                    "enum": ["distilled", "one-stage", "two-stage", "two-stages-hq"],
-                   "description": "Quality stage (default distilled, the fast path)."},
+                   "description": "The pipeline, and the main cost knob. "
+                                  "distilled is the fast default; "
+                                  "two-stages-hq is the slowest. See "
+                                  "list_media_models under video.stages for "
+                                  "what each does and its step counts."},
+         "steps": {"type": "integer",
+                   "description": "Denoising steps, one-stage ONLY (default "
+                                  "8). The other stages ignore it and take "
+                                  "stage1_steps instead."},
+         "stage1_steps": {"type": "integer",
+                          "description": "Stage 1 steps for the two-stage "
+                                         "pipelines (default 30, 15 for "
+                                         "two-stages-hq). The cost knob for "
+                                         "every stage except one-stage."},
+         "stage2_steps": {"type": "integer",
+                          "description": "Stage 2 steps for the two-stage "
+                                         "pipelines (default 3)."},
          "seconds": {"type": "number",
                      "description": "Target duration in seconds. Prefer this over "
                                     "frames; do not pass both."},
@@ -161,13 +192,18 @@ TOOLS = [
                     "it rather than ignoring what they already downloaded.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "list_media_models",
-     "description": "Image models available locally, each with the options it "
-                    "supports (negative prompt, LoRA, dimensions, ...), "
-                    "dim_step where the model only accepts sizes on a grid, "
-                    "the built-in LoRA styles, which model is the default, and "
-                    "prompt_formats: the JSON caption schema for models that "
-                    "take one (ideogram4), with an example. Call this instead "
-                    "of guessing model names, flags, or prompt structure.",
+     "description": "Every image model and every video stage, with what each "
+                    "one costs. Per image model: the options it supports "
+                    "(negative prompt, LoRA, dimensions, ...), default_steps - "
+                    "the count it will actually run, spanning 4 to 50, so this "
+                    "is what separates a one-minute render from an eight-minute "
+                    "one - dim_step where sizes must sit on a grid, and presets "
+                    "where the model has them instead of steps. Under `video`: "
+                    "each stage, its step counts, and how duration multiplies "
+                    "the cost. Plus the built-in LoRA styles, the default "
+                    "model, and prompt_formats, the JSON caption schema "
+                    "ideogram4 takes, with an example. Call this instead of "
+                    "guessing model names, flags, cost, or prompt structure.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "list_media_jobs",
      "description": "List background media jobs, newest first.",
@@ -213,14 +249,17 @@ _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
                 ("controlnet_strength", "--controlnet-strength"),
                 ("depth_image", "--depth-image"),
                 ("init_image", "--init-image"), ("loras", "--lora"),
-                ("lora_style", "--lora-style"), ("output", "--output")]
+                ("lora_style", "--lora-style"), ("preset", "--preset"),
+                ("output", "--output")]
 _VIDEO_FLAGS = [("stage", "--stage"), ("seconds", "--seconds"),
                 ("frames", "--frames"),
                 ("frame_rate", "--frame-rate"), ("width", "--width"),
                 ("height", "--height"), ("seed", "--seed"), ("model", "--model"),
                 # generate.py takes --image (singular, repeatable), mirroring
                 # ltx's own flag. --images does not exist in either.
-                ("images", "--image"), ("output", "--output")]
+                ("images", "--image"), ("steps", "--steps"),
+                ("stage1_steps", "--stage1-steps"),
+                ("stage2_steps", "--stage2-steps"), ("output", "--output")]
 _VOICE_FLAGS = [("ref", "--ref"), ("lang", "--lang"), ("speed", "--speed"),
                 ("model", "--model"), ("output", "--output")]
 _EDIT_FLAGS = [("image", "--image"), ("seed", "--seed"),

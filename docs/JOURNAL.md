@@ -47,6 +47,32 @@ wrote the file to the media directory anyway, because no MCP generator exposes
 the schemas were missing it, so the request was accepted and dropped, and the
 path in the answer read like a result rather than a default.
 
+**Then: "no es muy inteligente para determinar la cantidad de pasadas".** It
+could not be. Nothing published what a render costs. `list_media_models`
+reported `steps: null` for every model fxlla does not pin, so a caller choosing
+between z-image-turbo at 9 steps and z-image at 50 - measured here at 55 s and
+several minutes on the same machine - saw the same blank for both. The step
+counts now come from mflux's own `MODEL_INFERENCE_STEPS` and are reported as
+`default_steps`.
+
+Worse on the model that prompted it: Ideogram 4's CLI accepts `--steps` and
+`--guidance` and then warns that it ignores both, because its sampler presets
+fix them. fxlla listed both as capabilities. So asking for 12 steps waited for
+the preset's 20 and nothing said so - the capability gate, whose whole purpose
+is refusing flags that would be discarded, was itself declaring two discarded
+flags as supported. Both are now refused by name and `--preset` is exposed:
+V4_TURBO_12, V4_DEFAULT_20, V4_QUALITY_48, published with their step counts.
+
+Video was worse still, and it took the user pointing at it ("tiene que
+funcionar para todos los modelos de imagenes y video") to look: it had no cost
+surface at all. `stage` was the only visible control, described as "the fast
+path", and the step counts underneath it - `--steps` for one-stage,
+`--stage1-steps` and `--stage2-steps` for the two-stage pipelines - were not
+reachable from fxlla in any form. They are now, each refused with the right one
+named when passed to a stage that ignores it, and every stage publishes what it
+runs. Video also got the point stated plainly: cost is stage x steps x
+resolution x duration, and duration is the multiplier people forget.
+
 Three times now, on the same surface: the capability existed and the caller had
 no way to reach it. It is worth naming what makes this recur - the CLI is where
 the feature gets built and the MCP schema is a separate list that has to be
