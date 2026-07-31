@@ -6,6 +6,29 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- `fxlla eval`: score chat models on quality and speed locally, so choosing a
+  model rests on data instead of the catalog's prose. Quality is 30 authored
+  tasks across four dimensions - code executed against asserts in a sandbox,
+  structured tool calls (with a separate column for calls that only appear in
+  the text channel, which an agent stack never sees), instruction following,
+  and long-context recall at 8k/16k - every check mechanical, no model judging
+  another model. Speed is cold start, first request (the engines split the
+  cold cost differently: llama-server loads before /health flips, mlx_lm loads
+  on the first request, and the table shows both so neither lies), TTFT,
+  decode and prefill tok/s, peak RSS, and tokens spent. Each model runs alone
+  on a cold dedicated server; a busy eval port is refused rather than adopted.
+  Every run prints a fingerprint of the rendered task set and a harness
+  version: two runs are comparable exactly when both match. Results carry
+  server build, weights identity, and machine identity, and go only to the
+  state dir, which the harness never reads back. Measured on the first sweep
+  (M5 Max, fingerprint f6ae21eaee7d, harness v2): qwen3-coder 8/10 code, 8/8
+  tools, 4/4 context at 130 tok/s; coder-1.5b 4/10 code at 397 tok/s with its
+  tool calls stranded in the text channel; tiny 1/10 code, which is the
+  discrimination the task set was gated on. The harness's own dogfooding fixed
+  it once before shipping: plain last-fence extraction scored a correct
+  qwen3-coder solution as a SyntaxError because the reply ends in fenced
+  example output, so extraction now takes the last fence that compiles, and
+  that semantic change is why the harness says v2.
 - The embedding model behind `fxlla kb` is selectable. The catalog gained four
   more `embed` entries next to nomic-embed-text v1.5: bge-small (384-dim),
   bge-large and qwen3-embedding (1024-dim), and embeddinggemma (768-dim).

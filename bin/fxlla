@@ -40,6 +40,8 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
                               --last N prints the newest N recorded samples.
   fxlla logs                  Follow the server log
   fxlla ram [auto|reset|MB]   Adjust the GPU RAM limit (use the full 128 GB)
+  fxlla eval [model ...]      Score chat models on quality and speed locally
+                              (mechanical checks only; see evals/README.md)
   fxlla kb add|search|ls|rm   Knowledge bases (RAG) over your files (also 'stop',
                               'reindex <name>' to re-embed after changing model,
                               and 'eval' to score retrieval on the repo docs)
@@ -894,6 +896,124 @@ cmd_backend() {
   fi
 }
 
+# Score chat models on quality (mechanical checks) and speed (streamed probes).
+# The shell owns catalog, cache, RAM and coexistence policy; evals/run.py owns
+# everything measured. One "alias|dest|engine|size_mb|role" line per model goes
+# to run.py on stdin.
+cmd_eval() {
+  need python3; require_store
+  local fwd=() names=() list_only=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dim|--tasks|--repeats)       fwd+=("$1" "${2:?missing value for $1}"); shift ;;
+      --dim=*|--tasks=*|--repeats=*) fwd+=("$1") ;;
+      --list)                        list_only=1; fwd+=("$1") ;;
+      --quick|--json|--keep-failed)  fwd+=("$1") ;;
+      -*) die "unknown flag: $1" ;;
+      *)  names+=("$1") ;;
+    esac; shift
+  done
+
+  # A non-numeric FXLLA_CTX would make the raise below a silent no-op (the
+  # numeric test errors, the if treats that as false) and the context tasks
+  # would fail for capacity while looking like failed recall.
+  case "${FXLLA_CTX:-8192}" in
+    ''|*[!0-9]*) die "FXLLA_CTX must be a plain integer (got '${FXLLA_CTX:-}')" ;;
+  esac
+
+  # --list only shows the plan: it must neither refuse for a busy server nor
+  # unload anyone's gateway models.
+  if [ "$list_only" = 0 ]; then
+    # Speed numbers need the machine to itself. A single-model server cannot
+    # be taken over safely, so that refuses; the gateway has an unload
+    # endpoint built for exactly this (the media path uses it), so that
+    # proceeds. Chatter goes to stderr: stdout belongs to run.py's report,
+    # which --json turns into parseable JSON.
+    server_alive && die "A server is running (pid $(server_pid)). Run 'fxlla off' first: the eval needs the GPU to itself for honest speed numbers."
+    if gateway_alive; then
+      local freed
+      freed="$(curl -s -m 10 -X POST -H 'Content-Type: application/json' -d '{}' \
+        "http://$FXLLA_HOST:$FXLLA_PORT/admin/unload" 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    print(", ".join(json.load(sys.stdin).get("unloaded") or []))
+except Exception:
+    pass' || true)"
+      [ -n "$freed" ] && info "Freed gateway models for the eval: $freed (they reload on demand)." >&2
+      warn "The gateway is up. Traffic arriving mid-eval reloads models and poisons the speed numbers."
+    fi
+    # The context tasks carry ~8k and ~16k token prompts; a gguf server
+    # started at the 8192 default would truncate them and fail recall for
+    # capacity.
+    if [ "${FXLLA_CTX:-8192}" -lt 20480 ]; then
+      info "Raising FXLLA_CTX to 20480 for this run (context tasks need it)." >&2
+      export FXLLA_CTX=20480
+    fi
+  fi
+
+  # Effective wired limit, same math as _ram_check, minus headroom: KV cache at
+  # 20k context plus Metal buffers sit on top of the weights, so a model that
+  # fits by file size can still wire past the limit mid-task. Skipping is for
+  # the unattended default sweep only - naming a model runs it after a warning.
+  local total_mb cur eff headroom=8192
+  total_mb=$(( $(sysctl -n hw.memsize) / 1048576 ))
+  cur="$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)"
+  eff="$cur"; [ "$cur" = 0 ] && eff=$(( total_mb * 3 / 4 ))
+
+  local plan="" alias dest engine size_mb role line
+  if [ "${#names[@]}" -gt 0 ]; then
+    local q
+    for q in "${names[@]}"; do
+      alias="$(local_name "$q")"
+      dest="$MODELS_DIR/$alias"
+      [ -f "$dest/.source" ] || die "'$alias' is not downloaded. Run: fxlla pull $q"
+      engine=mlx; [ -f "$dest/.engine" ] && engine="$(cat "$dest/.engine")"
+      role="$(_catalog_field "$q" 4 2>/dev/null || echo '-')"
+      if [ "$role" = "-" ]; then
+        # Pulled by org/repo: the alias is not in the catalog, but the repo it
+        # came from may be. Identify by .source so 'fxlla eval nomic-.../...'
+        # cannot slip an embedding model past the role check.
+        local src crole=""
+        src="$(cat "$dest/.source" 2>/dev/null | xargs || true)"
+        [ -n "$src" ] && crole="$(grep -F "$src" "$CATALOG" 2>/dev/null | grep -v '^#' | head -1 | cut -d'|' -f4 | xargs || true)"
+        [ -n "$crole" ] && role="$crole"
+      fi
+      [ "$role" = embed ] && die "'$alias' is an embedding model; 'fxlla kb eval' scores those."
+      size_mb=$(( $(du -sk "$dest" 2>/dev/null | cut -f1) / 1024 ))
+      if [ "$size_mb" -gt $(( eff - headroom )) ]; then
+        warn "'$alias' (~${size_mb} MB) may not fit the GPU limit (~${eff} MB minus ${headroom} MB headroom). Running anyway since you named it; 'fxlla ram auto' raises the limit."
+      fi
+      plan="${plan}${alias}|${dest}|${engine}|${size_mb}|${role}
+"
+    done
+  else
+    while IFS= read -r line; do
+      case "$line" in \#*|'') continue ;; esac
+      alias="$(echo "$line" | cut -d'|' -f1 | xargs)"
+      role="$(echo "$line" | cut -d'|' -f4 | xargs)"
+      case "$role" in dev|agentic|max) ;; *) continue ;; esac
+      dest="$MODELS_DIR/$alias"
+      [ -f "$dest/.source" ] || continue
+      engine=mlx; [ -f "$dest/.engine" ] && engine="$(cat "$dest/.engine")"
+      size_mb=$(( $(du -sk "$dest" 2>/dev/null | cut -f1) / 1024 ))
+      if [ "$size_mb" -gt $(( eff - headroom )) ]; then
+        warn "Skipping '$alias' (~${size_mb} MB): over the GPU limit (~${eff} MB minus ${headroom} MB headroom). Raise it with 'fxlla ram auto', or name it explicitly to run anyway."
+        continue
+      fi
+      plan="${plan}${alias}|${dest}|${engine}|${size_mb}|${role}
+"
+    done < "$CATALOG"
+  fi
+
+  mkdir -p "$STATE_DIR/evals"
+  printf '%s' "$plan" | \
+    FXLLA_BIN="$REPO_ROOT/bin/fxlla" \
+    FXLLA_EVAL_PORT="${FXLLA_EVAL_PORT:-8097}" \
+    FXLLA_EVAL_DIR="$STATE_DIR/evals" \
+    FXLLA_STORE="$FXLLA_STORE" \
+    python3 "$REPO_ROOT/evals/run.py" ${fwd[@]+"${fwd[@]}"}
+}
+
 # --------------------------------------------------------------------------
 cmd_on() {
   require_store
@@ -1574,8 +1694,8 @@ _complete_downloaded() {
 cmd_complete() {
   case "${1:-}" in
     commands)   printf '%s\n' setup models pull ls avail on off serve unserve \
-                  status stats doctor logs ram kb graph media wire-opencode \
-                  skills rm config completions help ;;
+                  status stats doctor logs ram eval kb graph media \
+                  wire-opencode skills rm config completions help ;;
     catalog)    _complete_catalog ;;
     downloaded) _complete_downloaded ;;
     kb)         printf '%s\n' add search ls rm reindex eval stop mcp wire-opencode ;;
@@ -1604,7 +1724,7 @@ _fxlla_complete() {
   words=""
   case "$cmd" in
     pull|get|avail|check)         words="$(fxlla __complete catalog)" ;;
-    on|start|off|stop|rm|remove)  words="$(fxlla __complete downloaded)" ;;
+    on|start|off|stop|rm|remove|eval)  words="$(fxlla __complete downloaded)" ;;
     kb)     [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete kb)" ;;
     graph)  [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete graph)" ;;
     media)  [ "$COMP_CWORD" -eq 2 ] && words="$(fxlla __complete media)" ;;
@@ -1628,7 +1748,7 @@ _fxlla() {
   fi
   case "$cmd" in
     pull|get|avail|check)         compadd -- ${(f)"$(fxlla __complete catalog)"} ;;
-    on|start|off|stop|rm|remove)  compadd -- ${(f)"$(fxlla __complete downloaded)"} ;;
+    on|start|off|stop|rm|remove|eval)  compadd -- ${(f)"$(fxlla __complete downloaded)"} ;;
     kb)     (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete kb)"} ;;
     graph)  (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete graph)"} ;;
     media)  (( CURRENT == 3 )) && compadd -- ${(f)"$(fxlla __complete media)"} ;;
@@ -1662,6 +1782,7 @@ main() {
     doctor)                 cmd_doctor "$@" ;;
     logs|log)               cmd_logs "$@" ;;
     ram)                    cmd_ram "$@" ;;
+    eval)                   cmd_eval "$@" ;;
     kb)                     cmd_kb "$@" ;;
     graph)                  cmd_graph "$@" ;;
     media)                  cmd_media "$@" ;;

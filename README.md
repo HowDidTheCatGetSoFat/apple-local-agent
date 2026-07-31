@@ -71,6 +71,7 @@ Then open opencode and pick the `local` provider.
 | `fxlla status`                | Server, model, and idle status            |
 | `fxlla stats [--watch]`       | Live tok/s, TTFT, RAM (also --json, --last N) |
 | `fxlla ram [auto\|reset]`     | Adjust the GPU memory limit               |
+| `fxlla eval [model ...]`      | Score chat models on quality and speed    |
 | `fxlla kb ...`                | Local RAG knowledge bases (MCP: rag_search) |
 | `fxlla graph ...`             | Python code graph (MCP: find_definition, ...) |
 | `fxlla media image\|video\|voice` | Local media generation (MCP: generate_*) |
@@ -154,6 +155,28 @@ them. GGUF cannot be converted to MLX; for Hugging Face safetensors to MLX use
 Pulls use `aria2c` with a bandwidth cap by default. For a xet-backed or awkward
 repo, `fxlla pull <repo> --downloader hf` fetches it with the Hugging Face CLI
 (run via `uvx`, no extra install); it is more robust but ignores the cap.
+
+## Choosing between models: fxlla eval
+
+Rather than trusting the catalog's prose, measure. `fxlla eval` runs every
+cached dev/agentic/max model - one at a time, each on a cold dedicated
+server - through 30 mechanically checked tasks (code executed against asserts
+in a sandbox, structured tool calls, instruction following, long-context
+recall) and reports them next to cold cost, TTFT, decode and prefill speed,
+peak RSS, and tokens spent:
+
+```sh
+fxlla eval                  # every cached dev/agentic/max model
+fxlla eval qwen3-coder      # just one (named models skip the RAM guard)
+fxlla eval --quick          # pipeline check in ~2 minutes
+```
+
+No model judges another model's prose: every check is execution, parsing, or
+string mechanics, so scores cannot depend on a judge. Each run prints a task
+fingerprint and a harness version; two runs are comparable exactly when both
+match, and scores are per-machine. The report states its own noise floor. The
+details - what is measured, the sandbox, why the text-channel tool-call column
+exists - live in `evals/README.md`.
 
 ## Using the full 128 GB
 

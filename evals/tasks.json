@@ -1,0 +1,773 @@
+{
+ "note": "Golden task set for `fxlla eval`. Authored from scratch for this harness: no benchmark dumps (copyright and training contamination), and no task references fxlla or has its answer anywhere in this repository, so editing repo docs can never move a score. Append-only: never edit an existing task id - add a new id, which mints a new fingerprint and visibly ends comparability. A task every model passes or every model fails discriminates nothing and should be replaced (with a new id). The repository is public, so future models may have trained on these tasks: scores rank local models against each other on one fingerprint, and are not absolute ability measures. `fxlla eval --tasks FILE` swaps in a private set.",
+ "version": 1,
+ "tasks": [
+  {
+   "id": "code-merge-intervals",
+   "dim": "code",
+   "max_tokens": 2048,
+   "prompt": "Write a Python function merge_intervals(intervals) that takes a list of [start, end] integer pairs and returns the minimal list of merged, non-overlapping pairs sorted by start. Touching intervals like [1,4] and [4,5] merge. Return pairs as lists.",
+   "check": {
+    "type": "run_tests",
+    "tests": "from solution import merge_intervals\nassert merge_intervals([[1, 3], [2, 6], [8, 10], [15, 18]]) == [[1, 6], [8, 10], [15, 18]]\nassert merge_intervals([]) == []\nassert merge_intervals([[1, 4], [4, 5]]) == [[1, 5]]\nassert merge_intervals([[5, 6], [1, 2]]) == [[1, 2], [5, 6]]\nassert merge_intervals([[1, 10], [2, 3]]) == [[1, 10]]\n"
+   }
+  },
+  {
+   "id": "code-toposort",
+   "dim": "code",
+   "max_tokens": 2048,
+   "prompt": "Write a Python function topo_sort(edges, n) for a directed graph with nodes 0..n-1, where edges is a list of (a, b) tuples meaning a must come before b. Return a list of all n nodes in a valid topological order, or None if the graph has a cycle.",
+   "check": {
+    "type": "run_tests",
+    "tests": "from solution import topo_sort\nr = topo_sort([(0, 1), (1, 2)], 3)\nassert r is not None and sorted(r) == [0, 1, 2]\nassert all(r.index(a) < r.index(b) for a, b in [(0, 1), (1, 2)])\nassert topo_sort([(0, 1), (1, 0)], 2) is None\nr2 = topo_sort([], 3)\nassert r2 is not None and sorted(r2) == [0, 1, 2]\nr3 = topo_sort([(2, 0), (1, 0)], 3)\nassert r3.index(2) < r3.index(0) and r3.index(1) < r3.index(0)\n"
+   }
+  },
+  {
+   "id": "code-parse-duration",
+   "dim": "code",
+   "max_tokens": 2048,
+   "prompt": "Write a Python function parse_duration(s) that converts strings like '2h', '90m', '45s', '1h30m15s', or '10m5s' into a total number of seconds (int). Units are h, m, s; each appears at most once, in that order. Raise ValueError for anything that does not match.",
+   "check": {
+    "type": "run_tests",
+    "tests": "from solution import parse_duration\nassert parse_duration(\"2h\") == 7200\nassert parse_duration(\"90m\") == 5400\nassert parse_duration(\"1h30m15s\") == 5415\nassert parse_duration(\"45s\") == 45\nassert parse_duration(\"10m5s\") == 605\ntry:\n    parse_duration(\"abc\")\n    raise SystemExit(\"expected ValueError\")\nexcept ValueError:\n    pass\n"
+   }
+  },
+  {
+   "id": "code-lru",
+   "dim": "code",
+   "max_tokens": 2048,
+   "prompt": "Write a Python class LRUCache with __init__(self, capacity), get(self, key) and put(self, key, value). get returns the stored value or None, and counts as a use. put inserts or updates, and when the cache is over capacity evicts the least recently used key.",
+   "check": {
+    "type": "run_tests",
+    "tests": "from solution import LRUCache\nc = LRUCache(2)\nc.put(1, \"a\")\nc.put(2, \"b\")\nassert c.get(1) == \"a\"\nc.put(3, \"c\")\nassert c.get(2) is None\nassert c.get(3) == \"c\"\nc.put(4, \"d\")\nassert c.get(1) is None\nassert c.get(3) == \"c\" and c.get(4) == \"d\"\n"
+   }
+  },
+  {
+   "id": "code-rle",
+   "dim": "code",
+   "max_tokens": 2048,
+   "prompt": "Write two Python functions: rle_encode(s) turning a string of letters into run-length form ('aaabb' -> 'a3b2', 'abc' -> 'a1b1c1'), and rle_decode(s) inverting it. Counts may have several digits. Both must handle the empty string.",
+   "check": {
+    "type": "run_tests",
+    "tests": "from solution import rle_encode, rle_decode\nassert rle_encode(\"aaabbbcccc\") == \"a3b3c4\"\nassert rle_encode(\"abc\") == \"a1b1c1\"\nassert rle_encode(\"\") == \"\"\nassert rle_decode(\"a3b3c4\") == \"aaabbbcccc\"\nassert rle_decode(\"\") == \"\"\nassert rle_decode(rle_encode(\"z\" * 12)) == \"z\" * 12\n"
+   }
+  },
+  {
+   "id": "code-deep-get",
+   "dim": "code",
+   "max_tokens": 2048,
+   "prompt": "Write a Python function deep_get(d, path, default=None) that walks a nested dict d along a dot-separated path like 'a.b.c'. Return the value if the whole path exists, else default. A non-dict in the middle of the path also returns default.",
+   "check": {
+    "type": "run_tests",
+    "tests": "from solution import deep_get\nd = {\"a\": {\"b\": {\"c\": 5}}, \"x\": 1}\nassert deep_get(d, \"a.b.c\") == 5\nassert deep_get(d, \"a.b.z\") is None\nassert deep_get(d, \"a.b.z\", default=-1) == -1\nassert deep_get(d, \"x.y\", default=0) == 0\nassert deep_get(d, \"x\") == 1\n"
+   }
+  },
+  {
+   "id": "bugfix-binary-search",
+   "dim": "code",
+   "max_tokens": 2048,
+   "prompt": "This binary search is buggy: on some inputs it loops forever. Fix it and return the complete corrected function, keeping the name and signature.\n\n```python\ndef find(a, x):\n    lo, hi = 0, len(a)\n    while lo < hi:\n        mid = (lo + hi) // 2\n        if a[mid] < x:\n            lo = mid\n        else:\n            hi = mid\n    return lo if lo < len(a) and a[lo] == x else -1\n```",
+   "check": {
+    "type": "run_tests",
+    "tests": "from solution import find\nassert find([1, 3, 5, 7], 5) == 2\nassert find([1, 3, 5, 7], 1) == 0\nassert find([1, 3, 5, 7], 7) == 3\nassert find([1, 3, 5, 7], 4) == -1\nassert find([], 3) == -1\nassert find([2], 2) == 0\n"
+   }
+  },
+  {
+   "id": "bugfix-mutable-default",
+   "dim": "code",
+   "max_tokens": 2048,
+   "prompt": "This function misbehaves when called repeatedly without the second argument. Fix it and return the complete corrected function, keeping the name and signature's meaning.\n\n```python\ndef add_tag(tag, tags=[]):\n    tags.append(tag)\n    return tags\n```",
+   "check": {
+    "type": "run_tests",
+    "tests": "from solution import add_tag\nassert add_tag(\"a\") == [\"a\"]\nassert add_tag(\"b\") == [\"b\"]\nassert add_tag(\"c\", [\"x\"]) == [\"x\", \"c\"]\n"
+   }
+  },
+  {
+   "id": "bugfix-date-compare",
+   "dim": "code",
+   "max_tokens": 2048,
+   "prompt": "This function is supposed to say whether date a comes strictly before date b, both in DD/MM/YYYY format, but it compares wrongly. Fix it and return the complete corrected function.\n\n```python\ndef is_before(a, b):\n    return a < b\n```",
+   "check": {
+    "type": "run_tests",
+    "tests": "from solution import is_before\nassert is_before(\"01/02/2024\", \"01/01/2025\") is True\nassert is_before(\"31/12/2024\", \"01/01/2025\") is True\nassert is_before(\"02/01/2025\", \"01/12/2024\") is False\nassert is_before(\"15/06/2024\", \"15/06/2024\") is False\n"
+   }
+  },
+  {
+   "id": "bugfix-generator",
+   "dim": "code",
+   "max_tokens": 2048,
+   "prompt": "This function crashes or returns wrong results when given a generator. Fix it so it works for any iterable of numbers and return the complete corrected function.\n\n```python\ndef stats(nums):\n    return (sum(nums), max(nums))\n```",
+   "check": {
+    "type": "run_tests",
+    "tests": "from solution import stats\nassert stats(iter([1, 2, 3])) == (6, 3)\nassert stats([4, 5]) == (9, 5)\nassert stats(iter([7])) == (7, 7)\n"
+   }
+  },
+  {
+   "id": "tool-weather",
+   "dim": "tools",
+   "max_tokens": 512,
+   "prompt": "What is the weather in Paris right now, in celsius? Use a tool.",
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "get_weather",
+      "description": "Get the current weather for a city.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string",
+         "description": "City name in English"
+        },
+        "unit": {
+         "type": "string",
+         "enum": [
+          "celsius",
+          "fahrenheit"
+         ]
+        }
+       },
+       "required": [
+        "city",
+        "unit"
+       ]
+      }
+     }
+    }
+   ],
+   "check": {
+    "type": "tool_call",
+    "name": "get_weather",
+    "args": {
+     "city": "Paris",
+     "unit": "celsius"
+    }
+   }
+  },
+  {
+   "id": "tool-event",
+   "dim": "tools",
+   "max_tokens": 512,
+   "prompt": "Book an event titled 'standup' on 2026-08-03 lasting 15 minutes.",
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "create_event",
+      "description": "Create a calendar event.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "title": {
+         "type": "string"
+        },
+        "date": {
+         "type": "string",
+         "description": "YYYY-MM-DD"
+        },
+        "minutes": {
+         "type": "integer",
+         "description": "duration"
+        }
+       },
+       "required": [
+        "title",
+        "date",
+        "minutes"
+       ]
+      }
+     }
+    }
+   ],
+   "check": {
+    "type": "tool_call",
+    "name": "create_event",
+    "args": {
+     "title": "standup",
+     "date": "2026-08-03",
+     "minutes": 15
+    }
+   }
+  },
+  {
+   "id": "tool-currency",
+   "dim": "tools",
+   "max_tokens": 512,
+   "prompt": "How much is 250 euros in Japanese yen? Use a tool.",
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "convert_currency",
+      "description": "Convert an amount between currencies.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "amount": {
+         "type": "number"
+        },
+        "from_code": {
+         "type": "string",
+         "description": "ISO 4217 code, e.g. USD"
+        },
+        "to_code": {
+         "type": "string",
+         "description": "ISO 4217 code, e.g. USD"
+        }
+       },
+       "required": [
+        "amount",
+        "from_code",
+        "to_code"
+       ]
+      }
+     }
+    }
+   ],
+   "check": {
+    "type": "tool_call",
+    "name": "convert_currency",
+    "args": {
+     "amount": 250,
+     "from_code": "EUR",
+     "to_code": "JPY"
+    }
+   }
+  },
+  {
+   "id": "tool-search-args",
+   "dim": "tools",
+   "max_tokens": 512,
+   "prompt": "Find where parse_config is mentioned inside the directory src/.",
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "search_code",
+      "description": "Search text inside files under a directory.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "pattern": {
+         "type": "string",
+         "description": "exact text to search for"
+        },
+        "path": {
+         "type": "string",
+         "description": "directory to search, as the user gave it"
+        }
+       },
+       "required": [
+        "pattern",
+        "path"
+       ]
+      }
+     }
+    }
+   ],
+   "check": {
+    "type": "tool_call",
+    "name": "search_code",
+    "args": {
+     "pattern": "parse_config",
+     "path": {
+      "any_of": [
+       "src/",
+       "src"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "tool-multiturn",
+   "dim": "tools",
+   "max_tokens": 512,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the status of order 88231? Include the tracking number."
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_1",
+       "type": "function",
+       "function": {
+        "name": "get_order_status",
+        "arguments": "{\"order_id\": \"88231\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_1",
+     "content": "{\"status\": \"shipped\", \"tracking\": \"TRK-55019\"}"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "get_order_status",
+      "description": "Look up the status of an order by id.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "order_id": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "order_id"
+       ]
+      }
+     }
+    }
+   ],
+   "check": {
+    "type": "no_tool_call",
+    "must_contain": [
+     [
+      "TRK-55019"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "tool-error-stop",
+   "dim": "tools",
+   "max_tokens": 512,
+   "messages": [
+    {
+     "role": "user",
+     "content": "Delete the file /tmp/report.pdf"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "call_1",
+       "type": "function",
+       "function": {
+        "name": "delete_file",
+        "arguments": "{\"path\": \"/tmp/report.pdf\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "call_1",
+     "content": "{\"error\": \"permission denied\"}"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "delete_file",
+      "description": "Delete a file at the given path.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ]
+      }
+     }
+    }
+   ],
+   "check": {
+    "type": "no_tool_call",
+    "must_contain": [
+     [
+      "permission",
+      "denied",
+      "not permitted",
+      "unable",
+      "cannot",
+      "could not"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "tool-not-needed",
+   "dim": "tools",
+   "max_tokens": 512,
+   "prompt": "What is the capital city of France? Answer in one short sentence.",
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "get_weather",
+      "description": "Get the current weather for a city.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string",
+         "description": "City name in English"
+        },
+        "unit": {
+         "type": "string",
+         "enum": [
+          "celsius",
+          "fahrenheit"
+         ]
+        }
+       },
+       "required": [
+        "city",
+        "unit"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "convert_currency",
+      "description": "Convert an amount between currencies.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "amount": {
+         "type": "number"
+        },
+        "from_code": {
+         "type": "string",
+         "description": "ISO 4217 code, e.g. USD"
+        },
+        "to_code": {
+         "type": "string",
+         "description": "ISO 4217 code, e.g. USD"
+        }
+       },
+       "required": [
+        "amount",
+        "from_code",
+        "to_code"
+       ]
+      }
+     }
+    }
+   ],
+   "check": {
+    "type": "no_tool_call",
+    "must_contain": [
+     [
+      "Paris"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "tool-selection",
+   "dim": "tools",
+   "max_tokens": 512,
+   "prompt": "Find commits that mention 'rate limit'.",
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "search_issues",
+      "description": "Search issue titles and bodies.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "query": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "query"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "search_code",
+      "description": "Search text in source files.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "query": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "query"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "search_docs",
+      "description": "Search the documentation.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "query": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "query"
+       ]
+      }
+     }
+    },
+    {
+     "type": "function",
+     "function": {
+      "name": "search_commits",
+      "description": "Search commit messages.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "query": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "query"
+       ]
+      }
+     }
+    }
+   ],
+   "check": {
+    "type": "tool_call",
+    "name": "search_commits",
+    "args": {
+     "query": "rate limit"
+    }
+   }
+  },
+  {
+   "id": "inst-exact",
+   "dim": "instructions",
+   "max_tokens": 512,
+   "prompt": "Reply with exactly this text and nothing else: BUILD OK 42",
+   "check": {
+    "type": "exact",
+    "value": "BUILD OK 42"
+   }
+  },
+  {
+   "id": "inst-json-shape",
+   "dim": "instructions",
+   "max_tokens": 512,
+   "prompt": "Return a JSON object with exactly these keys: \"name\" set to \"gateway\", \"port\" set to the integer 8080, and \"tags\" set to an array of exactly three strings of your choice. Output only the JSON object.",
+   "check": {
+    "type": "json_shape",
+    "shape": {
+     "type": "object",
+     "keys": {
+      "name": {
+       "eq": "gateway"
+      },
+      "port": {
+       "eq": 8080
+      },
+      "tags": {
+       "type": "array",
+       "len": 3,
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "id": "inst-lines",
+   "dim": "instructions",
+   "max_tokens": 512,
+   "prompt": "Name exactly 5 Unix command-line tools. One per line, lowercase letters only, no numbering, no punctuation, nothing else.",
+   "check": {
+    "type": "line_rules",
+    "count": 5,
+    "each_matches": "[a-z]+"
+   }
+  },
+  {
+   "id": "inst-forbidden",
+   "dim": "instructions",
+   "max_tokens": 512,
+   "prompt": "Explain in one or two sentences what RAM does in a computer, without using the words \"memory\" or \"storage\".",
+   "check": {
+    "type": "absent",
+    "words": [
+     "memory",
+     "storage"
+    ]
+   }
+  },
+  {
+   "id": "inst-dates",
+   "dim": "instructions",
+   "max_tokens": 512,
+   "prompt": "From the following text, list the three dates in ISO format (YYYY-MM-DD), oldest first, on a single line separated by commas. Output nothing else.\n\nThe library opened its doors on 12 April 1999. A major renovation finished on 30 November 2003, and the east wing was added on 4 July 2018.",
+   "check": {
+    "type": "line_rules",
+    "count": 1,
+    "each_matches": "1999-04-12, ?2003-11-30, ?2018-07-04"
+   }
+  },
+  {
+   "id": "inst-csv-json",
+   "dim": "instructions",
+   "max_tokens": 512,
+   "prompt": "Convert this CSV to a JSON array of objects. Use the header as the keys; the value of \"port\" must be a number and \"name\" a string. Output only the JSON.\n\nname,port\nalpha,8080\nbeta,9090\ngamma,7070",
+   "check": {
+    "type": "json_shape",
+    "shape": {
+     "eq": [
+      {
+       "name": "alpha",
+       "port": 8080
+      },
+      {
+       "name": "beta",
+       "port": 9090
+      },
+      {
+       "name": "gamma",
+       "port": 7070
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "inst-no-fence",
+   "dim": "instructions",
+   "max_tokens": 512,
+   "prompt": "Output the single word ready in lowercase, with no code fences, no quotes, and no punctuation.",
+   "check": {
+    "type": "exact",
+    "value": "ready"
+   }
+  },
+  {
+   "id": "inst-word-cap",
+   "dim": "instructions",
+   "max_tokens": 512,
+   "prompt": "Describe what a compiler does, in at most 25 words.",
+   "check": {
+    "type": "word_count",
+    "max": 25
+   }
+  },
+  {
+   "id": "ctx-8k-early",
+   "dim": "context",
+   "max_tokens": 256,
+   "context_gen": {
+    "seed": 11,
+    "words": 5800,
+    "plants": [
+     {
+      "depth": 0.1,
+      "text": "The serial number of the backup unit is XK-93217-QF."
+     }
+    ]
+   },
+   "prompt_suffix": "\n\nSomewhere in the text above is the serial number of the backup unit. Reply with only that serial number.",
+   "check": {
+    "type": "contains",
+    "values": [
+     "XK-93217-QF"
+    ]
+   }
+  },
+  {
+   "id": "ctx-8k-late",
+   "dim": "context",
+   "max_tokens": 256,
+   "context_gen": {
+    "seed": 23,
+    "words": 5800,
+    "plants": [
+     {
+      "depth": 0.9,
+      "text": "The serial number of the backup unit is BV-40852-TN."
+     }
+    ]
+   },
+   "prompt_suffix": "\n\nSomewhere in the text above is the serial number of the backup unit. Reply with only that serial number.",
+   "check": {
+    "type": "contains",
+    "values": [
+     "BV-40852-TN"
+    ]
+   }
+  },
+  {
+   "id": "ctx-16k-mid",
+   "dim": "context",
+   "max_tokens": 256,
+   "context_gen": {
+    "seed": 37,
+    "words": 11600,
+    "plants": [
+     {
+      "depth": 0.5,
+      "text": "The serial number of the backup unit is RQ-77364-LM."
+     }
+    ]
+   },
+   "prompt_suffix": "\n\nSomewhere in the text above is the serial number of the backup unit. Reply with only that serial number.",
+   "check": {
+    "type": "contains",
+    "values": [
+     "RQ-77364-LM"
+    ]
+   }
+  },
+  {
+   "id": "ctx-16k-two",
+   "dim": "context",
+   "max_tokens": 256,
+   "context_gen": {
+    "seed": 51,
+    "words": 11600,
+    "plants": [
+     {
+      "depth": 0.25,
+      "text": "The serial number of the backup unit is JH-58120-WC."
+     },
+     {
+      "depth": 0.75,
+      "text": "The access code for the storage vault is 9163-7748."
+     }
+    ]
+   },
+   "prompt_suffix": "\n\nSomewhere in the text above are the serial number of the backup unit and the access code for the storage vault. Reply with both, and nothing else.",
+   "check": {
+    "type": "contains",
+    "values": [
+     "JH-58120-WC",
+     "9163-7748"
+    ]
+   }
+  }
+ ]
+}

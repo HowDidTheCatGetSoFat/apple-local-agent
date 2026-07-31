@@ -55,6 +55,9 @@ fi
 : "${FXLLA_KB_INDEX:=}"        # set to 1 for the sqlite-vec KNN index (kb search)
 : "${FXLLA_KB_PYTHON:=}"       # override interpreter for rag/core.py (see fxlla kb)
 : "${FXLLA_EMBED_PORT:=8090}"  # port for the local llama.cpp embedding server
+# Eval backends: clear of 8080 (server/gateway), 8090 (embeddings) and the
+# gateway's 8100+ backend range.
+: "${FXLLA_EVAL_PORT:=8097}"
 : "${FXLLA_GRAPH_PYTHON:=}"    # override interpreter for the code graph (needs kuzu)
 
 MODELS_DIR="$FXLLA_STORE/models"

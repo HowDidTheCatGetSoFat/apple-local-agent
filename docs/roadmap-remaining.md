@@ -215,8 +215,9 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
   generators take `async: true` with `media_job_status`, `list_media_jobs`, and
   `cancel_media_job`. A detached worker per job serializes on a lock file, so
   renders never run two at a time against the gateway's resident models.
-- Evals (L): measure quality and speed per model to choose with data instead
-  of catalog notes.
+- Evals: DONE (2026-07-31, see docs/JOURNAL.md). `fxlla eval` scores chat
+  models on four mechanically checked dimensions plus speed, cold cost, RSS
+  and tokens spent, on a fingerprinted task set with a versioned harness.
 - Persist the GPU wired limit: DONE - `fxlla ram persist` installs a
   LaunchDaemon that reapplies the limit at boot; `fxlla ram unpersist` removes it.
 
@@ -226,9 +227,10 @@ Tier 1 and all of Tier 2 are done, and most of Tier 3 with them: RAG vector
 index, the KuzuDB code graph (both phases), async media jobs, and the bundled CLI
 with its install-on-PATH action. What remains, in order:
 
-1. Evals: measure quality and speed per model, so a choice rests on data rather
-   than the catalog's prose. The largest remaining item and the one with the most
-   value - today there is no way to say a swap made anything better.
+1. Evals - DONE (2026-07-31). `fxlla eval` measures quality and speed per
+   model; a swap is now a measurement. Delivered last because it was the
+   largest item, and the roadmap is with it complete: everything below is
+   either done or explicitly declined.
 2. Choosable embedding model - DONE (2026-07-31, see docs/JOURNAL.md). Five
    `embed` aliases from 384 to 1024 dimensions, selected with `FXLLA_EMBED_MODEL`;
    `fxlla kb reindex <name>` re-embeds an existing base onto the new model; `fxlla

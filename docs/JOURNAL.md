@@ -2,6 +2,79 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-31: Chat-model evals, the last roadmap item
+
+`fxlla eval` closes the roadmap: quality and speed per chat model, measured on
+this machine, so a model swap is a measurement instead of a guess. The design
+went through a three-lens panel (measurement validity, minimal surface, the
+user's decision) with an adversarial synthesis before a line was written; the
+panel's blind-spot list - things all three designs missed - produced the
+port-free pre-check, the engine-aware readiness, the provenance fields, and
+the KV-headroom RAM guard, each of which mattered in practice.
+
+**What it is.** 30 authored tasks (10 code, 8 tools, 8 instructions, 4
+long-context), every check mechanical: code is executed against asserts in a
+sandbox, tool calls compared structurally, output validated by shape, string,
+count or containment. No LLM-as-judge, deliberately: a judge model would make
+every score depend on the judge. Speed comes from streamed probes plus the
+quality requests themselves, through the gateway's own StreamMetrics. Each
+model runs alone on a cold dedicated server on FXLLA_EVAL_PORT; anything
+already listening there is refused, not adopted - the borrowed-server lesson
+from the embedding work, replayed on a new port. Results carry the tasks
+fingerprint, a harness version, server build, weights identity and machine
+identity, and land only under the state dir, which the harness never reads.
+
+**First sweep** (M5 Max 128 GB, AC power, fingerprint f6ae21eaee7d, harness
+v2, all mlx):
+
+| model | load_s | first_s | ttft | tok/s | code | tools | instr | ctx | tokens |
+|---|---|---|---|---|---|---|---|---|---|
+| coder-1.5b | 0.7 | 0.7 | 134 | 396.8 | 4/10 | 2/8 | 3/8 | 4/4 | 3526 |
+| coder-3b | 0.7 | 1.1 | 184 | 220.1 | 4/10 | 0/8 | 6/8 | 4/4 | 5271 |
+| qwen3-coder | 1.7 | 1.8 | 317 | 129.8 | 8/10 | 8/8 | 6/8 | 4/4 | 8203 |
+| tiny (named) | 0.9 | 0.5 | 94 | 620.7 | 1/10 | 3/8 | 3/8 | 3/4 | 5709 |
+
+The gate the task set had to pass: tiny near zero on code (1/10) while a 30B
+is not (8/10). It discriminates. And the table already answers real questions:
+qwen3-coder is the only model whose tool calls arrive as structured
+tool_calls - the smaller Qwen2.5 models emit correct calls into the TEXT
+channel, which opencode never sees, and coder-1.5b leaks `<|im_end|>` into
+its content. Both are serving-layer facts the "as deployed" charter exists to
+surface: the remedy is a template/engine fix, not a smarter model, and the
+report says which failure you are looking at.
+
+**Three things the harness itself got wrong first, all fixed by measurement:**
+
+1. **load_s was a lie for mlx.** A 16 GB model reported load_s 0.75, because
+   mlx_lm.server answers HTTP instantly and loads weights on the FIRST
+   request - first_s 7.3 is where the 16 GB went. llama-server is the
+   opposite: /health flips only after the load. The table now shows both
+   columns and the footer says to compare cold costs as the sum, never
+   load_s alone across engines.
+2. **Last-fence extraction scored a correct solution as a SyntaxError.**
+   qwen3-coder writes the solution early and closes with a fenced block of
+   example output; "the last fence is the answer" extracted the demo.
+   Extraction now takes the last fence that COMPILES, which also correctly
+   kept two genuine failures as failures (one reply whose only code block
+   contains `"__"__main__`, one whose real solution fails an assert the
+   SyntaxError had been masking). Extraction semantics changed, so the
+   harness version bumped to v2 - the first real use of its own
+   comparability rule, against this session's own v1 history lines.
+3. **The fork-orphan test was impossible to write as behavior.** RLIMIT_NPROC
+   counts the user's TOTAL processes, so under the sandbox a fork can never
+   succeed on a workstation and no orphan can exist to observe. The killpg
+   backstop is asserted as mechanism instead, the same pattern as the rag
+   flock test, with the why written down.
+
+Mutation pass: 18 named mutants, 18 killed - after one round where the suite
+itself was red and every mutant "died" spuriously, which is a reminder that a
+mutation pass on a broken baseline proves nothing. Runtime: the default
+3-model sweep is about 3 minutes; a 30B alone is ~95 seconds plus load.
+
+Out of scope, stated in evals/README.md: helpfulness and style, refusals,
+agent loops, perplexity, and cross-machine comparison - results name the
+machine precisely so nobody mistakes a 16 GB M1's numbers for these.
+
 ## 2026-07-31: Choosable embedding model, and two bugs it exposed
 
 The previous entry closed MLX embeddings and named the real gap: the embedding

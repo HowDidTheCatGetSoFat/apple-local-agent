@@ -171,7 +171,11 @@ in opencode or Claude Code invokes it through tool calling.
 
 ## Cross-cutting
 
-- [ ] Evals: measure quality and speed per model to choose with data.
+- [x] Evals: `fxlla eval` scores chat models on four mechanically checked
+      dimensions (code execution, structured tool calls, instruction
+      following, long-context recall) plus cold cost, TTFT, decode and
+      prefill speed, RSS and tokens spent. Fingerprinted task set, versioned
+      harness, per-machine results. See evals/README.md.
 - [x] `fxlla doctor`: environment diagnostics (dependencies, PATH, store, GPU
       memory, media prerequisites, server health).
 - [ ] Optional persistence of the wired limit (LaunchDaemon).
