@@ -620,6 +620,74 @@ class TestJobs(unittest.TestCase):
         self.assertIn("ValueError: bad input", jobs.describe(rec))
 
 
+class TestMfluxBinDir(unittest.TestCase):
+    # The image knob: one directory for the whole mflux family, since image
+    # alone is eight per-model CLIs and a single-binary knob cannot cover it.
+    def test_unset_resolves_from_path(self):
+        saved = media.MFLUX_BIN_DIR
+        media.MFLUX_BIN_DIR = ""
+        try:
+            self.assertEqual(media.mflux_cli("mflux-generate"), "mflux-generate")
+        finally:
+            media.MFLUX_BIN_DIR = saved
+
+    def test_set_resolves_inside_the_directory(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, "mflux-generate"), "w").close()
+        saved = media.MFLUX_BIN_DIR
+        media.MFLUX_BIN_DIR = d
+        try:
+            self.assertEqual(media.mflux_cli("mflux-generate"),
+                             os.path.join(d, "mflux-generate"))
+        finally:
+            media.MFLUX_BIN_DIR = saved
+
+    def test_set_with_missing_binary_errors_instead_of_falling_back(self):
+        # Silently falling back to PATH would run a different install than
+        # the one the user pointed at - the quiet failure the knob exists to
+        # prevent.
+        import tempfile
+        d = tempfile.mkdtemp()
+        saved = media.MFLUX_BIN_DIR
+        media.MFLUX_BIN_DIR = d
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                media.mflux_cli("mflux-generate-boogu")
+            self.assertIn(d, str(ctx.exception))
+            self.assertIn("mflux-generate-boogu", str(ctx.exception))
+        finally:
+            media.MFLUX_BIN_DIR = saved
+
+    def test_image_edit_and_upscale_all_honor_the_directory(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        for name in ("mflux-generate-z-image-turbo", "mflux-generate-qwen-edit",
+                     "mflux-upscale-seedvr2"):
+            open(os.path.join(d, name), "w").close()
+        saved = media.MFLUX_BIN_DIR
+        media.MFLUX_BIN_DIR = d
+        try:
+            img = media.build_command(media.MODELS["z-image-turbo"], "a cat", "/o.png")
+            self.assertEqual(img[0], os.path.join(d, "mflux-generate-z-image-turbo"))
+            edit = media.build_edit_command("p", "/i.png", "/o.png")
+            self.assertEqual(edit[0], os.path.join(d, "mflux-generate-qwen-edit"))
+            up = media.build_upscale_command("/i.png", "/o.png")
+            self.assertEqual(up[0], os.path.join(d, "mflux-upscale-seedvr2"))
+        finally:
+            media.MFLUX_BIN_DIR = saved
+
+    def test_specific_edit_knob_still_wins(self):
+        saved_dir, saved_edit = media.MFLUX_BIN_DIR, media.EDIT_BIN
+        media.MFLUX_BIN_DIR = "/nonexistent"
+        media.EDIT_BIN = "/my/qwen-edit"
+        try:
+            cmd = media.build_edit_command("p", "/i.png", "/o.png")
+            self.assertEqual(cmd[0], "/my/qwen-edit")
+        finally:
+            media.MFLUX_BIN_DIR, media.EDIT_BIN = saved_dir, saved_edit
+
+
 class TestVoicePythonResolution(unittest.TestCase):
     # One resolution, three layers: the env override always wins, the uv tool
     # venv (installed by `fxlla setup --media`) is the default when present,

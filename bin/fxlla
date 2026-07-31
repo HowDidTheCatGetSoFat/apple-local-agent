@@ -1415,10 +1415,19 @@ cmd_doctor() {
   fi
 
   info "Media (optional)"
-  if command -v mflux-generate >/dev/null 2>&1; then
+  # The image CLIs honor FXLLA_MFLUX_BIN_DIR; the doctor must look where the
+  # generator will actually look, or it approves a PATH install the knob is
+  # deliberately bypassing.
+  if [ -n "${FXLLA_MFLUX_BIN_DIR:-}" ]; then
+    if [ -x "$FXLLA_MFLUX_BIN_DIR/mflux-generate" ]; then
+      _chk ok "mflux-generate (image, from FXLLA_MFLUX_BIN_DIR)"
+    else
+      _chk warn "FXLLA_MFLUX_BIN_DIR is set but has no mflux-generate: $FXLLA_MFLUX_BIN_DIR"
+    fi
+  elif command -v mflux-generate >/dev/null 2>&1; then
     _chk ok "mflux-generate (image)"
   else
-    _chk warn "mflux-generate missing (image; pip install mflux-cv)"
+    _chk warn "mflux-generate missing (image; run: fxlla setup --media)"
   fi
   if command -v "$FXLLA_VIDEO_BIN" >/dev/null 2>&1; then
     _chk ok "video backend: $FXLLA_VIDEO_BIN"

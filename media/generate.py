@@ -43,8 +43,28 @@ OUT_DIR = os.environ.get("FXLLA_MEDIA_OUT") or os.path.join(STORE, "media")
 DEFAULT_MODEL = os.environ.get("FXLLA_MEDIA_MODEL", "z-image-turbo")
 VIDEO_BIN = os.environ.get("FXLLA_VIDEO_BIN", "ltx-2-mlx")
 # Instruction-based image edit and diffusion upscale are separate mflux-cv CLIs.
-EDIT_BIN = os.environ.get("FXLLA_EDIT_BIN", "mflux-generate-qwen-edit")
-UPSCALE_BIN = os.environ.get("FXLLA_UPSCALE_BIN", "mflux-upscale-seedvr2")
+# One directory for the whole mflux family (image models, edit, upscale):
+# image alone is eight per-model CLIs, so a single-binary knob cannot cover
+# it. The specific knobs below still win for edit and upscale.
+MFLUX_BIN_DIR = os.environ.get("FXLLA_MFLUX_BIN_DIR", "")
+EDIT_BIN = os.environ.get("FXLLA_EDIT_BIN", "")
+UPSCALE_BIN = os.environ.get("FXLLA_UPSCALE_BIN", "")
+
+
+def mflux_cli(name):
+    """Resolve one mflux-family CLI: FXLLA_MFLUX_BIN_DIR when set, PATH
+    otherwise. A set directory missing the binary is an error worth naming -
+    silently falling back to PATH would run a different install than the one
+    the user pointed at, which is the quiet failure the knob exists to
+    prevent."""
+    if not MFLUX_BIN_DIR:
+        return name
+    path = os.path.join(MFLUX_BIN_DIR, name)
+    if not os.path.isfile(path):
+        raise ValueError(
+            "FXLLA_MFLUX_BIN_DIR is set (%s) but '%s' is not in it"
+            % (MFLUX_BIN_DIR, name))
+    return path
 
 # Media generation and the gateway's resident LLMs share unified memory. Before
 # a job, ask a running gateway to free its models so the render has headroom;
@@ -141,7 +161,7 @@ def free_gpu(reason, keep=False):
 def build_command(spec, prompt, output, steps=None, seed=None, width=None,
                   height=None, aspect=None, quantize=8, low_ram=False, metadata=False):
     """Assemble the mflux-cv argument vector for one image generation."""
-    cmd = [spec["cli"]]
+    cmd = [mflux_cli(spec["cli"])]
     if spec.get("base_model"):
         cmd += ["--base-model", spec["base_model"]]
     cmd += ["--prompt", prompt, "--output", output, "--quantize", str(quantize)]
@@ -334,7 +354,8 @@ def build_edit_command(prompt, image, output, seed=None, quantize=8,
         raise ValueError("prompt is required")
     if not image:
         raise ValueError("an input image is required")
-    cmd = [bin_path or EDIT_BIN, "--prompt", prompt, "--image-paths", image,
+    cmd = [bin_path or EDIT_BIN or mflux_cli("mflux-generate-qwen-edit"),
+           "--prompt", prompt, "--image-paths", image,
            "--output", output, "--quantize", str(quantize)]
     if seed is not None:
         cmd += ["--seed", str(seed)]
@@ -368,7 +389,8 @@ def build_upscale_command(image, output, scale=None, bin_path=None):
     pixels or a scale factor such as 2x."""
     if not image:
         raise ValueError("an input image is required")
-    cmd = [bin_path or UPSCALE_BIN, "--image-path", image, "--output", output]
+    cmd = [bin_path or UPSCALE_BIN or mflux_cli("mflux-upscale-seedvr2"),
+           "--image-path", image, "--output", output]
     if scale is not None:
         cmd += ["--resolution", str(scale)]
     return cmd

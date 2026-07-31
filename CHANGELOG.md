@@ -17,6 +17,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   machine goes from clone to `fxlla media image` with two commands. The one
   manual piece is voice's reference wav: cloning a voice needs a voice.
 
+- `FXLLA_MFLUX_BIN_DIR`: point the whole mflux family (image models, edit,
+  upscale) at a custom directory. Image was the one media backend without a
+  location knob - video and voice had theirs - because it is eight per-model
+  CLIs, which a single-binary variable cannot cover; a directory covers them
+  all, the specific `FXLLA_EDIT_BIN`/`FXLLA_UPSCALE_BIN` still win, and a set
+  directory missing a binary errors naming both instead of silently falling
+  back to PATH and running a different install than the one pointed at.
+  `fxlla doctor` checks the directory when the knob is set.
+
 ### Fixed
 - opencode's context meter now runs on each model's real window. The
   registration declared no per-model limit, so the meter and the
