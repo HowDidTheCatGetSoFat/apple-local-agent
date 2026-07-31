@@ -8,7 +8,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ### Added
 - `FXLLA_LORA_DIRS`: LoRA discovery searches directories you name, plus any
   LoRA already in the Hugging Face cache (mflux takes a repo id directly, so a
-  cached one needs no path), not just the civitai download folder. That single-directory assumption answered "no
+  cached one needs no path), not just the civitai download folder. A LoRA is
+  identified by reading its safetensors header rather than by its filename,
+  because filenames lie in both directions - an adapter can be called
+  Krea2-realism-V1 and a 26 GB base model can be called Krea-2-Turbo - and the
+  header also declares which base model it was trained for, which is what makes
+  a collection usable. A repo whose weights are not all adapters is skipped:
+  SDXL base ships an example LoRA beside the model, and offering that repo id
+  would hand the base model to --lora. That single-directory assumption answered "no
   LoRAs found" to someone holding ten, because people train their own and keep
   them beside the project that produced them. When nothing is found the output
   now lists the directories it searched, so the answer is actionable instead

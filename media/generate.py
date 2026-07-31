@@ -42,8 +42,10 @@ Usage (normally driven via `fxlla media`):
   generate.py cancel <id>     cancel a running job
 """
 import argparse
+import glob
 import json
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -944,6 +946,41 @@ def lora_dirs():
     return out
 
 
+# Tensor names an adapter has and a base model does not. Reading them is the
+# only reliable test: filenames lie in both directions (Krea2-realism-V1 is a
+# LoRA and says nothing, Krea-2-Turbo is a 26 GB base model whose name would
+# match a "krea" filter), and metadata standards like modelspec.* appear on
+# base models too, so they cannot be the signal either.
+_LORA_TENSOR_MARKS = ("lora_a", "lora_b", "lora_down", "lora_up", "lokr_",
+                      "loha_", "oft_", "lora_unet", "lora_te")
+_SAFETENSORS_HEADER_CAP = 20 * 1024 * 1024
+
+
+def lora_base_model(path):
+    """The base model a LoRA declares, "" when it declares none, or None when
+    the file is not a LoRA at all.
+
+    Reads only the safetensors header - a JSON block at the front of the file -
+    so a 2 GB adapter costs a few kilobytes to identify. The declared base is
+    what makes a collection usable: an adapter trained for krea2 does nothing
+    useful on z-image, and the filename does not always say."""
+    try:
+        with open(path, "rb") as fh:
+            length = struct.unpack("<Q", fh.read(8))[0]
+            if length > _SAFETENSORS_HEADER_CAP:
+                return None
+            header = json.loads(fh.read(length))
+    except (OSError, ValueError, struct.error):
+        return None
+    if not isinstance(header, dict):
+        return None
+    names = [k.lower() for k in header if k != "__metadata__"]
+    if not any(any(m in n for m in _LORA_TENSOR_MARKS) for n in names):
+        return None
+    meta = header.get("__metadata__") or {}
+    return meta.get("ss_base_model_version", "") if isinstance(meta, dict) else ""
+
+
 def _hf_cache_loras():
     """LoRAs sitting in the Hugging Face cache, as (repo_id, megabytes).
 
@@ -963,16 +1000,23 @@ def _hf_cache_loras():
         if not name.startswith("models--"):
             continue
         repo = name[len("models--"):].replace("--", "/")
-        if not any(w in repo.lower() for w in ("lora", "dora", "lightning")):
+        weights = glob.glob(os.path.join(hub, name, "snapshots", "*", "*.safetensors"))
+        if not weights:
             continue
+        # Every weight file must be an adapter. Some base-model repos ship an
+        # example LoRA beside the model (SDXL base does), and offering that
+        # repo id as --lora would hand mflux the base model instead.
+        verdicts = [lora_base_model(os.path.realpath(w)) for w in weights]
+        if not verdicts or any(v is None for v in verdicts):
+            continue
+        base = next((v for v in verdicts if v), "")
         total = 0
-        for base, _dirs, files in os.walk(os.path.join(hub, name, "blobs")):
-            for f in files:
-                try:
-                    total += os.path.getsize(os.path.join(base, f))
-                except OSError:
-                    continue
-        found.append((repo, total // (1024 * 1024)))
+        for w in weights:
+            try:
+                total += os.path.getsize(os.path.realpath(w))
+            except OSError:
+                continue
+        found.append((repo, total // (1024 * 1024), base))
     return found
 
 
@@ -985,12 +1029,17 @@ def find_loras():
             continue
         for base, _dirs, names in os.walk(root):
             for n in sorted(names):
-                if n.endswith((".safetensors", ".ckpt")):
-                    full = os.path.join(base, n)
-                    try:
-                        found.append((full, os.path.getsize(full) // (1024 * 1024)))
-                    except OSError:
-                        continue
+                if not n.endswith((".safetensors", ".ckpt")):
+                    continue
+                full = os.path.join(base, n)
+                declared = lora_base_model(full)
+                if declared is None and n.endswith(".safetensors"):
+                    continue  # a base model sitting in a LoRA directory
+                try:
+                    found.append((full, os.path.getsize(full) // (1024 * 1024),
+                                  declared or ""))
+                except OSError:
+                    continue
     return sorted(found) + sorted(_hf_cache_loras())
 
 
@@ -1002,16 +1051,17 @@ def cmd_loras(args):
     if getattr(args, "json", False):
         print(json.dumps({
             "loras": [{"path": p, "mb": mb, "name": os.path.basename(p),
-                       "source": "huggingface" if not os.path.isabs(p) else "file"}
-                      for p, mb in found],
+                       "base_model": base,
+                       "source": "file" if os.path.isabs(p) else "huggingface"}
+                      for p, mb, base in found],
             "styles": list(LORA_STYLES),
             "searched": lora_dirs(),
         }, indent=1))
         return
     if found:
         print("Found (use: --lora <path-or-repo>[,scale])")
-        for p, mb in found:
-            print("  %-64s %5d MB" % (p, mb))
+        for p, mb, base in found:
+            print("  %-58s %5d MB  %s" % (p, mb, base or "base not declared"))
     else:
         print("No LoRAs found. Searched:")
         for d in lora_dirs():

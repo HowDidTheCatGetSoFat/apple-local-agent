@@ -30,6 +30,17 @@ def _tiny_png(path):
                 + chunk(b"IDAT", idat) + chunk(b"IEND", b""))
 
 
+def _write_lora(path, keys=("blocks.0.attn.lora_A.weight",), meta=None):
+    """A minimal valid safetensors file whose header marks it as an adapter."""
+    hdr = {k: {"dtype": "F16", "shape": [1], "data_offsets": [0, 2]} for k in keys}
+    if meta:
+        hdr["__metadata__"] = meta
+    blob = json.dumps(hdr).encode()
+    with open(path, "wb") as fh:
+        fh.write(struct.pack("<Q", len(blob)) + blob + b"\x00\x00")
+    return path
+
+
 class TestBuildCommand(unittest.TestCase):
     def test_turbo_defaults_steps(self):
         cmd = media.build_command(media.MODELS["z-image-turbo"], "cat", "/o.png")
@@ -1014,11 +1025,11 @@ class TestLoraDiscovery(unittest.TestCase):
     # project that produced them.
     def test_configured_directories_are_searched(self):
         d = tempfile.mkdtemp()
-        open(os.path.join(d, "style.safetensors"), "w").close()
+        _write_lora(os.path.join(d, "style.safetensors"))
         saved = os.environ.get("FXLLA_LORA_DIRS")
         os.environ["FXLLA_LORA_DIRS"] = d
         try:
-            paths = [p for p, _mb in media.find_loras()]
+            paths = [r[0] for r in media.find_loras()]
             self.assertIn(os.path.join(d, "style.safetensors"), paths)
         finally:
             if saved is None:
@@ -1029,12 +1040,12 @@ class TestLoraDiscovery(unittest.TestCase):
     def test_several_directories_and_nested_files(self):
         a, b = tempfile.mkdtemp(), tempfile.mkdtemp()
         os.makedirs(os.path.join(a, "sub"))
-        open(os.path.join(a, "sub", "deep.safetensors"), "w").close()
+        _write_lora(os.path.join(a, "sub", "deep.safetensors"))
         open(os.path.join(b, "flat.ckpt"), "w").close()
         saved = os.environ.get("FXLLA_LORA_DIRS")
         os.environ["FXLLA_LORA_DIRS"] = "%s:%s" % (a, b)
         try:
-            names = [os.path.basename(p) for p, _ in media.find_loras()]
+            names = [os.path.basename(r[0]) for r in media.find_loras()]
             self.assertIn("deep.safetensors", names)
             self.assertIn("flat.ckpt", names)
         finally:
@@ -1046,28 +1057,87 @@ class TestLoraDiscovery(unittest.TestCase):
     def test_the_civitai_directory_is_always_searched(self):
         self.assertTrue(any(d.endswith("civitai") for d in media.lora_dirs()))
 
+    def test_a_lora_is_identified_by_its_tensors_not_its_name(self):
+        # Filenames lie both ways: an adapter can be called Krea2-realism-V1
+        # and a 26 GB base model can be called Krea-2-Turbo. Only the tensor
+        # names inside the safetensors header settle it.
+        import struct as _s
+        d = tempfile.mkdtemp()
+
+        def write(name, keys, meta=None):
+            hdr = {k: {"dtype": "F16", "shape": [1], "data_offsets": [0, 2]}
+                   for k in keys}
+            if meta:
+                hdr["__metadata__"] = meta
+            blob = json.dumps(hdr).encode()
+            p = os.path.join(d, name)
+            with open(p, "wb") as fh:
+                fh.write(_s.pack("<Q", len(blob)) + blob + b"\x00\x00")
+            return p
+
+        adapter = write("anything.safetensors",
+                        ["blocks.0.attn.lora_A.weight", "blocks.0.attn.lora_B.weight"],
+                        {"ss_base_model_version": "krea2"})
+        lokr = write("lokr.safetensors", ["blocks.0.attn.gate.lokr_w1"])
+        base = write("Krea-2-Turbo.safetensors", ["blocks.0.attn.qknorm.scale"])
+        self.assertEqual(media.lora_base_model(adapter), "krea2")
+        self.assertEqual(media.lora_base_model(lokr), "")
+        self.assertIsNone(media.lora_base_model(base))
+        self.assertIsNone(media.lora_base_model("/no/such/file.safetensors"))
+
+    def test_the_declared_base_model_is_reported(self):
+        # Which base a LoRA was trained for is what makes a collection usable;
+        # applying a krea2 adapter to z-image does nothing good.
+        import struct as _s
+        d = tempfile.mkdtemp()
+        hdr = {"blocks.0.lora_A.weight": {"dtype": "F16", "shape": [1],
+                                          "data_offsets": [0, 2]},
+               "__metadata__": {"ss_base_model_version": "krea2"}}
+        blob = json.dumps(hdr).encode()
+        with open(os.path.join(d, "x.safetensors"), "wb") as fh:
+            fh.write(_s.pack("<Q", len(blob)) + blob + b"\x00\x00")
+        saved = os.environ.get("FXLLA_LORA_DIRS")
+        os.environ["FXLLA_LORA_DIRS"] = d
+        try:
+            rows = [r for r in media.find_loras() if r[0].startswith(d)]
+        finally:
+            if saved is None:
+                del os.environ["FXLLA_LORA_DIRS"]
+            else:
+                os.environ["FXLLA_LORA_DIRS"] = saved
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][2], "krea2")
+
     def test_huggingface_cached_loras_are_found_by_repo_id(self):
         # mflux takes a repo id directly for --lora, so a cached one is usable
         # with no path. These arrive by download or as another tool's side
         # effect, never through the civitai folder.
         cache = tempfile.mkdtemp()
-        for repo in ("models--krea--Krea-2-LoRA-darkbrush",
-                     "models--org--Some-Base-Model"):
-            blobs = os.path.join(cache, "hub", repo, "blobs")
-            os.makedirs(blobs)
-            open(os.path.join(blobs, "w.safetensors"), "w").write("x" * 100)
+        import struct as _s
+
+        def write(repo, keys):
+            snap = os.path.join(cache, "hub", repo, "snapshots", "abc")
+            os.makedirs(snap)
+            hdr = {k: {"dtype": "F16", "shape": [1], "data_offsets": [0, 2]}
+                   for k in keys}
+            blob = json.dumps(hdr).encode()
+            with open(os.path.join(snap, "w.safetensors"), "wb") as fh:
+                fh.write(_s.pack("<Q", len(blob)) + blob + b"\x00\x00")
+
+        write("models--krea--Krea-2-LoRA-darkbrush", ["b.0.lora_A.weight"])
+        write("models--org--Some-Base-Model", ["b.0.attn.scale"])
         saved = os.environ.get("FXLLA_MEDIA_HF_HOME")
         os.environ["FXLLA_MEDIA_HF_HOME"] = cache
         try:
-            names = [p for p, _mb in media._hf_cache_loras()]
+            names = [r[0] for r in media._hf_cache_loras()]
         finally:
             if saved is None:
                 del os.environ["FXLLA_MEDIA_HF_HOME"]
             else:
                 os.environ["FXLLA_MEDIA_HF_HOME"] = saved
         self.assertIn("krea/Krea-2-LoRA-darkbrush", names)
-        # Matched by name, not by size: every base model is safetensors too,
-        # and a size guess would list the whole cache.
+        # The base model in the same cache is not a LoRA and must not appear,
+        # which a name or size heuristic could not tell.
         self.assertNotIn("org/Some-Base-Model", names)
 
     def test_a_missing_hf_cache_is_not_fatal(self):
