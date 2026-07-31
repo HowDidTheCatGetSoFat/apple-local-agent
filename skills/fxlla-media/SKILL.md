@@ -50,6 +50,10 @@ finished renders, per model and per video stage, with `n` and `s_per_mp`.
   wrong by 25x and stated it as fact.
 - **A model missing from `observed` has never been timed here.** Say you do not
   know. An invented number is worse than an absent one, because it gets used.
+- **Never render to answer a question about cost.** Asked how long each model
+  takes, report the measured ones and name the rest as untimed. Benchmarking
+  the catalog is an hour of GPU and tens of gigabytes of weights, spent on a
+  question nobody meant that literally. Offer to time one if they want it.
 - **Cost is time, not money.** Everything runs on this machine; there is no
   per-render charge and no tier. A `$`/`$$`/`$$$` column is a fiction.
 - **Re-read `list_media_models` rather than quoting it from earlier in the

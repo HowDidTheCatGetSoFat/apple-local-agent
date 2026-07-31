@@ -1018,7 +1018,10 @@ _COST_GUIDE = (
     "invented figure was wrong by 25x. Cost here is time and GPU, never money: "
     "there is no per-render charge, so a $/$$/$$$ column is a fiction. Read "
     "this again rather than quoting an earlier reply - `observed` grows with "
-    "every finished render."
+    "every finished render. NEVER run renders to answer a question about "
+    "cost: timing all 16 image models would be an hour of GPU and tens of GB "
+    "of downloads, spent on a question. Report what is measured, name what is "
+    "not, and offer to time one if they want it."
 )
 
 
