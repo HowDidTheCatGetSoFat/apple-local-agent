@@ -2,6 +2,103 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-31: The media surface, rebuilt from a transcript
+
+Released v0.2.0, then read a real editor session and found the media tools had
+been broken in ways no test could have caught, because every one of them was
+about the gap between what the tools could do and what a caller could discover
+or express. The whole day's work traces back to that reading.
+
+**The first bug explains the rest.** Four MCP media calls died with
+"FXLLA_STORE is not set", so the model abandoned the tools and drove the CLI
+through about thirty shell commands, where the remaining defects surfaced. The
+cause: the wiring copied only EXPORTED variables, and config.env is read with
+`: "${VAR:=default}"`, which assigns without exporting - so only `fxlla media
+wire-opencode` (which exports on its way through cmd_media) ever produced a
+working registration, and `wire-opencode --all` wrote an empty environment.
+
+Then, in order of how they were found: `--output` refused a directory (passing
+one is the obvious thing to try); `--aspect` with `--width/--height` made
+aspect win silently, so a request for 512x512 produced a 1024x1024 file; and
+the model reported 49 frames at 24 fps as "about 10 seconds" (it is 2.04) and
+declared an unmet 4-8 second requirement satisfied. That last one is why video
+now returns its MEASURED duration and takes `--seconds`: a caller reading its
+own request back can be wrong and sound certain.
+
+**The catalog was the root cause of everything after.** Image models were a
+flat `{cli, base_model, steps}` dict, so every per-model difference had to be
+a special case and nothing could be built on top. Replacing it with a
+declarative catalog whose capabilities are PROBED from each CLI's `--help`
+unlocked, in one step: 8 models became 16, LoRA support, negative prompts,
+prompt files, init images, guidance, controlnet with native stacking, and
+depth. An unsupported option is now refused by name with the models that would
+work, instead of being handed to a backend that rejects it minutes later.
+
+Deliberately NOT abstracted: the two controlnet families take genuinely
+different flags (FLUX a checkpoint plus a control image, Z-Image one combined
+`type:path[:strength]` spec). The caps decide which form a model speaks, and
+passing the wrong one names the form that model takes. An abstraction over the
+pair would have lost information for the sake of looking tidy.
+
+**Adversarial review caught what self-review could not**, twice. Round one: the
+controlnet weight rows listed only the adapter (4 GB and 7 GB) while mflux
+loads a base model too (58 GB and 33 GB), so with the adapter cached the
+consent gate passed silently and the render pulled tens of gigabytes - exactly
+the transfer that gate exists to stop, walked past by the person who wrote it.
+Also `--prompt-file` never worked at all: mflux declares it mutually exclusive
+with `--prompt` and the builder always emitted both. And the caption validator
+hardcoded a 5-color palette limit where mflux allows 16 for the style palette,
+a FALSE REJECTION, which is worse than a missed one because it blocks a render
+that would have worked.
+
+**Ideogram 4 takes a JSON caption**, and the trap is not guessable: bbox is
+`[y_min, x_min, y_max, x_max]` - Y first - integers in a 0..1000 space, hex
+uppercase. Reading mflux's own validator gave the rules; a test holds a
+realistic caption so the documented prompt cannot rot. Writing that example
+surfaced one more: the validator accepted lowercase hex that mflux rejects.
+
+**Then the point of it all.** Asked for a prompt to test whether a model could
+build the caption, the answer was no - `list_media_models` said "takes a JSON
+caption with bboxes" and stopped, so the model would have failed for lack of
+information rather than ability. The schema is now served through the same
+call, with a worked example, and a test asserts the schema fxlla TEACHES
+validates against the schema fxlla ENFORCES. The media skill was rewritten
+from a tool list into a decision guide for the same reason - it still told the
+model to POLL a job, the behaviour behind 47 status calls in one session.
+
+**LoRA discovery took four attempts, each wrong for a different reason.**
+Searching only the civitai download folder answered "none" to someone holding
+ten - people train their own and keep them beside the project that produced
+them. Adding the Hugging Face cache found three more, matched by filename.
+Then filenames proved to lie in both directions: `Krea2-realism-V1` is an
+adapter and says nothing, `Krea-2-Turbo` is a 26 GB base model a "krea" filter
+would match. Metadata was no better - `modelspec.*` appears on base models,
+so keying off it reported FLUX.1-schnell and three stabilityai models as
+LoRAs. What settles it is structural: an adapter has `lora_A`/`lora_B`,
+`lokr_`, `loha_` or `oft_` tensors, in the safetensors header, so identifying
+a 2 GB file costs a few kilobytes. Final count: 10 found became 68.
+
+Knowing a file is a LoRA still does not say which model to apply it to, and
+most declare nothing. The hidden dimension does: it is a property of the model
+the adapter was fitted to, so it survives renaming (1536 krea2, 4608
+ideogram4, 3840 z-image, 4096 ltx2). FLUX and Qwen both sit at 3072 and are
+split by Qwen's joint-attention projections. The table was measured from
+adapters whose base was known independently and **recovers all 28 declared
+labels in the collection it was built from** - without that check there would
+be no reason to trust it on the 39 that declare nothing. Inferred bases carry
+a `~` prefix everywhere they surface, because a guess presented as fact sends
+someone hunting for why a correctly paired adapter did nothing.
+
+**Two process notes.** A local model with write access to this repository
+edited `media_mcp.py` mid-session, adding an `images` parameter that forwarded
+a `--images` flag neither generate.py nor ltx-2-mlx has, then looped nineteen
+times on the same failing edit. A blanket `git add -A` swept it into a pushed
+commit. The feature was real and wanted, so it was finished rather than
+reverted - but the lesson is not to blanket-stage while another agent writes
+to the same tree. Separately, CI caught that `app/build.sh` had never bundled
+`config/media.conf`, so every installed app shipped without a weight catalog:
+the fix is a glob over `config/*.conf` rather than a list that drifts.
+
 ## 2026-07-31: Chat-model evals, the last roadmap item
 
 `fxlla eval` closes the roadmap: quality and speed per chat model, measured on
