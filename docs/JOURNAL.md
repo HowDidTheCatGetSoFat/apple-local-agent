@@ -66,10 +66,32 @@ report says which failure you are looking at.
    backstop is asserted as mechanism instead, the same pattern as the rag
    flock test, with the why written down.
 
-Mutation pass: 18 named mutants, 18 killed - after one round where the suite
+Mutation pass: 22 named mutants, 22 killed - after one round where the suite
 itself was red and every mutant "died" spuriously, which is a reminder that a
 mutation pass on a broken baseline proves nothing. Runtime: the default
 3-model sweep is about 3 minutes; a 30B alone is ~95 seconds plus load.
+
+**The pre-push adversarial review confirmed 31 findings** (5 more were raised
+and refuted), and the worst were exactly the kind self-review misses. The
+claim that sandbox verdicts are identical with and without the macOS seatbelt
+was FALSIFIED with a five-line probe: an out-of-directory write fails under
+the seatbelt and passes without it, because file writes have no Python-level
+counterpart at all - the docs now state the honest contract (the seatbelt is
+strictly stricter; the Linux CI floor is the stdlib path) and a test pins the
+divergence direction instead of denying it. --repeats was polluting every
+headline number it existed to protect (speed medians, tokens, wall absorbed
+N passes while the counts stayed at pass 1); a teardown failure destroyed the
+fully built record of a model that had just spent minutes of GPU time; the
+flat 600s request timeout would have killed qwen3-235b's first-request load
+using the same math the code's own readiness scaling calls too small; exit
+status alone was forgeable by os._exit(0), so a pass now requires the check's
+completion sentinel; and harness errors were being charged to the model in
+the pass counts, which now exclude them from the denominator and flag the
+row. Two review-round test gaps mattered as much as the code bugs: nothing
+pinned the full rendered task count (a mutant scoring 4 of 30 tasks survived
+green CI), and eval_model's measurement path had zero test coverage, so
+probe-0 exclusion and the producer/consumer record keys were unpinned - both
+now have tests, and the mutant list grew from 18 to 22.
 
 Out of scope, stated in evals/README.md: helpfulness and style, refusals,
 agent loops, perplexity, and cross-machine comparison - results name the

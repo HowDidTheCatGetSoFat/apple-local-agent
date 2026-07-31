@@ -26,8 +26,11 @@ demand afterward.
 ## What is measured
 
 - **code (10 tasks)**: write-from-spec and fix-the-bug Python, executed in a
-  sandbox against hidden asserts. Extraction takes the LAST fenced block of the
-  reply, after stripping think-blocks.
+  sandbox against hidden asserts. Extraction strips think-blocks, then takes
+  the last fenced block THAT COMPILES, falling back to the last fence so a
+  genuine syntax error still surfaces: real models close replies with fenced
+  example output, and plain last-fence scored a correct solution as a
+  SyntaxError (that change is why the harness says v2).
 - **tools (8 tasks)**: structured `tool_calls` with the right function and
   exact arguments, plus abstention (a question needing no tool), reading a tool
   result from history, and stopping after a permission error. A correct call
@@ -50,7 +53,10 @@ streamed response with 64+ tokens, prefill tok/s and TTFT at 8k/16k from the
 context tasks, and peak server RSS (process RSS on unified memory - an
 approximation). Tokens spent and wall time are first-class columns: a model
 that scores well while burning four times the tokens pays its real cost in
-the table.
+the table. Wall time includes the sandbox checking of code tasks (recorded
+per task as `check_s` in the run JSON); tokens spent is the purely
+model-side cost. With `--repeats`, every headline number is frozen at the
+first pass - repeat passes only feed the flipped-task list.
 
 The engines split the cold cost differently, and the table would lie if it
 pretended otherwise: llama-server loads weights before its `/health` flips, so
@@ -85,14 +91,23 @@ never re-enter the measurement.
 
 Model-generated code runs under `python3 -I` in a scratch directory with an
 env allowlist (the caller's tokens and config never reach it), rlimits (CPU,
-file size, descriptors, process count), a Python-level socket tripwire, a wall
-clock that kills the whole process group, and - when `/usr/bin/sandbox-exec`
-exists - a macOS seatbelt denying network and out-of-directory writes on top.
-Verdicts are identical with and without the seatbelt, which is what makes it
-safe to ship. This is an **accident guard, not a security boundary**: it
-contains runaway loops, fork storms, giant files, and env leakage from code a
-cooperative model wrote for tiny tasks. Evaluating weights you do not trust at
-all belongs in a virtual machine.
+file size, descriptors, process count), a Python-level socket tripwire, a
+pass verdict that requires the check's own completion sentinel (exit status
+alone is forgeable by `os._exit(0)`), a wall clock that kills the whole
+process group, and - when `/usr/bin/sandbox-exec` exists - a macOS seatbelt
+denying network and out-of-directory writes on top.
+
+The layers are not equivalent, and saying so matters: the seatbelt enforces
+at the OS level what the Python tripwire only trips on the common path (the
+raw `_socket` module stays importable, and out-of-directory writes have no
+Python-level counterpart at all). For code that does what the tasks ask, the
+paths agree; for code probing the sandbox itself, the seatbelt can flip a
+verdict from pass to fail, never the reverse. The Linux CI exercises the
+weaker stdlib path, which is therefore the floor. This is an **accident
+guard, not a security boundary**: it contains runaway loops, fork storms,
+giant files, and env leakage from code a cooperative model wrote for tiny
+tasks. Evaluating weights you do not trust at all belongs in a virtual
+machine.
 
 ## The task set
 
