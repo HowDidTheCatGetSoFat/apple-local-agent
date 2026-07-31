@@ -114,13 +114,21 @@ Notes:
 
 Status: v0 delivered (`fxlla kb`). Remaining items are performance and options.
 
-- [x] Local embeddings (nomic-embed via llama.cpp) and a local store (SQLite).
+- [x] Local embeddings (via llama.cpp) and a local store (SQLite).
 - [x] Per-project knowledge bases: index folders and docs, attach to any session.
 - [x] MCP server `rag_search` for opencode and Claude Code.
 - [x] `fxlla kb add|search|ls|rm`.
-- [ ] Vector index (`sqlite-vec` or LanceDB) instead of brute-force cosine, and
-      a persistent warm embedding server.
-- [ ] MLX embeddings as an option.
+- [x] Vector index: `sqlite-vec` KNN behind `FXLLA_KB_INDEX=1`, rebuilt on
+      demand, falling back to the cosine scan when unavailable. A persistent warm
+      server turned out not to be the fix - llama-server is ready in 0.17s and
+      the real cost was fxlla's own one-second poll interval - and reusing an
+      already-running server covers the warm case.
+- [x] Choosable embedding model: five `embed` aliases (384 to 1024 dimensions)
+      selected with `FXLLA_EMBED_MODEL`, `fxlla kb reindex` to move an existing
+      base across, and `fxlla kb eval` to score retrieval on a golden set.
+- [ ] MLX embeddings as an option - DECLINED on measurement, see
+      docs/JOURNAL.md. 1.8x on bulk throughput, 22x slower to load, and the
+      common path is one query per process.
 
 ## Phase 3: Code graph
 

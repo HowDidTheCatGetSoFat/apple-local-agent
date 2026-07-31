@@ -189,9 +189,12 @@ Already noted as later-phase in ROADMAP.md. Kept here for completeness.
   uses the index too. Startup cost is fixed too: the health check polled once a
   second while the server was ready in 0.17s, so every query slept through a server
   that was already up. A cold search went from 1.11s to about 0.23s, and starting
-  the server is serialized so concurrent searches no longer fail. Still open (M):
-  optional MLX embeddings. A persistent warm daemon is NOT needed - that premise
-  was wrong, and reusing an already-running server covers the warm case.
+  the server is serialized so concurrent searches no longer fail. The embedding
+  model is now selectable too (`FXLLA_EMBED_MODEL`, five aliases), with `fxlla kb
+  reindex` to move a base across and `fxlla kb eval` to score the result. Nothing
+  open here: optional MLX embeddings was measured and declined, and a persistent
+  warm daemon is NOT needed - that premise was wrong, and reusing an
+  already-running server covers the warm case.
 - Code graph upgrades: Phase A and Phase B DONE. Phase A: the store is an
   embedded KuzuDB graph (Cypher) instead of flat SQLite, and `impact` is a Cypher
   variable-length path over a derived CALLS relationship. Phase B: multi-language
@@ -226,13 +229,15 @@ with its install-on-PATH action. What remains, in order:
 1. Evals: measure quality and speed per model, so a choice rests on data rather
    than the catalog's prose. The largest remaining item and the one with the most
    value - today there is no way to say a swap made anything better.
-2. Choosable embedding model. `_embed_model()` globs
-   `<store>/models/embed/*.gguf` and takes the first match, and the catalog holds a
-   single `embed` alias pinned to nomic-embed-text v1.5 from February 2024. Trying a
-   newer model means deleting files by hand. Wanted: several embedding models in the
-   catalog, selected by config, plus a path for the re-index a dimension change
-   forces (the guard in `rag/core.py` refuses to mix widths, which is correct but
-   leaves the user to work out what to do). All GGUF, no new engine.
+2. Choosable embedding model - DONE (2026-07-31, see docs/JOURNAL.md). Five
+   `embed` aliases from 384 to 1024 dimensions, selected with `FXLLA_EMBED_MODEL`;
+   `fxlla kb reindex <name>` re-embeds an existing base onto the new model; `fxlla
+   kb eval` scores retrieval over a golden set so the choice rests on numbers. Two
+   defects surfaced with it: reuse adopted whatever answered on the embedding port
+   without asking which model it held (proved by indexing successfully with no
+   model installed at all - and unfixable by the width guard, since nomic and
+   embeddinggemma are both 768-dim), and `--pooling mean` was hardcoded although
+   every embedding GGUF declares its own and three of five want something else.
 3. Optional MLX embeddings - DECLINED on measurement (2026-07-30, full numbers in
    docs/JOURNAL.md). Same model both engines: MLX is about 1.8x faster at a batch of
    256 but 22x slower to load (7.63s vs 0.35s) and 18x slower for a single query.

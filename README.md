@@ -231,8 +231,8 @@ your setup alone.
 ## Knowledge bases (RAG)
 
 Index your files into a local knowledge base and search them semantically. It
-uses a small local embedding model (the `embed` catalog model, via llama.cpp)
-and a SQLite store; nothing leaves the machine.
+uses a small local embedding model (via llama.cpp) and a SQLite store; nothing
+leaves the machine.
 
 ```sh
 fxlla pull embed --quant Q5_K_M     # one-time: the embedding model (~100 MB)
@@ -247,20 +247,58 @@ Expose it to your tools as an MCP server so any model can call `rag_search`:
 fxlla kb wire-opencode              # register the RAG MCP in opencode
 ```
 
+### Choosing an embedding model
+
+`fxlla models` lists several under the `embed` role, from 384 to 1024
+dimensions. `FXLLA_EMBED_MODEL` picks one by alias; unset means `embed`
+(nomic-embed-text v1.5), which is what every base built so far was indexed with.
+
+```sh
+fxlla pull embed-qwen3 --quant Q8_0        # multilingual, 1024-dim, 32k context
+export FXLLA_EMBED_MODEL=embed-qwen3
+fxlla kb reindex docs                      # re-embed: widths must match
+```
+
+Vectors from two models are not comparable, so a base built with one model has
+to be re-embedded before another can search it. `fxlla kb reindex` does that from
+the chunk text already in the store, without re-reading the sources, in a single
+transaction: an interrupted run changes nothing.
+
+Rather than guess which model is better, measure. `fxlla kb eval` scores
+retrieval over a golden set of questions against this repository's own
+documentation and reports recall@1, recall@k, MRR and query latency:
+
+```sh
+fxlla kb eval                              # the model currently configured
+FXLLA_EMBED_MODEL=embed-small fxlla kb eval
+```
+
+Those numbers rank models against each other on one commit. The corpus is the
+repo's own docs, so editing them moves the scores; do not compare across
+commits.
+
+### Reusing a running server
+
 A search spawns the embedding server, uses it, and stops it. That costs about
 0.2s. Leave a server running on `FXLLA_EMBED_PORT` and `fxlla kb` reuses it
 instead, which brings a query to roughly 0.09s and is worth doing if an agent
 retrieves often:
 
 ```sh
-llama-server --embeddings -m <embed model>.gguf --host 127.0.0.1 \
-  --port 8090 --pooling mean &
+llama-server --embeddings -m <embed model>.gguf --host 127.0.0.1 --port 8090 &
 ```
 
+Do not pass `--pooling`: every embedding GGUF declares its own pooling type and
+llama.cpp honours it. Forcing `mean` is right for nomic and wrong for bge (CLS)
+and qwen3-embedding (last token), and a badly pooled vector is still a vector,
+so nothing later would report it.
+
 fxlla never stops a server it did not start, so use `fxlla kb stop` when you want
-it gone. The server must be for the same embedding model as the base: one for a
-different model returns different dimensions, and `fxlla kb` refuses rather than
-score against them.
+it gone. The server has to hold the model the base was built with. `fxlla kb`
+asks it which one it loaded and refuses on a mismatch, because two models can
+share a width: nomic and embeddinggemma are both 768-dim, qwen3-embedding and
+bge-large both 1024, and at equal width nothing further down can tell them
+apart.
 
 Search uses a brute-force cosine scan by default, which is fine up to a few
 thousand chunks. For larger knowledge bases, opt into a vector index:

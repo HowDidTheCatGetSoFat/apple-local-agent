@@ -5,7 +5,46 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Added
+- The embedding model behind `fxlla kb` is selectable. The catalog gained four
+  more `embed` entries next to nomic-embed-text v1.5: bge-small (384-dim),
+  bge-large and qwen3-embedding (1024-dim), and embeddinggemma (768-dim).
+  `FXLLA_EMBED_MODEL` picks one by alias; unset keeps the previous model, so
+  existing knowledge bases are untouched. Dimensions in the catalog notes are
+  read from the GGUF headers, not from documentation.
+- `fxlla kb reindex <name>` re-embeds a knowledge base with the currently
+  selected model, which is what makes switching models possible: vectors from
+  two models are not comparable, and the width guard previously refused the
+  search without offering a way forward. It re-embeds the chunk text already in
+  the store rather than re-reading sources that may have changed, in a single
+  transaction, so an interrupted run leaves the base exactly as it was.
+- `fxlla kb eval` scores retrieval instead of guessing at it: a golden set of 18
+  questions over this repository's own documentation, reporting recall@1,
+  recall@k, MRR and median query latency. Measured on the current commit,
+  nomic-embed-text scores recall@1 67%, recall@5 89%, MRR 0.731 at 11 ms per
+  query; bge-small ties at recall@1 but drops to 78% recall@5 and MRR 0.713 at
+  6 ms. The corpus is the repo's own docs, so scores compare models on one
+  commit and not across commits.
+
 ### Fixed
+- `fxlla kb` no longer embeds against whatever server happens to hold the port.
+  Reuse adopted any process answering /health without asking what it had loaded:
+  demonstrated with zero embedding models installed, where indexing and search
+  both still succeeded against a borrowed server. That was harmless while one
+  model was possible and is not now, since nomic and embeddinggemma are both
+  768-dim and qwen3-embedding and bge-large both 1024, so the width guard cannot
+  see the difference and the store is silently poisoned. It now asks the server
+  which model it loaded and refuses on a mismatch, naming both and pointing at
+  `fxlla kb stop`. A server that will not identify itself is still allowed,
+  since pointing `FXLLA_EMBED_PORT` at your own is legitimate.
+- The embedding server is no longer started with `--pooling mean`. Every
+  embedding GGUF declares its own pooling type and llama.cpp honours it: nomic
+  wants mean, bge wants CLS, qwen3-embedding wants last-token. Forcing mean was
+  correct only for the model that happened to be the default and silently
+  degraded the rest, since a badly pooled vector is still a vector. Verified
+  before removing the flag: omitting it reproduces `--pooling mean` bit for bit
+  on nomic, while `--pooling cls` visibly differs. The README instructions for
+  running a server by hand carried the same flag and were corrected.
 - A gateway model switch no longer rounds up to the next whole second, and a
   backend that dies on start fails immediately instead of holding the 180s
   timeout. The wait loop polled once a second and never looked at the process it

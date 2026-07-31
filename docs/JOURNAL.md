@@ -2,6 +2,79 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-07-31: Choosable embedding model, and two bugs it exposed
+
+The previous entry closed MLX embeddings and named the real gap: the embedding
+model was effectively hardcoded, pinned to nomic-embed-text v1.5 from February
+2024. This closes it. Four more `embed` aliases (bge-small 384-dim, bge-large and
+qwen3-embedding 1024-dim, embeddinggemma 768-dim), selected with
+`FXLLA_EMBED_MODEL`, plus `fxlla kb reindex` to move an existing base across and
+`fxlla kb eval` to tell whether the move was worth it.
+
+Building it turned up two defects that only exist once more than one model is
+possible.
+
+**The borrowed server was never asked what it held.** Reuse adopted anything
+answering `/health`. Demonstrated with zero embedding models installed at all,
+where `kb add` and `kb search` both still succeeded against a server on the port:
+proof that nothing in the path consults the model. With one possible model that
+is harmless. With five it is silent corruption, because the width guard is the
+only thing standing between two models and it cannot separate nomic from
+embeddinggemma (both 768) or qwen3-embedding from bge-large (both 1024).
+llama.cpp answers `/props` with `model_path`, so the fix is to ask rather than to
+keep a marker file that could disagree with reality. A server that will not
+identify itself is still allowed - pointing `FXLLA_EMBED_PORT` at your own is a
+legitimate setup, and unverifiable is not the same as wrong.
+
+**`--pooling mean` was hardcoded.** Reading the GGUF headers directly, over HTTP
+range requests so nothing had to be downloaded:
+
+| model | arch | dim | context | declared pooling |
+|---|---|---|---|---|
+| nomic-embed-text-v1.5 | nomic-bert | 768 | 2048 | MEAN |
+| embeddinggemma-300M | gemma-embedding | 768 | 2048 | MEAN |
+| qwen3-embedding-0.6B | qwen3 | 1024 | 32768 | LAST |
+| bge-small-en-v1.5 | bert | 384 | 512 | CLS |
+| bge-large-en-v1.5 | bert | 1024 | 512 | CLS |
+
+Three of five want something other than mean, and every one of them declares it.
+Forcing mean was correct only for the model that happened to be the default, and
+would have quietly degraded the rest: a badly pooled vector is still a vector, so
+nothing downstream would ever report it. Removing the flag lets llama.cpp honour
+the metadata. Verified before removing it, because "llama.cpp probably reads the
+metadata" is exactly the kind of assumption that has been wrong here before:
+omitting the flag reproduces `--pooling mean` to five decimals on nomic, while
+`--pooling cls` visibly differs, which also proves the test could have detected a
+difference. The README told users to pass `--pooling mean` when running a server
+by hand; that was wrong for the same reason and is fixed.
+
+**The eval.** 18 questions over this repository's own documentation - real prose,
+no invented fixtures, no network - phrased as a person would ask them rather than
+as keyword lookups. On this commit:
+
+| | recall@1 | recall@5 | MRR | median query |
+|---|---|---|---|---|
+| embed (nomic, 768) | 67% | 89% | 0.731 | 11 ms |
+| embed-small (bge-small, 384) | 67% | 78% | 0.713 | 6 ms |
+
+A 37 MB model ties the default on recall@1 and gives up 11 points of recall@5 for
+roughly half the latency. That is the kind of trade the catalog notes could never
+have settled. The scores rank models against each other on one commit only: the
+corpus is the repo's own docs, so editing them moves the numbers, and the output
+says so rather than leaving it to be discovered.
+
+Two smaller things worth recording. `.entry`, which `fxlla pull` already writes
+to record the file it fetched, decides which weights to load, so re-pulling a
+different quant into the same directory cannot silently change the answer the way
+a glob would. And `reindex` re-embeds the chunk text already in the store instead
+of re-reading sources that may have moved, in a single transaction, because a
+half-re-embedded base holds two widths at once and `_kb_dim` reads whichever row
+comes first - a store that lies about itself. Mutation testing on the batch: 7
+mutants, 7 killed, but only after the first run found two survivors. One was a
+broken mutant of mine that disabled nothing; the other was a genuinely weak test,
+where the traversal payload pointed at a file that did not exist, so the fallback
+fired for the wrong reason and the assertion held with or without the guard.
+
 ## 2026-07-30: MLX embeddings measured against llama.cpp, and declined
 
 The backlog carried "optional MLX embeddings" as RAG polish. MLX is fxlla's default
