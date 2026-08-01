@@ -428,6 +428,13 @@ def run_job_status(args):
     # that never re-reads the catalog.
     if started is not None and finished is not None and finished > started:
         rec = dict(rec, elapsed_s=round(finished - started, 1))
+    # `done` means the file was written, not that it is right. The checks below
+    # this line confirm a PNG is a well-formed PNG and stop there: an edit that
+    # left a ghost of what it was told to remove reported done, clean, no
+    # warnings. Whoever called this is the only part of the pipeline with eyes.
+    if rec.get("status") == "done" and rec.get("output"):
+        rec = dict(rec, verify="Read this file and check it did what was "
+                                "asked. `done` means written, not correct.")
     # A `warnings` entry means the backend honoured the request differently
     # from how it was asked - relay it rather than reporting a clean success.
     return json.dumps(rec)

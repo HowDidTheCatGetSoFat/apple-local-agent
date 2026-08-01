@@ -128,6 +128,16 @@ case "$done_out" in
   *) fail "a finished job reports its measured duration";;
 esac
 
+# --- a finished job says that done is not the same as correct ---------------
+# Nothing below this layer can see. The checks confirm a PNG is a well-formed
+# PNG and stop there: a real chain removed an object from a photograph, left a
+# visible ghost of it, and the job reported done with no warnings. Whoever
+# called this is the only part of the pipeline with eyes, so it gets told.
+case "$done_out" in
+  *verify*'did what was asked'*) pass "a finished job asks the caller to look";;
+  *) fail "a finished job asks the caller to look";;
+esac
+
 # --- a running job says how long it has been going --------------------------
 case "$status_line" in
   *"elapsed"*) pass "a running job reports how long it has been going";;

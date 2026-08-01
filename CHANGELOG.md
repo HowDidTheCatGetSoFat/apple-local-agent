@@ -114,6 +114,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Added
+- A finished job now says, in the record itself, that `done` means written and
+  not correct, and asks the caller to read the file. The media skill gained a
+  section on it. This came out of running a real three-step chain - generate a
+  desk scene, remove one object with qwen-edit, upscale - where the edit left a
+  visible ghost of the object it was told to remove and the pipeline reported
+  `done`, no warnings, `check_png` clean. Nothing below the caller can see: the
+  checks confirm a PNG is a well-formed PNG by design. The caller often can -
+  opencode's `read` tool hands PNGs to the model as a data URL - and was never
+  told to. The capability was there and nothing pointed at it.
 - `--strength` on `fxlla media image`, and `strength` on the MCP tool: how much
   of `--init-image` survives, 0 to 1. fxlla had been passing mflux's deprecated
   `--image-path`, which cannot carry one, so a second pass over a first render
@@ -161,6 +170,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   for is queued behind a render that is not going any faster for being watched.
 
 ### Fixed
+- `observed` gave no seconds-per-megapixel for `edit` or `upscale`. Both
+  produce a single still, so their cost scales with its area exactly as a
+  render's does; the normalisation was keyed on `kind == "image"` alone, so
+  both reported a bare median that does not transfer to another size. Video
+  still has none, deliberately - its cost also scales with the frame count.
 - Publishing step counts as the cost signal invited the wrong inference and got
   one: told cost was "roughly linear in steps", a model concluded that 8-step
   krea2 was as fast as 8-step z-image-turbo and published a timing table

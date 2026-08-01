@@ -1487,6 +1487,30 @@ class TestDimensionGrid(unittest.TestCase):
         self.assertEqual(media._DIM_STEP.get("ideogram4"), 16)
 
 
+class TestOneCanvasKindsNormalise(unittest.TestCase):
+    # An edit and an upscale each produce one still, so their cost scales with
+    # its area exactly as a render's does. Keying the normalisation on
+    # kind == "image" left both reporting a bare median that does not scale to
+    # another size - measured here at 263 s for one edit and 18 s for one
+    # upscale, neither transferable without the per-megapixel rate.
+    def _records(self):
+        return [{"kind": k, "status": "done", "started": 0, "finished": 100,
+                 "argv": [k, "--width", "1024", "--height", "1024"],
+                 "output": None}
+                for k in ("image", "edit", "upscale", "video")]
+
+    def test_every_single_still_kind_gets_a_rate(self):
+        seen = media.observed_timings(self._records())
+        for kind in ("edit", "upscale"):
+            self.assertIn("s_per_mp", seen[kind], kind)
+
+    def test_video_still_does_not(self):
+        # Its cost also scales with the frame count; an area-normalised figure
+        # would be a fresh wrong signal.
+        seen = media.observed_timings(self._records())
+        self.assertNotIn("s_per_mp", seen["video:distilled"])
+
+
 class TestBackendWarnings(unittest.TestCase):
     # stderr was read only when the render FAILED, so a warning on a good run
     # was captured and dropped - including mflux's own "--steps is ignored",

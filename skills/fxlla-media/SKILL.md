@@ -218,6 +218,29 @@ them decide, then pre-fetch with `fxlla pull media:<alias>` or pass the
 authorization. Never authorize a large transfer on the user's behalf.
 `fxlla media weights` lists every model with its size and whether it is cached.
 
+## Look at what you made
+
+**If your client can read an image, read the file you just produced before
+reporting it.** Nothing in fxlla can tell whether a render did what was asked:
+the checks confirm a PNG is a well-formed PNG with non-zero dimensions and
+stop there, by design - a blank-but-valid image passes, and so does a wrong
+one. A real chain here removed an object from a photograph, left a visible
+ghost of it, and the job reported `done` with no warnings, because there is no
+layer below you that can see.
+
+This matters most on the steps where the instruction can be half-followed:
+
+- an **edit** that was supposed to remove, replace or change one thing - check
+  the rest of the image is untouched, and that the thing actually went
+- a **refine** pass - check it kept the composition you approved rather than
+  drifting into a different picture
+- anything with **text in it** - the letters are what these models get wrong
+- an **upscale** - check it added detail rather than plastic smoothing
+
+If it is wrong, say what is wrong and what you would change - a different seed,
+a lower strength, a different model - rather than reporting the path as a
+success. You are the only thing in this pipeline with eyes.
+
 ## Reporting
 
 Give the output path, the model, and the seed. If the user named a place and

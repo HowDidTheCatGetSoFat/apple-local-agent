@@ -1166,6 +1166,10 @@ def cmd_timings(args):
     print_timings()
 
 
+# Kinds whose output is a single still, so wall time scales with its area.
+_ONE_CANVAS = ("image", "edit", "upscale")
+
+
 def observed_timings(records=None):
     """What renders on THIS machine actually took, from the job history:
     {key: {n, median_s, s_per_mp}}. Keys are model aliases, and "video:<stage>"
@@ -1198,11 +1202,13 @@ def observed_timings(records=None):
             key = argv[argv.index("--model") + 1] if "--model" in argv else DEFAULT_MODEL
         else:
             key = kind
-        # Area normalises an image, where one render is one canvas. It does NOT
-        # normalise a video, whose cost also scales with the frame count - a
-        # seconds-per-megapixel for a clip would be a fresh wrong signal of
-        # exactly the kind this function exists to replace.
-        area = _megapixels(rec) if kind == "image" else None
+        # Area normalises anything that produces ONE canvas - a render, an
+        # edit, an upscale. It does NOT normalise a video, whose cost also
+        # scales with the frame count, where a seconds-per-megapixel would be a
+        # fresh wrong signal of exactly the kind this function exists to
+        # replace. Keying this on kind == "image" alone left edit and upscale
+        # reporting a bare median that does not scale to another size.
+        area = _megapixels(rec) if kind in _ONE_CANVAS else None
         by_key.setdefault(key, []).append((finished - started, area))
     out = {}
     for key, samples in by_key.items():

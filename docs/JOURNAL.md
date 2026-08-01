@@ -2,6 +2,53 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-01: The chain worked, and nothing could tell it had not
+
+Three candidates were on the table for what to build next so a model could
+compose multi-step image workflows: a vision judge, the remaining mflux
+primitives, or a declarative recipe format. An adversarial review argued
+against all three and proposed instead running real chains and finding where a
+caller actually gets stuck. That turned out to be right, and the wall was not
+where any of the three expected.
+
+The chain, driven over MCP exactly as an editor drives it: generate a desk
+scene with a mug, a notebook and a potted succulent (14.7 s), tell qwen-edit to
+remove the succulent (263 s), upscale 2x (18.4 s). **Every link worked.** The
+path from one step fed the next, `output` landed where asked, the job records
+carried the timings. The vocabulary was never the bottleneck, which kills the
+primitives candidate on evidence rather than argument.
+
+What the edit produced was a desk with a faint white pot and translucent leaves
+still visible in the corner. `status: done`. No warnings. `check_png`: clean.
+
+That is the wall, and it is not a missing feature - it is that **nothing below
+the caller can see, by design**. `check_png` reads IHDR and says so in its own
+docstring. Adding eyes to fxlla is the candidate the review killed, on two
+grounds that both hold: no engine can serve a VLM today (`bin/fxlla` writes the
+`.engine` marker from a binary gguf/mlx choice, and `mlx_lm.server` rejects
+image content outright), and the project's stated position is to be the best
+local provider and leave orchestration to opencode and Claude Code, with a
+standing rule that no model judges another model's output.
+
+The resolution came from reading opencode's source rather than reasoning about
+it. `read.ts` carries `SUPPORTED_IMAGE_MIMES` and hands a PNG to the model as a
+base64 data URL. **The caller already has eyes.** It was never told to use
+them: the skill's reporting section said to give the path, the model and the
+seed, and stopped.
+
+So the fix is a sentence in the record and a section in the skill - `done`
+means written, not correct, read the file. Fourth instance this week of one
+pattern: the capability existed, at a layer that could reach it, and nothing
+pointed at it. The first three were controlnet, LoRAs and `--output`.
+
+Two smaller things fell out. `edit` and `upscale` were getting no
+seconds-per-megapixel because the normalisation was keyed on `kind == "image"`,
+though each produces one canvas like a render does. And the estimate for the
+768x768 render said 33 s against 14.7 s actual - the per-megapixel rate mixes
+cold and warm model loads, and below about one megapixel the load dominates.
+Worth knowing before trusting an estimate at small sizes; not worth a more
+elaborate model to paper over.
+
 ## 2026-08-01: One missing knob was holding up every chain
 
 The question that started the day was how a model might compose multi-step
