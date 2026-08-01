@@ -61,7 +61,17 @@ TOOLS = [
                          "description": "Read the prompt from this file "
                                         "instead of the prompt argument."},
          "init_image": {"type": "string",
-                        "description": "Start from this image (img2img)."},
+                        "description": "Start from this image (img2img). Pair "
+                                       "it with strength."},
+         "strength": {"type": "number",
+                      "description": "How much of init_image survives, 0 to 1 "
+                                     "(default 0.4). This is what makes a "
+                                     "second pass useful: render small and "
+                                     "fast first, then refine that result at "
+                                     "full size with 0.3-0.5 to add detail "
+                                     "without losing the composition. Near 0 "
+                                     "barely changes the input; near 1 ignores "
+                                     "it and you may as well not pass one."},
          "loras": {"type": "array", "items": {"type": "string"},
                    "description": "LoRAs to apply. Each entry is a path, a "
                                   "bare filename as list_loras reports it, or "
@@ -260,7 +270,8 @@ _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
                 ("controls", "--control"),
                 ("controlnet_strength", "--controlnet-strength"),
                 ("depth_image", "--depth-image"),
-                ("init_image", "--init-image"), ("loras", "--lora"),
+                ("init_image", "--init-image"), ("strength", "--strength"),
+                ("loras", "--lora"),
                 ("lora_style", "--lora-style"), ("preset", "--preset"),
                 ("output", "--output")]
 _VIDEO_FLAGS = [("stage", "--stage"), ("seconds", "--seconds"),

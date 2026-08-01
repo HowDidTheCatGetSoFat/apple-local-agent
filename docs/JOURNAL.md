@@ -2,6 +2,38 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-01: One missing knob was holding up every chain
+
+The question that started the day was how a model might compose multi-step
+image workflows the way ComfyUI graphs do. The answer turned out to be smaller
+than the question: one flag.
+
+fxlla passed mflux's deprecated `--image-path` for an init image. The current
+flag is `--image PATH [STRENGTH]`, and the strength is the entire point - it is
+how much of the input survives. Without it a second pass over a first render
+either changes nothing or replaces it, so the most common workflow shape in
+existence, draft small then refine large, could not be expressed at all. Every
+grander idea - recipes, DAGs, a planner - was downstream of a knob that was one
+argument away.
+
+Measured, with a real chain rather than a claim: a 512x512 draft in 19 s, fed
+back at 1024x1024 with strength 0.45, refined in 32 s. Same composition, same
+camera, same objects; beans became visible in the hopper, the pressure gauge
+grew a readable face, the counter grew grain. What the second pass adds is
+detail, and what the strength buys is that it adds it *to the picture you
+already approved*.
+
+The interesting number is not 51 seconds total. A single full-size pass costs
+about the same. It is that a composition you do not want is rejected after 19
+seconds, and on krea2 - measured at 518 s for a poster - the sketch that saves
+that render costs 19. The draft loop is not a cost optimisation; it is an early
+exit.
+
+An old test had to be rewritten to land this: it asserted `--image-path`, the
+deprecated flag. A test that encodes a limitation defends it - it would have
+failed the moment chaining became possible, which is the opposite of what a
+test is for.
+
 ## 2026-08-01: A negative prompt on a model with no CFG
 
 Reading someone else's repo found a bug in this one, and the path is worth

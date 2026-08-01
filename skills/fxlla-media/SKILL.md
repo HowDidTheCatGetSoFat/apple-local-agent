@@ -98,7 +98,9 @@ finished renders, per model and per video stage, with `n` and `s_per_mp`.
   inside. **Set it whenever the user says where they want it**; without it the
   file lands in the media directory and they will go looking in the wrong
   place.
-- `init_image` - start from an existing image instead of from noise.
+- `init_image` + `strength` - start from an existing image instead of from
+  noise, keeping `strength` of it (0 to 1, default 0.4). See below: this is
+  how you chain.
 - `loras` - `"path,0.8"`, the bare filename `list_loras` shows, or a
   HuggingFace repo id; the scale after the comma is optional, and the option
   repeats. `lora_style` picks a built-in style.
@@ -116,6 +118,28 @@ Plain prose still works. Use JSON when the user cares about layout: a poster, a
 label, a sign, text in a particular corner. A malformed caption is rejected
 before the render starts with the problem named, so fix that field rather than
 falling back to prose.
+
+## Draft first, then refine
+
+The cheapest way to be sure before spending: render small and fast, look at
+whether the composition is right, then feed that result back as `init_image`
+at full size with `strength` around 0.3-0.5. The second pass keeps the layout
+and adds the detail.
+
+    generate_image  prompt, model z-image-turbo, 512x512, seed 7
+    generate_image  same prompt, same seed, 1024x1024,
+                    init_image <the first path>, strength 0.45
+
+Measured here: 19 s for the draft, 32 s for the refinement. The point is not
+the total - it is that a composition you do not want is rejected after 19
+seconds instead of after a full-size render, and on a slow model that gap is
+minutes. **Keep the seed** across both passes; changing it changes the image
+you were refining.
+
+Use the same idea before anything expensive: a poster on `ideogram4` or a
+photograph on `krea2` is worth checking as a `z-image-turbo` sketch first,
+even though the final model is different - layout and framing carry over even
+when the rendering does not.
 
 ## Controls, depth, and chaining
 

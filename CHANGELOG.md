@@ -114,6 +114,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Added
+- `--strength` on `fxlla media image`, and `strength` on the MCP tool: how much
+  of `--init-image` survives, 0 to 1. fxlla had been passing mflux's deprecated
+  `--image-path`, which cannot carry one, so a second pass over a first render
+  either changed nothing or replaced it - which made the most common workflow
+  shape there is, draft small then refine large, unreachable. Measured on this
+  machine: a 512x512 draft in 19 s, refined to 1024x1024 at strength 0.45 in
+  32 s, keeping the composition and adding the detail. The value is not the
+  total but the exit: a composition you do not want costs 19 seconds to reject
+  instead of a full-size render. Out-of-range values are refused before the
+  render with the range named, since reading "strength" as a percentage and
+  sending 60 is the mistake worth catching; 0 and 1 are both legitimate.
 - A finished or failed background render posts a desktop notification on macOS
   with what it produced and how long it took (`FXLLA_MEDIA_NOTIFY=0` disables
   it). An MCP tool call is request/response and an agent turn ends when the

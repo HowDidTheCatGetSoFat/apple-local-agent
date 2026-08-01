@@ -1291,12 +1291,16 @@ class TestPromptControls(unittest.TestCase):
             media.build_command(self._spec(), "c", "/o.png", prompt_file="/no/p.txt")
         self.assertIn("/no/p.txt", str(ctx.exception))
 
-    def test_init_image_maps_to_image_path(self):
+    def test_init_image_reaches_the_backend(self):
+        # It used to assert --image-path, mflux's deprecated flag, which cannot
+        # carry a strength. Asserting it kept the limitation in place: the test
+        # would have failed the moment chaining became possible.
         import tempfile
         p = os.path.join(tempfile.mkdtemp(), "in.png")
-        open(p, "wb").write(media.PNG_MAGIC)
+        with open(p, "wb") as fh:
+            fh.write(media.PNG_MAGIC)
         cmd = media.build_command(self._spec(), "c", "/o.png", init_image=p)
-        self.assertEqual(cmd[cmd.index("--image-path") + 1], p)
+        self.assertEqual(cmd[cmd.index("--image") + 1], p)
 
 
 class TestJobWait(unittest.TestCase):
@@ -1550,6 +1554,82 @@ class TestBackendWarnings(unittest.TestCase):
         self.assertEqual(rec["status"], "done")
         self.assertEqual(len(rec.get("warnings") or []), 1)
         self.assertIn("--steps is ignored", rec["warnings"][0])
+
+
+class TestInitImageStrength(unittest.TestCase):
+    # The knob that makes chaining possible. fxlla passed mflux's deprecated
+    # --image-path, which cannot carry a strength, so a second pass over a
+    # first render either changed nothing or destroyed it - render-small-then-
+    # refine-large, the most common workflow shape there is, was unreachable.
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.png = os.path.join(self.dir, "first.png")
+        with open(self.png, "wb") as fh:
+            fh.write(media.PNG_MAGIC + b"0" * 64)
+
+    def _image_args(self, **kw):
+        cmd = media.build_command(media.MODELS["z-image-turbo"], "x", "/o.png",
+                                  model_name="z-image-turbo", **kw)
+        start = cmd.index("--image")
+        end = next((i for i in range(start + 1, len(cmd))
+                    if cmd[i].startswith("--")), len(cmd))
+        return cmd[start + 1:end]
+
+    def test_it_uses_the_flag_that_can_carry_a_strength(self):
+        cmd = media.build_command(media.MODELS["z-image-turbo"], "x", "/o.png",
+                                  model_name="z-image-turbo",
+                                  init_image=self.png)
+        self.assertIn("--image", cmd)
+        self.assertNotIn("--image-path", cmd)  # deprecated, drops the strength
+
+    def test_a_strength_reaches_the_backend(self):
+        self.assertEqual(self._image_args(init_image=self.png, strength=0.4),
+                         [self.png, "0.4"])
+
+    def test_the_comma_form_carries_it_too(self):
+        self.assertEqual(self._image_args(init_image=self.png + ",0.6"),
+                         [self.png, "0.6"])
+
+    def test_giving_it_twice_is_refused(self):
+        with self.assertRaises(ValueError) as ctx:
+            self._image_args(init_image=self.png + ",0.6", strength=0.4)
+        self.assertIn("once", str(ctx.exception))
+
+    def test_a_percentage_is_caught_before_the_render(self):
+        # The real mistake: reading "strength" as a percent and sending 60.
+        with self.assertRaises(ValueError) as ctx:
+            self._image_args(init_image=self.png, strength=60)
+        self.assertIn("between 0 and 1", str(ctx.exception))
+
+    def test_both_ends_are_legitimate(self):
+        for value in (0, 1):
+            self.assertEqual(
+                self._image_args(init_image=self.png, strength=value)[1],
+                str(value))
+
+    def test_strength_without_an_image_says_so(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(media.MODELS["z-image-turbo"], "x", "/o.png",
+                                model_name="z-image-turbo", strength=0.4)
+        self.assertIn("init-image", str(ctx.exception))
+
+    def test_a_missing_file_is_named_before_spending_a_render(self):
+        with self.assertRaises(ValueError) as ctx:
+            self._image_args(init_image="/nope/missing.png", strength=0.4)
+        self.assertIn("missing.png", str(ctx.exception))
+
+    def test_a_model_without_img2img_refuses_it(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(media.MODELS["boogu"], "x", "/o.png",
+                                model_name="boogu", init_image=self.png)
+        self.assertIn("boogu", str(ctx.exception))
+
+    def test_the_mcp_forwards_it(self):
+        self.assertIn("strength",
+                      dict(media_mcp._IMAGE_FLAGS))
+        tool = next(t for t in media_mcp.TOOLS if t["name"] == "generate_image")
+        self.assertIn("strength", tool["inputSchema"]["properties"])
 
 
 class TestNegativeNeedsCfg(unittest.TestCase):

@@ -218,6 +218,24 @@ _MFLUX_DEFAULT_STEPS = {
 }
 
 
+def _check_strength(value):
+    """Reject a strength outside 0..1 here rather than deep in the backend.
+
+    The real failure it catches is a caller reading "strength" as a percentage
+    and sending 60. The legitimate case it must not catch is either end: 0
+    keeps the init image and 1 ignores it, and both are things a caller means."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("strength must be a number between 0 and 1, got %r"
+                         % (value,))
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(
+            "strength must be between 0 and 1 (how much of the init image is "
+            "kept), got %s. mflux defaults to 0.4; a refining pass is usually "
+            "0.3-0.5." % value)
+
+
 def _check_dim_step(model_name, width, height):
     step = _DIM_STEP.get(model_name)
     if not step:
@@ -343,7 +361,7 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
                   metadata=False, negative=None, prompt_file=None, loras=None,
                   lora_style=None, init_image=None, model_name="", guidance=None,
                   controls=None, controlnet_strength=None, depth_image=None,
-                  save_depth=False, preset=None):
+                  save_depth=False, preset=None, strength=None):
     """Assemble the mflux-cv argument vector for one image generation.
 
     Optional flags are checked against the model's declared capabilities
@@ -378,11 +396,31 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
     if negative:
         _require_cap(spec, "negative", "--negative-prompt", model_name)
         cmd += ["--negative-prompt", negative]
+    # `--image PATH [STRENGTH]`, not the deprecated `--image-path`. The
+    # strength is the whole point: it is how much of the init image survives,
+    # and without it a second pass over a first one either changes nothing or
+    # destroys it. That knob is what makes generate-small-then-refine-large
+    # possible at all, and it was unreachable while fxlla passed the flag that
+    # cannot carry it.
     if init_image:
-        _require_cap(spec, "init-image", "--init-image", model_name)
-        if not os.path.isfile(init_image):
-            raise ValueError("init image not found: %s" % init_image)
-        cmd += ["--image-path", init_image]
+        _require_cap(spec, "init-image", "--image", model_name)
+        parts = split_ref(init_image)
+        path = os.path.expanduser(parts[0])
+        if not os.path.isfile(path):
+            raise ValueError("init image not found: %s" % parts[0])
+        if strength is not None and len(parts) > 1:
+            raise ValueError(
+                "give the strength once: either --image %s,%s or --strength %s"
+                % (parts[0], parts[1], strength))
+        if strength is not None:
+            parts = [path, str(strength)]
+        else:
+            parts = [path] + parts[1:]
+        if len(parts) > 1:
+            _check_strength(parts[1])
+        cmd += ["--image"] + parts
+    elif strength is not None:
+        raise ValueError("--strength needs an --init-image to apply to")
     # LoRAs: `--lora PATH [SCALE]`, repeatable. Until now `fxlla pull
     # civitai:<id>` could download these and nothing could apply them.
     for ref in loras or []:
@@ -643,7 +681,7 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                    negative=None, prompt_file=None, loras=None,
                    lora_style=None, init_image=None, guidance=None,
                    controls=None, controlnet_strength=None, depth_image=None,
-                   save_depth=False, preset=None):
+                   save_depth=False, preset=None, strength=None):
     if not prompt:
         raise ValueError("prompt is required")
     model = model or DEFAULT_MODEL
@@ -671,7 +709,7 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                         model_name=model, guidance=guidance, controls=controls,
                         controlnet_strength=controlnet_strength,
                         depth_image=depth_image, save_depth=save_depth,
-                        preset=preset)
+                        preset=preset, strength=strength)
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "%s failed" % spec["cli"])[-800:])
@@ -908,7 +946,7 @@ def cmd_image(args):
         init_image=args.init_image, guidance=args.guidance,
         controls=args.controls, controlnet_strength=args.controlnet_strength,
         depth_image=args.depth_image, save_depth=args.save_depth,
-        preset=args.preset)
+        preset=args.preset, strength=args.strength)
     print(path)
     # The derived depth map is a second artifact and the reason --save-depth-map
     # exists, so it goes on stdout next to the image: a caller chaining a
@@ -1538,6 +1576,10 @@ def main():
                     help="what the image must NOT contain")
     im.add_argument("--prompt-file", dest="prompt_file",
                     help="read the prompt from a file (re-read per seed)")
+    im.add_argument("--strength", type=float, metavar="0..1",
+                    help="how much of the init image survives; 0 keeps it, "
+                         "1 ignores it (mflux default 0.4). A refining pass "
+                         "over a first render is usually 0.3-0.5.")
     im.add_argument("--init-image", dest="init_image",
                     help="start from an existing image (img2img)")
     # `fxlla pull civitai:<id>` has been able to download LoRAs since it
