@@ -2,6 +2,51 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-01: A negative prompt on a model with no CFG
+
+Reading someone else's repo found a bug in this one, and the path is worth
+recording because it is not the usual one.
+
+VFX-1 is a local short-film pipeline with a director LLM, a compatibility
+registry, a llava judge and CLIP drift detection. Asked to look at it as a
+reference for fxlla, the useful thing was not the architecture - it was a line
+in its bug list: "en z-image-turbo la directiva anti-texto es debil (CFG off)
+-> el fix real es reseed". Field experience, written down after a hallucinated
+watermark.
+
+Following it into mflux: `ModelConfig` carries `supports_guidance`, and it is
+`False` for z-image-turbo, boogu, schnell and z-image-turbo-controlnet, which
+pins guidance to 0. And `z_image.py` reads
+
+    if guidance <= 1.0:
+        return text_encodings, None
+
+so below guidance 1 the negative prompt is encoded and discarded, and the
+sampler skips classifier-free guidance entirely. On four models `--negative-
+prompt` did nothing at all. One of them is the default, and the media skill
+recommended negative prompts "against the usual offenders: text, watermark" -
+advice that was inert exactly where it was most likely to be followed.
+
+This is the third instance of one class: a flag the backend accepts and
+discards. Ideogram 4's `--steps` and `--guidance` were the first two, found by
+reading a warning in its CLI. What makes the class hard is that nothing fails -
+the render succeeds, the image is plausible, and the only evidence is that the
+option had no effect.
+
+The invariant that makes it findable is small: **a negative prompt only exists
+through CFG**, so a model may declare `negative` only if it also declares
+`guidance` or a `preset` that sets one. That is now a test, and it catches all
+four at once instead of one at a time.
+
+The deeper point is about where model facts live. mflux publishes
+`supports_guidance` in a struct. fxlla transcribes a worse version by hand into
+a `.conf`, VFX-1 transcribes another into `models.yaml`, and only
+ComfyUI-mflux-AnyModel derives its registry by introspecting the real
+signature. Three copies, and the two transcribed ones have each been wrong.
+Two of VFX-1's own logged bugs - dedicated mflux binaries, resolving them
+inside a venv - are bugs fxlla hit and fixed independently. The same knowledge
+is being rediscovered in parallel because nobody owns it.
+
 ## 2026-07-31: A render that takes minutes, behind a transport that waits seconds
 
 Read the same editor session again after the day's fixes landed and found the

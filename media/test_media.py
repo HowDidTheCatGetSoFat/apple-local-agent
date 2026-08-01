@@ -1483,6 +1483,33 @@ class TestDimensionGrid(unittest.TestCase):
         self.assertEqual(media._DIM_STEP.get("ideogram4"), 16)
 
 
+class TestNegativeNeedsCfg(unittest.TestCase):
+    # A negative prompt only exists through classifier-free guidance. mflux
+    # drops it outright below guidance 1 (`if guidance <= 1.0: return
+    # text_encodings, None`), and the distilled models declare
+    # supports_guidance=False, which pins guidance to 0. So on those, a
+    # negative prompt is read, encoded and discarded silently - and this
+    # catalog listed it on the DEFAULT model while the skill recommended it.
+    def test_negative_requires_guidance_or_a_preset(self):
+        offenders = sorted(
+            name for name, spec in media.MODELS.items()
+            if "negative" in spec["caps"]
+            and not {"guidance", "preset"} & spec["caps"])
+        self.assertEqual(offenders, [], "negative without CFG: %s" % offenders)
+
+    def test_the_distilled_models_refuse_it_by_name(self):
+        for name in ("z-image-turbo", "boogu", "schnell", "z-controlnet"):
+            with self.assertRaises(ValueError, msg=name) as ctx:
+                media.build_command(media.MODELS[name], "p", "/o.png",
+                                    negative="watermark", model_name=name)
+            self.assertIn("--negative-prompt", str(ctx.exception))
+
+    def test_a_model_with_real_cfg_still_takes_it(self):
+        cmd = media.build_command(media.MODELS["krea2"], "p", "/o.png",
+                                  negative="watermark", model_name="krea2")
+        self.assertEqual(cmd[cmd.index("--negative-prompt") + 1], "watermark")
+
+
 class TestIdeogramPreset(unittest.TestCase):
     # Ideogram 4's argparse takes --steps and --guidance and then warns that
     # both are ignored, because its presets fix them. Listing those as caps let

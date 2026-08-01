@@ -83,8 +83,13 @@ finished renders, per model and per video stage, with `n` and `s_per_mp`.
   `V4_DEFAULT_20` normally, `V4_QUALITY_48` when the typography has to land.
 - `guidance` - how literally the prompt is followed. Raise it when the model
   drifts from the request, lower it when the output looks stiff or over-baked.
-- `negative` - what must NOT appear. Cheap and effective against the usual
-  offenders: text, watermark, extra fingers, blur.
+- `negative` - what must NOT appear: text, watermark, extra fingers, blur.
+  Only on models that have guidance, and that is not a formality - a distilled
+  model runs with CFG off, which makes the sampler discard the negative prompt
+  entirely. `list_media_models` says which; a model without it refuses the
+  option instead of ignoring it. **On those models the fix for a stray
+  watermark or hallucinated text is a different seed**, not a stronger
+  negative prompt.
 - `aspect` OR `width`/`height`, never both - they conflict and the call is
   refused. Aspect for standard framing, dimensions for exact pixels. Some
   models only accept sizes on a grid; `list_media_models` reports `dim_step`

@@ -170,6 +170,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   step knobs it never had: `--steps` (one-stage), `--stage1-steps` and
   `--stage2-steps` (the two-stage pipelines), each refused with the right one
   named when passed to a stage that ignores it, per ltx's own `--help`.
+- The same trap on the distilled models, and on the DEFAULT one: mflux declares
+  `supports_guidance=False` for z-image-turbo, boogu, schnell and z-controlnet,
+  which pins guidance to 0 - and guidance <= 1 makes the sampler drop the
+  negative encoding entirely and skip CFG. So `--negative-prompt` was read,
+  encoded and thrown away without a word on four models, while this catalog
+  listed both caps and the media skill recommended negative prompts against
+  watermarks and stray text. Both caps are gone from those rows, the skill now
+  says the fix on a CFG-off model is a different seed, and a test enforces the
+  invariant that made it findable: `negative` requires `guidance` or `preset`.
 - Ideogram 4 accepted `--steps` and `--guidance` and discarded both - its
   presets fix them, which its CLI says in a warning nothing was reading. So a
   request for 12 steps waited for the preset's 20 and was told nothing. Both
