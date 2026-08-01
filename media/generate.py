@@ -218,6 +218,22 @@ _MFLUX_DEFAULT_STEPS = {
 }
 
 
+# PiD's LQ conditioning was distilled on latents noised at sigma ~ U[0.0, 0.8];
+# past that it has never seen the input. mflux names the bound itself.
+PID_MAX_DEGRADE_SIGMA = 0.8
+
+
+def _check_pid_sigma(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("pid_degrade_sigma must be a number, got %r" % (value,))
+    if not 0.0 <= number <= PID_MAX_DEGRADE_SIGMA:
+        raise ValueError(
+            "pid_degrade_sigma must be between 0 and %s (the range PiD was "
+            "distilled on), got %s" % (PID_MAX_DEGRADE_SIGMA, value))
+
+
 def _check_strength(value):
     """Reject a strength outside 0..1 here rather than deep in the backend.
 
@@ -361,7 +377,8 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
                   metadata=False, negative=None, prompt_file=None, loras=None,
                   lora_style=None, init_image=None, model_name="", guidance=None,
                   controls=None, controlnet_strength=None, depth_image=None,
-                  save_depth=False, preset=None, strength=None):
+                  save_depth=False, preset=None, strength=None,
+                  pid_decode=False, pid_degrade_sigma=None):
     """Assemble the mflux-cv argument vector for one image generation.
 
     Optional flags are checked against the model's declared capabilities
@@ -492,6 +509,16 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
         # to be reachable rather than discarded inside the render.
         _require_cap(spec, "save-depth", "--save-depth-map", model_name)
         cmd += ["--save-depth-map"]
+    # NVIDIA's pixel-diffusion decoder replaces the VAE decode and emits 4x the
+    # requested size, so it is an upscale that happens inside the render.
+    if pid_decode:
+        _require_cap(spec, "pid-decode", "--pid-decode", model_name)
+        cmd += ["--pid-decode"]
+        if pid_degrade_sigma is not None:
+            _check_pid_sigma(pid_degrade_sigma)
+            cmd += ["--pid-degrade-sigma", str(pid_degrade_sigma)]
+    elif pid_degrade_sigma is not None:
+        raise ValueError("--pid-degrade-sigma does nothing without --pid-decode")
     if preset:
         _require_cap(spec, "preset", "--preset", model_name)
         if preset.upper() not in IDEOGRAM_PRESETS:
@@ -681,7 +708,8 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                    negative=None, prompt_file=None, loras=None,
                    lora_style=None, init_image=None, guidance=None,
                    controls=None, controlnet_strength=None, depth_image=None,
-                   save_depth=False, preset=None, strength=None):
+                   save_depth=False, preset=None, strength=None,
+                   pid_decode=False, pid_degrade_sigma=None):
     if not prompt:
         raise ValueError("prompt is required")
     model = model or DEFAULT_MODEL
@@ -709,7 +737,9 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                         model_name=model, guidance=guidance, controls=controls,
                         controlnet_strength=controlnet_strength,
                         depth_image=depth_image, save_depth=save_depth,
-                        preset=preset, strength=strength)
+                        preset=preset, strength=strength,
+                        pid_decode=pid_decode,
+                        pid_degrade_sigma=pid_degrade_sigma)
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "%s failed" % spec["cli"])[-800:])
@@ -946,7 +976,8 @@ def cmd_image(args):
         init_image=args.init_image, guidance=args.guidance,
         controls=args.controls, controlnet_strength=args.controlnet_strength,
         depth_image=args.depth_image, save_depth=args.save_depth,
-        preset=args.preset, strength=args.strength)
+        preset=args.preset, strength=args.strength,
+        pid_decode=args.pid_decode, pid_degrade_sigma=args.pid_degrade_sigma)
     print(path)
     # The derived depth map is a second artifact and the reason --save-depth-map
     # exists, so it goes on stdout next to the image: a caller chaining a
@@ -1582,6 +1613,15 @@ def main():
                     help="what the image must NOT contain")
     im.add_argument("--prompt-file", dest="prompt_file",
                     help="read the prompt from a file (re-read per seed)")
+    im.add_argument("--pid-decode", dest="pid_decode", action="store_true",
+                    help="decode with NVIDIA PiD instead of the VAE; the "
+                         "output is 4x the requested size. Downloads its own "
+                         "weights (fxlla pull media:pid)")
+    im.add_argument("--pid-degrade-sigma", dest="pid_degrade_sigma", type=float,
+                    metavar="0..0.8",
+                    help="noise the latent to this sigma before PiD decodes. "
+                         "The default 0.0 is the input PiD saw LEAST in "
+                         "training; try 0.2 if smooth areas look over-textured")
     im.add_argument("--strength", type=float, metavar="0..1",
                     help="how much of the init image survives; 0 keeps it, "
                          "1 ignores it (mflux default 0.4). A refining pass "
@@ -1716,8 +1756,13 @@ def main():
     # tool call both re-invoke this module directly.
     if args.cmd in ("image", "video", "voice", "edit", "upscale"):
         if not getattr(args, "yes", False):
+            # An OPTION can pull weights of its own, not just the model:
+            # --pid-decode fetches a decoder checkpoint and a gated caption
+            # encoder for any of ten models. Checking the model's alias alone
+            # would pass on cached weights and then download 8 GB mid-render.
+            extras = ["pid"] if getattr(args, "pid_decode", False) else []
             weights.require(args.cmd, getattr(args, "model", None) or DEFAULT_MODEL
-                            if args.cmd == "image" else None)
+                            if args.cmd == "image" else None, extras)
     if getattr(args, "run_async", False):
         # Reuse the invocation verbatim (minus the flag) as the job's argv, so a
         # background job runs exactly the same generator as the direct call.

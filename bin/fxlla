@@ -86,7 +86,7 @@ EOF
 # Determinism comes from pins, not from bundling bytes: relocatable Python
 # venvs cannot be signed into the app, and a multi-GB dmg would help nobody.
 # ltx-2-mlx has no PyPI release, so its pin is a commit on the public repo.
-MEDIA_PIN_IMAGE="mflux-cv==0.18.32"
+MEDIA_PIN_IMAGE="mflux-cv==0.18.33"
 MEDIA_PIN_VOICE="mlx-audio==0.4.6"
 MEDIA_PIN_VIDEO="git+https://github.com/dgrauet/ltx-2-mlx.git@e1838a85#subdirectory=packages/ltx-pipelines-mlx"
 

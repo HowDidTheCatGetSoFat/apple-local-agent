@@ -68,28 +68,44 @@ def _cached(repo):
     return False
 
 
-def missing_for(kind, model=None):
-    """Repos this generator needs that are not cached, plus the catalog size."""
-    alias = FIXED_ALIAS.get(kind) or model
-    if not alias:
+def missing_for(kind, model=None, extras=()):
+    """Repos this generator needs that are not cached, plus the catalog size.
+
+    `extras` are aliases a specific invocation adds on top of the model's own:
+    a weight requirement can come from an OPTION rather than from the model, and
+    --pid-decode is the first - it pulls a decoder checkpoint and a gated caption
+    encoder for any of ten models. Resolving only the model's alias would let the
+    gate pass on weights that are already cached and then fetch 8 GB mid-render,
+    which is exactly the failure this module exists to prevent.
+    """
+    aliases = [a for a in [FIXED_ALIAS.get(kind) or model] + list(extras) if a]
+    if not aliases:
         return [], None
-    row = _row(alias)
-    if row is None:
-        return [], None  # not in the catalog: no opinion rather than a wrong one
-    repos, size = row
-    return [r for r in repos if not _cached(r)], size
+    missing, sizes, seen = [], [], set()
+    for alias in aliases:
+        row = _row(alias)
+        if row is None:
+            continue  # not in the catalog: no opinion rather than a wrong one
+        repos, size = row
+        gap = [r for r in repos if r not in seen and not _cached(r)]
+        seen.update(repos)
+        if gap:
+            missing += gap
+            sizes.append("%s for %s" % (size or "an unknown amount", alias))
+    return missing, " plus ".join(sizes) or None
 
 
-def require(kind, model=None):
+def require(kind, model=None, extras=()):
     """Raise unless the weights are present or the transfer was authorized."""
     if authorized():
         return
-    missing, size = missing_for(kind, model)
+    missing, size = missing_for(kind, model, extras)
     if not missing:
         return
-    alias = FIXED_ALIAS.get(kind) or model
+    aliases = [a for a in [FIXED_ALIAS.get(kind) or model] + list(extras) if a]
     raise RuntimeError(
-        "this render would first download about %s of weights for '%s' (%s), and "
-        "nothing here asked a human. Nothing was downloaded. Present the size to "
-        "the user, then either pre-fetch with 'fxlla pull media:%s --yes' or pass "
-        "--yes." % (size or "an unknown amount", alias, ", ".join(missing), alias))
+        "this render would first download about %s of weights (%s), and nothing "
+        "here asked a human. Nothing was downloaded. Present the size to the "
+        "user, then either pre-fetch with %s or pass --yes."
+        % (size or "an unknown amount", ", ".join(missing),
+           " and ".join("'fxlla pull media:%s --yes'" % a for a in aliases)))

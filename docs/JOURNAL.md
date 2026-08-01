@@ -2,6 +2,44 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-01: A decoder that upscales, and a gate that could not see it coming
+
+mflux-cv 0.18.33 landed one feature: NVIDIA's PiD, a pixel-diffusion decoder
+that replaces the VAE at the end of sampling and emits an image at 4x the
+latent's native resolution. It is an upscale that happens *inside* the render,
+which makes it the first thing in this surface that competes with a step of a
+chain rather than adding one.
+
+Two things had to be checked rather than read off the commit message, and both
+mattered.
+
+**Which models actually offer it.** The commit says seven families; fxlla's
+aliases do not map onto families one-to-one. Probing each CLI's `--help`
+directly gave ten of sixteen - and the six without it now refuse the flag by
+name instead of passing it through.
+
+**What it downloads.** The commit says "~8GB total", and that is true of a
+render. But `nvidia/PiD` is **54.4 GB** on the hub: it ships six checkpoint
+variants and mflux selects one 2.8 GB file by the model's VAE latent space,
+plus a gated 5.3 GB caption encoder. A catalog row without an `include` glob
+would have over-fetched by 6.7x - the same mistake as the controlnet rows that
+listed the 4 GB adapter and let 58 GB of base weights arrive mid-render.
+
+The structural gap was in the gate itself. `weights.require` resolved exactly
+one alias, from the model, because until now a weight requirement was a
+property of the model. PiD's is a property of an **option**: ten models, any of
+which pulls 8 GB the first time somebody passes a flag. A render whose model
+weights were already cached would have sailed through the gate and then
+downloaded, which is precisely what this module exists to prevent. It takes
+extra aliases now, and the refusal names every pre-fetch required.
+
+Six mutations, five caught. The survivor was the one line that matters most -
+the call site in `main()` that turns the flag into an extra alias - because the
+tests exercised `missing_for` and `require` directly and never the wiring
+between the flag and them. A test that runs the real invocation against an
+empty cache and asserts the refusal names `nvidia/PiD` catches it. Testing the
+helper is not testing the guard.
+
 ## 2026-08-01: The chain worked, and nothing could tell it had not
 
 Three candidates were on the table for what to build next so a model could

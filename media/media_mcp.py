@@ -87,6 +87,27 @@ TOOLS = [
                       "description": "Guidance scale. Higher follows the prompt "
                                      "more literally. Model default is usually "
                                      "3.5, 10 for depth."},
+         "pid_decode": {"type": "boolean",
+                        "description": "Decode with NVIDIA's pixel-diffusion "
+                                       "decoder instead of the VAE. The output "
+                                       "is 4x the size you asked for, so it is "
+                                       "an upscale inside the render rather "
+                                       "than a step after it - do not also "
+                                       "call upscale_image. It downloads ~8GB "
+                                       "of its own weights on first use, one "
+                                       "of them gated, so the first call is "
+                                       "refused with the size unless they are "
+                                       "cached. list_media_models says which "
+                                       "models support it."},
+         "pid_degrade_sigma": {"type": "number",
+                               "description": "With pid_decode: noise the "
+                                              "latent to this sigma first, 0 "
+                                              "to 0.8. The default 0.0 is the "
+                                              "input PiD saw LEAST in "
+                                              "training, which shows up as "
+                                              "invented texture on smooth "
+                                              "areas like skin - try 0.2 if "
+                                              "you see that."},
          "preset": {"type": "string",
                     "enum": ["V4_TURBO_12", "V4_DEFAULT_20", "V4_QUALITY_48"],
                     "description": "ideogram4 only, and the ONLY way to set its "
@@ -273,7 +294,10 @@ _IMAGE_FLAGS = [("model", "--model"), ("steps", "--steps"), ("seed", "--seed"),
                 ("init_image", "--init-image"), ("strength", "--strength"),
                 ("loras", "--lora"),
                 ("lora_style", "--lora-style"), ("preset", "--preset"),
+                ("pid_degrade_sigma", "--pid-degrade-sigma"),
                 ("output", "--output")]
+# Boolean flags carry no value, so they cannot ride the name/flag table above.
+_IMAGE_SWITCHES = [("pid_decode", "--pid-decode")]
 _VIDEO_FLAGS = [("stage", "--stage"), ("seconds", "--seconds"),
                 ("frames", "--frames"),
                 ("frame_rate", "--frame-rate"), ("width", "--width"),
@@ -385,7 +409,7 @@ def _spawn(cmd, args, failure):
     return _still_running(job_id, status, note)
 
 
-def _run(subcmd, positional, flags, args):
+def _run(subcmd, positional, flags, args, switches=()):
     value = args.get(positional)
     if not value:
         return "error: %s is required" % positional
@@ -401,6 +425,9 @@ def _run(subcmd, positional, flags, args):
                 cmd += [flag, str(item)]
         else:
             cmd += [flag, str(val)]
+    for key, flag in switches:
+        if args.get(key):
+            cmd.append(flag)
     if args.get("save_depth"):
         cmd.append("--save-depth-map")
     return _spawn(cmd, args, "generation failed")
@@ -465,7 +492,7 @@ def run_cancel_job(args):
 
 
 def run_generate(args):
-    return _run("image", "prompt", _IMAGE_FLAGS, args)
+    return _run("image", "prompt", _IMAGE_FLAGS, args, _IMAGE_SWITCHES)
 
 
 def run_generate_video(args):

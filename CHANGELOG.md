@@ -114,6 +114,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Added
+- `--pid-decode` and `--pid-degrade-sigma`, from mflux-cv 0.18.33 (pin moved
+  there): NVIDIA's pixel-diffusion decoder replaces the VAE decode and emits
+  **4x the requested size**, so it is an upscale that happens inside the render
+  rather than a pass after it. Probed per CLI rather than assumed - ten of the
+  sixteen image models offer it, and the six that do not refuse it by name.
+  `pid_degrade_sigma` is bounded to the 0-0.8 range PiD was distilled on, and
+  the skill records the trap mflux documents: the default 0.0 is the input the
+  decoder saw *least* in training, which shows up as invented texture on smooth
+  areas, so 0.2 is the fix when a face comes back over-detailed.
+- The consent gate can now be raised by an OPTION, not only by the model. PiD
+  pulls its own weights - one 2.8 GB checkpoint chosen by the model's VAE latent
+  space, plus a gated 5.3 GB caption encoder - so `weights.require` takes extra
+  catalog aliases and the refusal names every pre-fetch needed. Without that, a
+  render whose model weights were already cached would have passed the gate and
+  then fetched 8 GB mid-flight, which is the same shape as the controlnet rows
+  that listed only the adapter. The `pid` catalog row fetches only the three
+  distilled 4-step checkpoints: the full `nvidia/PiD` repo is 54 GB of variants.
 - A finished job now says, in the record itself, that `done` means written and
   not correct, and asks the caller to read the file. The media skill gained a
   section on it. This came out of running a real three-step chain - generate a

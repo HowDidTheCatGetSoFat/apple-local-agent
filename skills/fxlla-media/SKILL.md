@@ -119,6 +119,25 @@ label, a sign, text in a particular corner. A malformed caption is rejected
 before the render starts with the problem named, so fix that field rather than
 falling back to prose.
 
+## Getting more resolution
+
+Two different things, and they are not interchangeable:
+
+- `pid_decode` replaces the VAE decode with NVIDIA's pixel-diffusion decoder
+  and emits **4x the size you asked for**, inside the same render. Ten of the
+  models support it; `list_media_models` says which. If you use it, **do not
+  also call `upscale_image`** - you already upscaled.
+- `upscale_image` (SeedVR2) is a separate pass over a finished file, and works
+  on any image including ones fxlla did not make.
+
+The trap worth knowing: `pid_degrade_sigma` defaults to `0.0`, and that is the
+input PiD saw **least** during training - it can invent texture on smooth areas
+like skin. If a face or a sky comes back over-detailed, pass `0.2`. The valid
+range is 0 to 0.8 and anything else is refused before the render.
+
+First use downloads about 8 GB, one repository gated, so it is refused with the
+size until the user authorises it or `fxlla pull media:pid` has run.
+
 ## Draft first, then refine
 
 The cheapest way to be sure before spending: render small and fast, look at

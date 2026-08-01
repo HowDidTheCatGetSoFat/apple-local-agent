@@ -17,6 +17,7 @@ media = importlib.import_module("generate")
 media_mcp = importlib.import_module("media_mcp")
 jobs = importlib.import_module("jobs")
 quality = importlib.import_module("quality")
+weights = importlib.import_module("weights")
 
 
 def _tiny_png(path):
@@ -1681,6 +1682,123 @@ class TestNegativeNeedsCfg(unittest.TestCase):
         cmd = media.build_command(media.MODELS["krea2"], "p", "/o.png",
                                   negative="watermark", model_name="krea2")
         self.assertEqual(cmd[cmd.index("--negative-prompt") + 1], "watermark")
+
+
+class TestPidDecode(unittest.TestCase):
+    # NVIDIA's pixel-diffusion decoder replaces the VAE decode and emits 4x the
+    # requested size, so it is an upscale inside the render. It also pulls ~8 GB
+    # of its own weights, one repo gated - a requirement that comes from an
+    # OPTION rather than from the model, which the consent gate had no way to
+    # express before.
+    def test_the_flag_reaches_the_backend(self):
+        cmd = media.build_command(media.MODELS["z-image-turbo"], "x", "/o.png",
+                                  model_name="z-image-turbo", pid_decode=True)
+        self.assertIn("--pid-decode", cmd)
+
+    def test_a_model_without_it_is_refused_by_name(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(media.MODELS["boogu"], "x", "/o.png",
+                                model_name="boogu", pid_decode=True)
+        self.assertIn("boogu", str(ctx.exception))
+
+    def test_sigma_rides_along(self):
+        cmd = media.build_command(media.MODELS["krea2"], "x", "/o.png",
+                                  model_name="krea2", pid_decode=True,
+                                  pid_degrade_sigma=0.2)
+        self.assertEqual(cmd[cmd.index("--pid-degrade-sigma") + 1], "0.2")
+
+    def test_sigma_outside_the_distilled_range_is_refused(self):
+        # mflux names the bound itself: PiD saw sigma ~ U[0.0, 0.8].
+        for value in (-0.1, 1.5):
+            with self.assertRaises(ValueError, msg=str(value)):
+                media.build_command(media.MODELS["krea2"], "x", "/o.png",
+                                    model_name="krea2", pid_decode=True,
+                                    pid_degrade_sigma=value)
+
+    def test_both_ends_of_the_range_are_legitimate(self):
+        for value in (0, 0.8):
+            cmd = media.build_command(media.MODELS["krea2"], "x", "/o.png",
+                                      model_name="krea2", pid_decode=True,
+                                      pid_degrade_sigma=value)
+            self.assertEqual(cmd[cmd.index("--pid-degrade-sigma") + 1], str(value))
+
+    def test_sigma_without_the_decoder_says_so(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(media.MODELS["krea2"], "x", "/o.png",
+                                model_name="krea2", pid_degrade_sigma=0.2)
+        self.assertIn("--pid-decode", str(ctx.exception))
+
+    def test_the_catalog_matches_what_the_backend_offers(self):
+        # Probed from each CLI's --help, not assumed: ten of sixteen.
+        have = sorted(n for n, s in media.MODELS.items() if "pid-decode" in s["caps"])
+        self.assertEqual(have, ["dev", "ernie", "ernie-turbo", "flux2-klein",
+                                "ideogram4", "krea2", "qwen", "schnell",
+                                "z-image", "z-image-turbo"])
+
+    def test_the_mcp_forwards_the_switch(self):
+        self.assertIn("pid_decode", dict(media_mcp._IMAGE_SWITCHES))
+        tool = next(t for t in media_mcp.TOOLS if t["name"] == "generate_image")
+        for key in ("pid_decode", "pid_degrade_sigma"):
+            self.assertIn(key, tool["inputSchema"]["properties"])
+
+
+class TestOptionWeightsAreGated(unittest.TestCase):
+    # A weight requirement can come from an option, not just from the model.
+    # Resolving only the model's alias let the gate pass on cached model weights
+    # and then fetch 8 GB mid-render - the failure this module exists to stop,
+    # and the same shape as the controlnet rows that listed only the adapter.
+    def setUp(self):
+        self.empty = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.empty, True)
+        saved = os.environ.get("FXLLA_MEDIA_HF_HOME")
+        os.environ["FXLLA_MEDIA_HF_HOME"] = self.empty
+        self.addCleanup(
+            lambda: os.environ.__setitem__("FXLLA_MEDIA_HF_HOME", saved)
+            if saved is not None else os.environ.pop("FXLLA_MEDIA_HF_HOME", None))
+
+    def test_the_option_alias_is_checked_too(self):
+        missing, size = weights.missing_for("image", "z-image-turbo", ["pid"])
+        self.assertIn("nvidia/PiD", missing)
+        self.assertIn("google/gemma-2-2b-it", missing)
+        self.assertIn("14GB", size)
+
+    def test_without_the_option_it_is_not(self):
+        missing, _ = weights.missing_for("image", "z-image-turbo")
+        self.assertNotIn("nvidia/PiD", missing)
+
+    def test_the_refusal_names_both_pre_fetches(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            weights.require("image", "z-image-turbo", ["pid"])
+        message = str(ctx.exception)
+        self.assertIn("fxlla pull media:z-image-turbo", message)
+        self.assertIn("fxlla pull media:pid", message)
+
+    def _run_cli(self, *extra):
+        return subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "generate.py"),
+             "image", "a cat", "--model", "z-image-turbo", "--output", "/tmp/x.png"]
+            + list(extra),
+            capture_output=True, text=True,
+            env=dict(os.environ, FXLLA_STORE="/tmp",
+                     FXLLA_MEDIA_HF_HOME=self.empty, FXLLA_ASSUME_YES=""))
+
+    def test_the_real_invocation_is_refused_not_just_the_helper(self):
+        # The line that protects an actual render is the one in main() that
+        # turns the flag into an extra alias. Testing missing_for alone left it
+        # free to be deleted, which a mutation proved.
+        proc = self._run_cli("--pid-decode")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("nvidia/PiD", proc.stdout + proc.stderr)
+
+    def test_the_same_render_without_the_flag_does_not_mention_them(self):
+        proc = self._run_cli()
+        self.assertNotIn("nvidia/PiD", proc.stdout + proc.stderr)
+
+    def test_an_unknown_extra_is_not_an_opinion(self):
+        # Not in the catalog means no claim, rather than a wrong one.
+        missing, _ = weights.missing_for("image", "z-image-turbo", ["nope"])
+        self.assertNotIn("nope", missing)
 
 
 class TestIdeogramPreset(unittest.TestCase):
