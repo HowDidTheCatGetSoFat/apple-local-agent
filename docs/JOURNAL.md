@@ -38,6 +38,25 @@ through CFG**, so a model may declare `negative` only if it also declares
 `guidance` or a `preset` that sets one. That is now a test, and it catches all
 four at once instead of one at a time.
 
+**Postscript, same day: the backend fixed its half.** mflux-cv 0.18.32 landed
+`warn_ignored_options` — one policy for the whole family of CLIs: an option a
+model cannot honour is still accepted, so existing scripts keep working, and a
+warning says so out loud. Applied to FLUX.1's dead `--negative-prompt`, Ideogram
+4's absent one, Z-Image Turbo and Boogu, and base Z-Image when guidance drops
+CFG. A follow-up commit fixed something this analysis had missed: the first
+version keyed the warning on the flag, so *omitting* `--guidance` - the common
+invocation, and one that also disables CFG - stayed silent.
+
+Its output is `UserWarning: <option> is ignored; <reason>`, which is exactly
+what the filter written here an hour earlier matches. The two halves compose
+without either being built for the other: the backend says it, and the caller
+now hears it. The pin moves to 0.18.32.
+
+Worth noting which fix is load-bearing. fxlla's caps still refuse these options
+before spending a render, which is cheaper than a warning after one. But the
+caps are transcribed and the warning is derived from the model's own config, so
+the warning is the one that cannot go stale.
+
 **And then the worst part, which is mine.** fxlla read the backend's stderr
 only when the render failed. On a successful run it was captured and dropped.
 So mflux's own `--steps is ignored; Ideogram 4 presets define the step count`

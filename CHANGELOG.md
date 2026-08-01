@@ -170,6 +170,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   step knobs it never had: `--steps` (one-stage), `--stage1-steps` and
   `--stage2-steps` (the two-stage pipelines), each refused with the right one
   named when passed to a stage that ignores it, per ltx's own `--help`.
+- The image backend pin moves to `mflux-cv==0.18.32`, which is where the other
+  half of the ignored-option story landed: mflux now warns whenever an option
+  the model cannot honour is dropped, keyed on the model's effective behaviour
+  rather than on the flag, so omitting `--guidance` (which also disables CFG)
+  warns too. Its format is what fxlla's warning filter already reads, so the
+  two compose: the backend says it, and the caller hears it. 0.18.30-31 also
+  bring Qwen and Ideogram saved-model fixes, and EXIF orientation on load.
 - fxlla read the backend's stderr only when a render FAILED, so anything it
   said on a run that worked was captured and thrown away - including mflux's
   own `--steps is ignored; Ideogram 4 presets define the step count`. The
