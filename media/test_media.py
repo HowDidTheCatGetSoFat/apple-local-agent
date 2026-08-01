@@ -1483,6 +1483,75 @@ class TestDimensionGrid(unittest.TestCase):
         self.assertEqual(media._DIM_STEP.get("ideogram4"), 16)
 
 
+class TestBackendWarnings(unittest.TestCase):
+    # stderr was read only when the render FAILED, so a warning on a good run
+    # was captured and dropped - including mflux's own "--steps is ignored",
+    # which is the backend naming the exact class of bug that had to be found
+    # three times by reading its source instead.
+    STDERR = (
+        "  0%|          | 0/20 [00:00<?, ?it/s]\n"
+        "/x/ideogram4_generate.py:44: UserWarning: --steps is ignored; "
+        "Ideogram 4 presets define the step count.\n"
+        '  warnings.warn("--steps is ignored", stacklevel=1)\n'
+        " 50%|#####     | 10/20 [00:30<00:30]\n"
+        "/x/ideogram4_generate.py:46: UserWarning: --guidance is ignored; "
+        "Ideogram 4 presets define the guidance schedule.\n"
+        "INFO: loading weights\n")
+
+    def test_it_extracts_what_the_backend_said(self):
+        found = media.backend_warnings(self.STDERR)
+        self.assertEqual(len(found), 2)
+        self.assertTrue(found[0].startswith("--steps is ignored"))
+
+    def test_progress_and_logs_are_not_warnings(self):
+        # Relaying all of stderr would drown the signal in progress bars and
+        # train a reader to skip it.
+        self.assertEqual(
+            media.backend_warnings(" 50%|#####| 10/20\nINFO: loading\n"), [])
+
+    def test_a_repeated_warning_is_reported_once(self):
+        self.assertEqual(len(media.backend_warnings(self.STDERR * 3)), 2)
+
+    def test_nothing_said_is_nothing_reported(self):
+        self.assertEqual(media.backend_warnings(""), [])
+        self.assertEqual(media.backend_warnings(None), [])
+
+    def test_every_backend_call_reports_what_it_said(self):
+        # The invariant, checked structurally so a sixth backend call cannot be
+        # added with the failure branch and without the success one - which is
+        # exactly how the first five came to drop their warnings.
+        source = open(media.__file__.replace(".pyc", ".py")).read()
+        failures = source.count("if proc.returncode != 0:")
+        reports = source.count("_report_warnings(proc.stderr)")
+        self.assertEqual(reports, failures,
+                         "%d backend calls handle failure, %d report warnings"
+                         % (failures, reports))
+
+    def test_a_finished_job_carries_them(self):
+        class Proc(object):
+            returncode, stdout = 0, "/out/x.png\n"
+            stderr = "warning: --steps is ignored; presets define it.\n"
+
+        jobs_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, jobs_dir, True)
+        saved_dir, jobs.JOBS_DIR = jobs.JOBS_DIR, jobs_dir
+        self.addCleanup(setattr, jobs, "JOBS_DIR", saved_dir)
+        saved_notify, jobs.notify = jobs.notify, lambda rec: None
+        self.addCleanup(setattr, jobs, "notify", saved_notify)
+        saved_run, jobs.subprocess.run = jobs.subprocess.run, lambda c, **k: Proc()
+        self.addCleanup(setattr, jobs.subprocess, "run", saved_run)
+        jobs._write({"id": "1785500000-abcdef", "kind": "image",
+                     "status": "queued", "argv": ["image", "x"], "summary": "x",
+                     "output": None, "error": None, "pid": None,
+                     "created": 1785500000.0, "started": None,
+                     "finished": None, "log": ""})
+        jobs.run("1785500000-abcdef")
+        rec = jobs._read("1785500000-abcdef")
+        self.assertEqual(rec["status"], "done")
+        self.assertEqual(len(rec.get("warnings") or []), 1)
+        self.assertIn("--steps is ignored", rec["warnings"][0])
+
+
 class TestNegativeNeedsCfg(unittest.TestCase):
     # A negative prompt only exists through classifier-free guidance. mflux
     # drops it outright below guidance 1 (`if guidance <= 1.0: return

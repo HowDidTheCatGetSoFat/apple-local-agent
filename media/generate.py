@@ -45,6 +45,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -674,6 +675,7 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "%s failed" % spec["cli"])[-800:])
+    _report_warnings(proc.stderr)
     validate_output(output)
     return output
 
@@ -775,6 +777,7 @@ def generate_video(prompt, stage=DEFAULT_STAGE, frames=None,
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "video generation failed")[-800:])
+    _report_warnings(proc.stderr)
     validate_video_output(output)
     return output
 
@@ -818,6 +821,7 @@ def generate_speech(text, ref=None, lang=None, model=None, speed=1.0,
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "voice generation failed")[-800:])
+    _report_warnings(proc.stderr)
     validate_wav_output(output)
     return output
 
@@ -856,6 +860,7 @@ def generate_edit(prompt, image, seed=None, quantize=8, output=None,
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "image edit failed")[-800:])
+    _report_warnings(proc.stderr)
     validate_output(output)
     return output
 
@@ -887,6 +892,7 @@ def generate_upscale(image, scale=None, output=None, keep_models=False):
     proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "image upscale failed")[-800:])
+    _report_warnings(proc.stderr)
     validate_output(output)
     return output
 
@@ -1195,6 +1201,35 @@ def _expected_seconds(args, seen=None):
     if width and height and entry.get("s_per_mp"):
         return entry["s_per_mp"] * (width * height) / 1e6
     return entry["median_s"]
+
+
+_WARNING_RE = re.compile(r"(?:^|\W)(?:User)?Warning:\s*(.+)$")
+
+
+def backend_warnings(stderr):
+    """What the backend said on a run that SUCCEEDED.
+
+    Only stderr on failure was ever read, so a warning on a good render was
+    captured and dropped - including mflux's own "--steps is ignored; Ideogram
+    4 presets define the step count", which is the backend naming the exact
+    class of bug that has now been found three times by reading its source
+    instead. Filtered rather than forwarded whole: progress bars live on stderr
+    too, and relaying those as warnings would train a reader to skip them."""
+    seen, out = set(), []
+    for line in (stderr or "").splitlines():
+        match = _WARNING_RE.search(line.strip())
+        if not match:
+            continue
+        text = match.group(1).strip()
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+    return out
+
+
+def _report_warnings(stderr):
+    for text in backend_warnings(stderr):
+        print("warning: %s" % text, file=sys.stderr)
 
 
 def _median(values):

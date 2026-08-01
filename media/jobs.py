@@ -218,8 +218,15 @@ def run(job_id):
             notify(_update(job_id, status="failed", finished=time.time(),
                            error="generator returned no output path"))
             return
+        # What the backend said on a run that worked. Only failures ever read
+        # stderr, so mflux's own "--steps is ignored" reached nobody: a caller
+        # asking for something the model discards was told by the backend and
+        # the message was deleted one layer up.
+        warned = [ln.split("warning: ", 1)[1] for ln in proc.stderr.splitlines()
+                  if ln.strip().startswith("warning: ")]
         notify(_update(job_id, status="done", finished=time.time(),
-                       output=lines[-1]))
+                       output=lines[-1],
+                       **({"warnings": warned} if warned else {})))
 
 
 def _as(text):

@@ -170,6 +170,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   step knobs it never had: `--steps` (one-stage), `--stage1-steps` and
   `--stage2-steps` (the two-stage pipelines), each refused with the right one
   named when passed to a stage that ignores it, per ltx's own `--help`.
+- fxlla read the backend's stderr only when a render FAILED, so anything it
+  said on a run that worked was captured and thrown away - including mflux's
+  own `--steps is ignored; Ideogram 4 presets define the step count`. The
+  backend was naming the exact class of bug that has now been found three times
+  by reading its source instead, and the message was being deleted one layer
+  up. Warnings from a successful render are now surfaced (filtered, so progress
+  bars do not drown them), carried on the job record as `warnings`, and
+  relayed by `media_job_status`. A structural test keeps every backend call
+  that handles failure also reporting what it said on success.
 - The same trap on the distilled models, and on the DEFAULT one: mflux declares
   `supports_guidance=False` for z-image-turbo, boogu, schnell and z-controlnet,
   which pins guidance to 0 - and guidance <= 1 makes the sampler drop the

@@ -38,6 +38,27 @@ through CFG**, so a model may declare `negative` only if it also declares
 `guidance` or a `preset` that sets one. That is now a test, and it catches all
 four at once instead of one at a time.
 
+**And then the worst part, which is mine.** fxlla read the backend's stderr
+only when the render failed. On a successful run it was captured and dropped.
+So mflux's own `--steps is ignored; Ideogram 4 presets define the step count`
+reached nobody: the backend was announcing this exact class of bug at runtime,
+and fxlla deleted the message one layer up. Three of these were found by
+reading mflux's source, when at least one of them was being said out loud every
+time it happened.
+
+Warnings from a successful render are surfaced now, filtered so progress bars
+do not drown them, carried on the job record and relayed by
+`media_job_status`. The test for it is structural - the count of backend calls
+that handle failure must equal the count that report warnings - because the
+failure mode was not a wrong filter, it was five call sites that each handled
+the error branch and forgot the other one.
+
+Worth stating plainly: a corrected assumption did more work here than any
+analysis. Believing the backend was an external constraint made "read its
+source and transcribe" look reasonable. It is a fork this project's author
+maintains, which makes the same finding a one-line fix at the source instead of
+a row in someone else's `.conf`.
+
 The deeper point is about where model facts live. mflux publishes
 `supports_guidance` in a struct. fxlla transcribes a worse version by hand into
 a `.conf`, VFX-1 transcribes another into `models.yaml`, and only

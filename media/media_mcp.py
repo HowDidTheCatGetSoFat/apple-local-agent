@@ -417,6 +417,8 @@ def run_job_status(args):
     # that never re-reads the catalog.
     if started is not None and finished is not None and finished > started:
         rec = dict(rec, elapsed_s=round(finished - started, 1))
+    # A `warnings` entry means the backend honoured the request differently
+    # from how it was asked - relay it rather than reporting a clean success.
     return json.dumps(rec)
 
 
