@@ -260,7 +260,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   for is queued behind a render that is not going any faster for being watched.
 
 ### Fixed
-- The gateway decided a model could see by looking for a projector file next to
+- `schnell` and `dev` could not render at all: every attempt died with "No
+  root_path and no download_url for component: vae" against a Hugging Face
+  cache that was complete, vae included. fxlla was selecting them with
+  `--base-model` alone, and mflux documents that flag as qualifying a
+  third-party `--model` ("explicitly specify whether the base model is dev or
+  schnell"), not as a way to name one. Passing it alone used to be tolerated;
+  it now yields a config whose `model_name` is None, and the None surfaces
+  thousands of lines later as the first component that has no download URL,
+  which is the vae and has nothing to do with it. fxlla now names the model
+  the documented way, `--model schnell`, which is both correct and immune to
+  that. Reported upstream separately, because producing a silently malformed
+  config where an argparse error would do costs whoever hits it an hour.
   its weights, which answered the wrong question. Whether an image CAN reach a
   model and whether its eyes are worth using are separate, and they came apart
   the first time a model shipped a vision tower inherited from its base and

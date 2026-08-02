@@ -53,11 +53,16 @@ class TestBuildCommand(unittest.TestCase):
         self.assertIn("--prompt", cmd)
         self.assertNotIn("--base-model", cmd)
 
-    def test_flux1_passes_base_model(self):
+    def test_flux1_names_the_model_rather_than_qualifying_one(self):
+        # mflux documents --base-model as qualifying a third-party --model
+        # ("explicitly specify whether the base model is dev or schnell"), not
+        # as a way to select one. Alone it produced a config with model_name
+        # None, and the render died as "no download_url for component: vae"
+        # against a cache that was complete.
         cmd = media.build_command(media.MODELS["schnell"], "cat", "/o.png")
         self.assertEqual(cmd[0], "mflux-generate")
-        self.assertIn("--base-model", cmd)
-        self.assertEqual(cmd[cmd.index("--base-model") + 1], "schnell")
+        self.assertNotIn("--base-model", cmd)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "schnell")
 
     def test_explicit_steps_override(self):
         cmd = media.build_command(media.MODELS["z-image-turbo"], "cat", "/o.png", steps=3)

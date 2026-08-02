@@ -487,7 +487,15 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
     backend that will reject it minutes later with its own usage text."""
     cmd = [mflux_cli(spec["cli"])]
     if spec.get("base_model"):
-        cmd += ["--base-model", spec["base_model"]]
+        # --model, not --base-model. mflux documents --base-model as "when
+        # using a third-party huggingface model, explicitly specify whether
+        # the base model is dev or schnell" - it qualifies a --model, it does
+        # not stand in for one. Passing it alone used to be tolerated and now
+        # yields a config whose model_name is None, which surfaces much later
+        # as "No root_path and no download_url for component: vae" and sends
+        # you looking at a cache that is perfectly fine. Naming the model the
+        # documented way is both correct and immune to that.
+        cmd += ["--model", spec["base_model"]]
     if prompt_file:
         # mflux declares these mutually exclusive ("--prompt-file: not allowed
         # with argument --prompt"), so sending both made every --prompt-file
