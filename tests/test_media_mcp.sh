@@ -272,11 +272,12 @@ EOF
 )"
 missing=0
 for t in generate_image generate_video generate_speech edit_image upscale_image \
-         media_job_status list_media_models list_loras list_media_jobs cancel_media_job; do
+         media_job_status list_media_models list_loras list_media_jobs cancel_media_job \
+         describe_image; do
   case "$tools" in *"\"$t\""*) ;; *) missing=$((missing + 1));; esac
 done
-if [ "$missing" -eq 0 ]; then pass "tools/list advertises all ten tools"
-else fail "tools/list advertises all ten tools ($missing missing)"; fi
+if [ "$missing" -eq 0 ]; then pass "tools/list advertises every tool"
+else fail "tools/list advertises every tool ($missing missing)"; fi
 
 # --- the async default is documented as a default --------------------------
 # The contract changed: a render returns a job id when it outlasts the window,

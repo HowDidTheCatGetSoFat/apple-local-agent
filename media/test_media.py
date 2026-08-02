@@ -268,7 +268,8 @@ class TestMCP(unittest.TestCase):
                          {"generate_image", "generate_video", "generate_speech",
                           "edit_image", "upscale_image", "media_job_status",
                           "list_loras", "list_media_models",
-                          "list_media_jobs", "cancel_media_job"})
+                          "list_media_jobs", "cancel_media_job",
+                          "describe_image"})
 
     def test_discovery_and_waiting_exist(self):
         # Both come from watching a real session: the model read the source
@@ -1711,6 +1712,65 @@ class TestNegativeNeedsCfg(unittest.TestCase):
         cmd = media.build_command(media.MODELS["krea2"], "p", "/o.png",
                                   negative="watermark", model_name="krea2")
         self.assertEqual(cmd[cmd.index("--negative-prompt") + 1], "watermark")
+
+
+class TestDescribeImage(unittest.TestCase):
+    # The inverse of every other call here: it reads an image instead of making
+    # one, so a model that cannot see can check its own work. Deliberately
+    # synchronous - measured around ten seconds, where the job queue would be
+    # ceremony - and it goes through the gateway so the model stays resident.
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.png = os.path.join(self.dir, "shot.png")
+        with open(self.png, "wb") as fh:
+            fh.write(media.PNG_MAGIC + b"\x00\x00\x00\x0dIHDR"
+                     + (64).to_bytes(4, "big") + (64).to_bytes(4, "big")
+                     + b"\x00" * 40)
+
+    def test_a_missing_file_is_named_before_any_request(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.describe_image(os.path.join(self.dir, "nope.png"))
+        self.assertIn("nope.png", str(ctx.exception))
+
+    def test_something_that_is_not_an_image_is_refused(self):
+        junk = os.path.join(self.dir, "notes.txt")
+        with open(junk, "w") as fh:
+            fh.write("hello")
+        with self.assertRaises(ValueError):
+            media.describe_image(junk)
+
+    def test_no_gateway_says_how_to_start_one(self):
+        saved = media.GATEWAY_PORT
+        media.GATEWAY_PORT = "1"  # nothing listens there
+        self.addCleanup(setattr, media, "GATEWAY_PORT", saved)
+        with self.assertRaises(RuntimeError) as ctx:
+            media.describe_image(self.png)
+        self.assertIn("fxlla serve", str(ctx.exception))
+
+    def test_the_default_question_asks_for_text_verbatim(self):
+        # A generator inventing gibberish lettering is the failure this is for,
+        # and it is only found by asking what is there rather than whether
+        # something expected is present.
+        self.assertIn("quoted", media.VISION_QUESTION.lower())
+        for leading in ("correct", "should say", "is it right"):
+            self.assertNotIn(leading, media.VISION_QUESTION.lower())
+
+    def test_it_is_not_routed_through_the_job_queue(self):
+        # _spawn would submit a background job and hand back an id for
+        # something already answered.
+        self.assertIn("describe_image", dict(
+            (t["name"], t) for t in media_mcp.TOOLS))
+        source = open(media_mcp.__file__.replace(".pyc", ".py")).read()
+        body = source.split("def run_describe(")[1].split("\ndef ")[0]
+        # A CALL, not a mention: the comment above it names _spawn to say why
+        # it is wrong here, and matching prose would fail on its own reasoning.
+        self.assertNotIn("_spawn(", body)
+        self.assertIn("_exec(", body)
+
+    def test_the_tool_warns_against_a_leading_question(self):
+        tool = next(t for t in media_mcp.TOOLS if t["name"] == "describe_image")
+        self.assertIn("NEVER put the expected answer", tool["description"])
 
 
 class TestCatalogMatchesTheBackend(unittest.TestCase):

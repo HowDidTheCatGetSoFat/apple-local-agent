@@ -237,6 +237,22 @@ them decide, then pre-fetch with `fxlla pull media:<alias>` or pass the
 authorization. Never authorize a large transfer on the user's behalf.
 `fxlla media weights` lists every model with its size and whether it is cached.
 
+## When you cannot see: describe_image
+
+If your own model has no vision, `describe_image` gives you a local one that
+does. It answers in about ten seconds, so it is a read rather than a job, and
+it is what makes the rest of this section possible from a text-only model.
+
+**Never put the expected answer in the question.** Asked "this should say LA
+USINA, is the lettering correct?" it confirmed and missed an entire block of
+invented gibberish underneath. Asked "list every piece of text, quoted
+exactly", it produced the gibberish immediately. A leading question gets a
+confirming answer, and confirmation is exactly what you must not accept from a
+check.
+
+So to verify: make it **enumerate** what is there, then compare against what
+you asked for yourself. To explore: leave the question out.
+
 ## Look at what you made
 
 **If your client can read an image, read the file you just produced before

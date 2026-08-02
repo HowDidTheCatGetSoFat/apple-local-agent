@@ -223,6 +223,27 @@ TOOLS = [
                                    "and changes nothing. Capped at the "
                                    "server's window (FXLLA_MCP_WAIT_S)."},
      }, "required": ["job_id"]}},
+    {"name": "describe_image",
+     "description": "Look at an image and get back what is in it, as text, from "
+                    "a local vision model. The inverse of the generators, and "
+                    "the way a model that cannot see gets to check its own "
+                    "work: `done` on a render means the file was written, not "
+                    "that it is right. Answers in about ten seconds - it is a "
+                    "read, not a render, so there is no job to follow.\n"
+                    "NEVER put the expected answer in the question. Asked "
+                    "'this should say LA USINA, is the lettering correct?' the "
+                    "model confirmed it and missed a whole block of gibberish "
+                    "the generator had invented; asked to list every piece of "
+                    "text, it quoted the gibberish immediately. To verify, make "
+                    "it ENUMERATE what is there, then compare yourself.",
+     "inputSchema": {"type": "object", "properties": {
+         "image": {"type": "string", "description": "Path to the image."},
+         "question": {"type": "string",
+                      "description": "What to ask about it. Leave it out for a "
+                                     "neutral description that quotes any text. "
+                                     "Phrase it as 'list/describe what is "
+                                     "there', never as 'is X correct?'."},
+     }, "required": ["image"]}},
     {"name": "list_loras",
      "description": "LoRAs found on this machine and the built-in styles. Each entry carries base_model: the architecture it was trained for, prefixed with ~ when inferred from the weights rather than declared. Apply one only to its own base - a krea2 adapter does nothing useful on z-image. Check here before "
                     "generating: if a LoRA fits what the user asked for, offer "
@@ -467,6 +488,19 @@ def run_job_status(args):
     return json.dumps(rec)
 
 
+def run_describe(args):
+    image = args.get("image")
+    if not image:
+        return "error: image is required"
+    cmd = [sys.executable, MEDIA, "describe", "--image", str(image)]
+    if args.get("question"):
+        cmd.append(str(args["question"]))
+    # Synchronous on purpose: measured at about ten seconds, so the job queue
+    # would be ceremony. It also must NOT go through _spawn, which would submit
+    # a background job and hand back an id for something already answered.
+    return _exec(cmd, "could not describe the image")
+
+
 def run_list_loras(_args):
     return _exec([sys.executable, MEDIA, "loras", "--json"],
                  "could not list loras")
@@ -560,6 +594,7 @@ def handle(msg):
                   "edit_image": run_edit,
                   "upscale_image": run_upscale,
                   "media_job_status": run_job_status,
+                  "describe_image": run_describe,
                   "list_media_models": run_list_models,
                   "list_loras": run_list_loras,
                   "list_media_jobs": run_list_jobs,

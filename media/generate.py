@@ -42,6 +42,7 @@ Usage (normally driven via `fxlla media`):
   generate.py cancel <id>     cancel a running job
 """
 import argparse
+import base64
 import glob
 import json
 import os
@@ -391,6 +392,63 @@ def _env():
     if hf:
         env["HF_HOME"] = hf
     return env
+
+
+# The catalog alias that can read an image. Every other model here is text-only,
+# and `mlx_lm.server` refuses image content outright, so this one is served by
+# llama-server with a multimodal projector.
+VISION_MODEL = os.environ.get("FXLLA_VISION_MODEL", "vision")
+VISION_QUESTION = ("Describe this image. Be specific and concrete about what is "
+                   "actually there, including any text or lettering, quoted "
+                   "exactly. Do not speculate about what it might be for.")
+
+
+def describe_image(path, question=None, model=None, timeout_s=600):
+    """What is in this image, as text, from the local vision model.
+
+    This is the inverse of everything else in this module: it reads an image
+    rather than making one, and it exists because the thing driving fxlla often
+    cannot see. A generation reports `done` when the file is written, and
+    nothing below the caller can tell whether it is right - a real chain here
+    removed an object from a photograph, left a visible ghost of it, and every
+    check passed.
+
+    Deliberately synchronous and outside the job queue: measured at 9 s, this
+    is a read, not a render, and making the caller poll for it would be the
+    ceremony without the reason. It goes through the gateway rather than
+    spawning its own server so the model stays resident between calls."""
+    path = os.path.expanduser(path)
+    if not os.path.isfile(path):
+        raise ValueError("image not found: %s" % path)
+    facts = quality.image_facts(path)
+    if not facts.get("width"):
+        raise ValueError("not a readable PNG: %s" % path)
+    with open(path, "rb") as fh:
+        data = base64.b64encode(fh.read()).decode("ascii")
+    body = {"model": model or VISION_MODEL, "max_tokens": 700,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": question or VISION_QUESTION},
+                {"type": "image_url",
+                 "image_url": {"url": "data:image/png;base64," + data}}]}]}
+    url = "http://%s:%s/v1/chat/completions" % (GATEWAY_HOST, GATEWAY_PORT)
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+            answer = json.loads(r.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:400]
+        raise RuntimeError("the vision model refused this: %s" % detail)
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            "no gateway at %s:%s (%s). Start one with `fxlla serve`; the vision "
+            "model loads on demand and stays resident between calls."
+            % (GATEWAY_HOST, GATEWAY_PORT, exc.reason))
+    choices = answer.get("choices") or []
+    text = (choices[0].get("message", {}).get("content") or "").strip() if choices else ""
+    if not text:
+        raise RuntimeError("the vision model returned nothing")
+    return text
 
 
 def free_gpu(reason, keep=False):
@@ -1236,6 +1294,10 @@ def print_timings():
           "render just to fill this table in.")
 
 
+def cmd_describe(args):
+    print(describe_image(args.image, args.question, args.model))
+
+
 def cmd_timings(args):
     """`fxlla media timings`: the measured table on its own.
 
@@ -1782,6 +1844,12 @@ def main():
 
     ml = sub.add_parser("models")
     ml.add_argument("-j", "--json", action="store_true")
+    de = sub.add_parser("describe")
+    de.add_argument("--image", required=True, help="the image to look at")
+    de.add_argument("question", nargs="?",
+                    help="what to ask about it (default: describe it, quoting "
+                         "any text)")
+    de.add_argument("--model", help="vision model alias (default: FXLLA_VISION_MODEL)")
     lr = sub.add_parser("loras")
     lr.add_argument("-j", "--json", action="store_true")
     ti = sub.add_parser("timings")
@@ -1832,7 +1900,7 @@ def main():
         return
     {"image": cmd_image, "video": cmd_video, "voice": cmd_voice,
      "edit": cmd_edit, "upscale": cmd_upscale, "models": cmd_models,
-     "loras": cmd_loras, "timings": cmd_timings,
+     "loras": cmd_loras, "timings": cmd_timings, "describe": cmd_describe,
      "voice-python": lambda _a: print(resolved_voice_python()),
      "jobs": cmd_jobs, "job": cmd_job, "cancel": cmd_cancel}[args.cmd](args)
 
