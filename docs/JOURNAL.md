@@ -2,6 +2,55 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-02: fxlla decides, and the line moves on purpose
+
+The entry below draws a line: answering an image behind an endpoint is what a
+provider does, and orchestration starts where a loop decides to generate,
+judge and regenerate. `fxlla do` crosses that line deliberately. The earlier
+position was right for its time - it was written against a client loading an
+MCP server and driving the tools by hand - and it stops being right once the
+decision needs facts only fxlla holds. Which models exist, what each actually
+accepts, how long each takes on this machine, what the render came out looking
+like. A caller cannot plan well against a menu it has to guess at. Anyone
+citing "leave orchestration to the clients" against this should read it as
+superseded rather than violated; it is quoted twice in older entries below and
+both are historical record.
+
+The shape is five steps, and each is a different KIND of thing so that none is
+trusted with a job it cannot do. A local model plans; the generator refuses
+what it cannot honour; the vision model enumerates; plain code compares; one
+retry. The standing rule that no model judges another model's output survives
+intact, and it is what forced the design: the planner commits IN ADVANCE to a
+few words that should be visible, the eyes are asked what is there without
+ever being told what is hoped for, and arithmetic decides whether the two line
+up. A model asked "is this a red car?" agrees, and an agreement is worth
+nothing.
+
+The one design decision worth defending is what a miss means. It is reported
+as something the DESCRIPTION did not mention - a fact about the description,
+not a verdict on the image - because a terse describer would otherwise make
+the loop confidently discard good work. It buys one more attempt and it says
+so in the output.
+
+Two things were learned by running it rather than reasoning about it, which is
+the whole reason it was run.
+
+The first attempt died outright. The planner chose a model, the backend failed
+partway, and the run ended - even though fifteen other models were sitting
+there. A refusal or a failure now feeds its reason into the next plan instead
+of ending the run. The failure itself was not fxlla's: `fxlla media image
+--model schnell` reproduces it exactly, from an mflux that says there is no
+path for the vae component of a repository that is fully cached, vae included.
+
+The second is sharper and is the more useful lesson. Told in prose that
+schnell had just failed, the planner chose schnell again, with the same
+sentence of reasoning. Telling a model about a constraint is not the same as
+applying one. A model that fails is now removed from the next menu, where
+obeying is not optional. That is the same instinct as refusing an invented
+flag by name before the render rather than letting the backend discover it,
+and it should be the default reflex here: put the constraint where compliance
+is structural, and use the prose only to explain what happened.
+
 ## 2026-08-02: fxlla reads the image itself
 
 The question that drove this was architectural, and I got the framing wrong

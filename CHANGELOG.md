@@ -6,6 +6,35 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- `fxlla do "<what you want>"`: state an outcome instead of a command and
+  fxlla picks the model, renders, looks at the result and retries once. This
+  is a deliberate change of position. Leaving orchestration to opencode and
+  Claude Code was right while the alternative was a client loading an MCP
+  server and driving it by hand; it stops being right once the decision needs
+  facts only fxlla holds - which models exist, what each one actually accepts,
+  how long each takes here, and what the render came out looking like. A
+  caller cannot plan well against a menu it has to guess at.
+  Each step is a different kind of thing so none is trusted with a job it
+  cannot do. A local model turns the intent into one concrete call chosen from
+  the real catalog, and anything it invents is refused before a render spends
+  four minutes proving it. The generator stays the single authority on what
+  each model accepts - there is no second capability check here, because a
+  duplicate would drift from the catalog the moment one was corrected. The
+  vision model then ENUMERATES what is in the result and is never asked
+  whether the result is correct, since a model asked "is this a red car?"
+  agrees and an agreement is worth nothing. Plain code compares that
+  enumeration against words the planner committed to in advance: no model
+  judges another model's output, one states expectations, another reports
+  sightings, and arithmetic decides whether they line up.
+  A miss is reported as what it is - something the description did not
+  mention, which is a fact about the description and not a verdict on the
+  image - so the loop asks for one more attempt rather than discarding work.
+  Bounded by both a step count and a wall clock, because one slow render can
+  outlast any reasonable number of attempts on its own. Only models whose
+  weights are actually cached are offered. A refusal or a backend failure
+  feeds the reason into the next plan instead of ending the run, which is what
+  the first live run needed: it died on a backend error from a model whose
+  weights were fully present.
 - `FXLLA_LORA_DIRS`: LoRA discovery searches directories you name, plus any
   LoRA already in the Hugging Face cache (mflux takes a repo id directly, so a
   cached one needs no path), not just the civitai download folder. A LoRA is
