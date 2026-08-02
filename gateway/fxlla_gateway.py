@@ -88,6 +88,168 @@ CATALOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
                        "config", "models.conf")
 
 
+def _role_aliases(role):
+    """Catalog aliases with this role."""
+    out = set()
+    try:
+        with open(CATALOG, encoding="utf-8") as fh:
+            for line in fh:
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) >= 5 and not parts[0].startswith("#") and parts[3] == role:
+                    out.add(parts[0])
+    except OSError:
+        pass
+    return out
+
+
+# Sending an image to a text model used to be a crash: mlx_lm.server raises
+# "Only 'text' content type is supported" on any non-text part, and a GGUF
+# backend without a projector drops it silently. Rather than make every client
+# discover which of its models can see, the gateway reads the image with one
+# that can and hands the chosen model a description. One request in, one answer
+# out, two models used - the capability lives behind the endpoint instead of in
+# whatever is calling it.
+VISION_ROUTING = os.environ.get("FXLLA_VISION_ROUTING", "1") not in ("0", "false", "")
+
+
+def _can_see(alias):
+    """True when this model has a multimodal projector on disk.
+
+    The catalog's role is a declaration; the projector is what llama-server is
+    actually handed (bin/fxlla passes --mmproj when it finds one), so the disk
+    is what decides whether an image can be forwarded untouched."""
+    import glob
+    return bool(glob.glob(os.path.join(MODELS_DIR, alias, "mmproj*.gguf")))
+
+
+def _vision_alias():
+    """The model that will do the reading, or None."""
+    preferred = os.environ.get("FXLLA_VISION_MODEL")
+    if preferred:
+        # Validated, not trusted: an override naming a text model would send
+        # it an image and surface as a vision failure blaming the wrong thing.
+        if not _can_see(preferred):
+            raise RuntimeError(
+                "FXLLA_VISION_MODEL is set to %r, which has no multimodal "
+                "projector on disk and cannot read an image" % preferred)
+        return preferred
+    for alias in sorted(_role_aliases("vision")):
+        if _can_see(alias):
+            return alias
+    return None
+
+
+def _image_parts(body):
+    """Every (message, index) holding an image, in order."""
+    found = []
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return found
+    for message in messages:
+        # Every level is checked: this runs on EVERY request, including ones
+        # with no image, so anything raising here turns a request that used to
+        # be forwarded into a 502 blamed on vision.
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for i, part in enumerate(content):
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                found.append((message, i))
+    return found
+
+
+def _asked(body):
+    """The text the user sent alongside the image, for relevance.
+
+    Passed to the reader as CONTEXT, never as a claim to check: asked whether
+    an expected string was present, a vision model confirmed it and missed a
+    whole block of invented text; asked to enumerate, it reported the invention
+    at once. So the question it receives always says report, never verify."""
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return ""
+    # Latest turn first: an older question in the same conversation would
+    # steer the reader at the wrong thing.
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()[:400]
+        if not isinstance(content, list):
+            continue
+        texts = [p["text"] for p in content
+                 if isinstance(p, dict) and p.get("type") == "text"
+                 and isinstance(p.get("text"), str)]
+        if texts:
+            return " ".join(texts).strip()[:400]
+    return ""
+
+
+def _read_image(part, asked):
+    """One image, as text, from the local vision model."""
+    alias = _vision_alias()
+    if not alias:
+        raise RuntimeError(
+            "this request carries an image and no catalog model can read one. "
+            "Add a model with role 'vision' (see config/models.conf) and pull it")
+    try:
+        port, model_field = MANAGER.ensure(alias)
+    except KeyError:
+        raise RuntimeError(
+            "the vision model %r is not downloaded. Pull it: fxlla pull %s"
+            % (alias, alias))
+    question = ("Describe this image for someone who cannot see it. List what "
+                "is actually present and quote any text or lettering exactly. "
+                "Report only what is there - do not judge whether anything is "
+                "correct or expected.")
+    if asked:
+        question += ("\n\nFor relevance, they were asked: %r. Let that guide "
+                     "what you cover, but still report what is present rather "
+                     "than confirming anything." % asked)
+    body = {"model": model_field, "max_tokens": 700, "messages": [
+        {"role": "user", "content": [{"type": "text", "text": question},
+                                     dict(part)]}]}
+    # Straight to the backend port, not back through this server: a request
+    # that re-entered here would translate its own translation.
+    req = urllib.request.Request(
+        "http://127.0.0.1:%d/v1/chat/completions" % port,
+        data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=600) as r:
+        answer = json.loads(r.read())
+    choices = answer.get("choices") or []
+    text = (choices[0].get("message", {}).get("content") or "").strip() if choices else ""
+    if not text:
+        raise RuntimeError("the vision model returned nothing for this image")
+    return alias, text
+
+
+def add_vision(body, alias):
+    """Replace images the chosen model cannot read with a description of them.
+
+    Returns the alias that did the reading, or None when nothing was done -
+    no image, routing disabled, or the chosen model can see for itself, in
+    which case the image is passed through untouched because a description is
+    strictly lossier than the thing itself."""
+    if not VISION_ROUTING or _can_see(alias):
+        return None
+    parts = _image_parts(body)
+    if not parts:
+        return None
+    reader = None
+    for message, index in parts:
+        reader, text = _read_image(message["content"][index], _asked(body))
+        # Marked as a description on purpose: the model downstream must not
+        # answer as though it had seen the image itself.
+        message["content"][index] = {
+            "type": "text",
+            "text": "[an image was attached; %s read it and reports:]\n%s"
+                    % (reader, text)}
+    return reader
+
+
 def _embed_identities():
     """(aliases, repos) of catalog entries with role embed. Both are needed:
     a pull by alias names the directory after the alias, a pull by org/repo
@@ -426,6 +588,17 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": {"message": "missing 'model' field"}})
             return
 
+        # An image the chosen model cannot read is translated before anything
+        # else, so a failure here is reported as itself rather than surfacing
+        # as the backend's "Only 'text' content type is supported".
+        try:
+            reader = add_vision(body, alias)
+        except Exception as e:
+            self._json(502, {"error": {
+                "message": "could not read the image in this request: %s" % e,
+                "type": "vision_failed"}})
+            return
+
         try:
             port, model_field = MANAGER.ensure(alias)
         except KeyError:
@@ -438,6 +611,8 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # send the model value each backend expects (path for MLX, alias for GGUF)
+        if reader:
+            log("read the image with %s, answering with %s" % (reader, alias))
         body["model"] = model_field
         payload = json.dumps(body).encode()
         upstream = "http://127.0.0.1:%d%s" % (port, self.path)
@@ -450,6 +625,8 @@ class Handler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             data = e.read()
             self.send_response(e.code)
+            if reader:
+                self.send_header("X-Fxlla-Vision", reader)
             self.send_header("Content-Type", e.headers.get("Content-Type", "application/json"))
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -463,6 +640,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(resp.status)
         ctype = resp.headers.get("Content-Type", "application/json")
         self.send_header("Content-Type", ctype)
+        # Say that two models were used. Without this, a description that goes
+        # wrong looks like the answering model being wrong, and the debugging
+        # goes to the wrong place.
+        if reader:
+            self.send_header("X-Fxlla-Vision", reader)
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
         streaming = "event-stream" in ctype

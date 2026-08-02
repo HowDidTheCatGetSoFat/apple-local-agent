@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -247,6 +248,190 @@ class TestRss(unittest.TestCase):
 
     def test_bogus_pid_is_zero(self):
         self.assertEqual(gw.rss_mb(-1), 0)
+
+class TestVisionForModelsThatCannotSee(unittest.TestCase):
+    """An image reaching a text model used to be a crash.
+
+    `mlx_lm.server` raises "Only 'text' content type is supported" on any
+    non-text part, so sending a picture to a coding model failed outright. The
+    gateway now reads it with a model that can and hands the chosen one a
+    description: one request in, one answer out, two models used. The point is
+    that the capability lives behind the endpoint rather than in whatever is
+    calling it - a client with no MCP support at all still gets it.
+    """
+
+    def _body(self, model="coder", text="what is this?"):
+        return {"model": model, "messages": [{"role": "user", "content": [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]}]}
+
+    def _stub_reader(self, answer="a red square with the word HOLA"):
+        calls = []
+
+        def fake(part, asked):
+            calls.append((part, asked))
+            return "seer", answer
+
+        saved = gw._read_image
+        gw._read_image = fake
+        self.addCleanup(setattr, gw, "_read_image", saved)
+        return calls
+
+    def _stub_roles(self, vision=("seer",)):
+        """Which models can see. Keyed on the projector, as the real code is."""
+        saved_can, saved_role = gw._can_see, gw._role_aliases
+        gw._can_see = lambda alias: alias in set(vision)
+        gw._role_aliases = lambda role: set(vision) if role == "vision" else set()
+        self.addCleanup(setattr, gw, "_can_see", saved_can)
+        self.addCleanup(setattr, gw, "_role_aliases", saved_role)
+
+    def test_the_image_becomes_text_for_a_model_that_cannot_see(self):
+        self._stub_roles()
+        self._stub_reader()
+        body = self._body()
+        self.assertEqual(gw.add_vision(body, "coder"), "seer")
+        parts = body["messages"][0]["content"]
+        self.assertTrue(all(p["type"] == "text" for p in parts))
+        self.assertIn("HOLA", parts[1]["text"])
+
+    def test_the_replacement_says_it_is_a_description(self):
+        # The answering model must not reply as though it had seen the image.
+        self._stub_roles()
+        self._stub_reader()
+        body = self._body()
+        gw.add_vision(body, "coder")
+        said = body["messages"][0]["content"][1]["text"]
+        self.assertIn("an image was attached", said)
+        self.assertIn("seer", said)
+
+    def test_a_model_that_sees_gets_the_image_itself(self):
+        # A description is strictly lossier than the thing it describes.
+        self._stub_roles()
+        calls = self._stub_reader()
+        body = self._body(model="seer")
+        self.assertIsNone(gw.add_vision(body, "seer"))
+        self.assertEqual(calls, [])
+        self.assertEqual(body["messages"][0]["content"][1]["type"], "image_url")
+
+    def test_a_request_without_an_image_is_untouched(self):
+        self._stub_roles()
+        calls = self._stub_reader()
+        body = {"model": "coder", "messages": [{"role": "user", "content": "hola"}]}
+        before = json.dumps(body, sort_keys=True)
+        self.assertIsNone(gw.add_vision(body, "coder"))
+        self.assertEqual(json.dumps(body, sort_keys=True), before)
+        self.assertEqual(calls, [])
+
+    def test_every_image_is_read_not_only_the_first(self):
+        self._stub_roles()
+        calls = self._stub_reader()
+        body = self._body()
+        body["messages"][0]["content"].append(
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,BBBB"}})
+        gw.add_vision(body, "coder")
+        self.assertEqual(len(calls), 2)
+
+    def test_the_users_words_reach_the_reader_as_context(self):
+        # Relevance without confirmation: the reader is told what was asked so
+        # it covers the right things, and told to report rather than verify.
+        self._stub_roles()
+        calls = self._stub_reader()
+        gw.add_vision(self._body(text="is the lettering right?"), "coder")
+        self.assertEqual(calls[0][1], "is the lettering right?")
+
+    def test_it_can_be_turned_off(self):
+        self._stub_roles()
+        calls = self._stub_reader()
+        saved = gw.VISION_ROUTING
+        gw.VISION_ROUTING = False
+        self.addCleanup(setattr, gw, "VISION_ROUTING", saved)
+        body = self._body()
+        self.assertIsNone(gw.add_vision(body, "coder"))
+        self.assertEqual(calls, [])
+
+    def test_no_vision_model_is_an_error_naming_the_fix(self):
+        # Silence would forward the image and surface as the backend's own
+        # "Only 'text' content type is supported", which names nothing useful.
+        self._stub_roles(vision=())
+        saved = os.environ.pop("FXLLA_VISION_MODEL", None)
+        self.addCleanup(lambda: os.environ.__setitem__("FXLLA_VISION_MODEL", saved)
+                        if saved is not None else None)
+        with self.assertRaises(RuntimeError) as ctx:
+            gw._read_image({"type": "image_url"}, "")
+        self.assertIn("role 'vision'", str(ctx.exception))
+
+    def test_the_words_around_the_image_survive(self):
+        # Only the image slot may change. An over-eager rewrite that dropped or
+        # mangled the user's own text would be invisible to every assertion
+        # that only inspects the image slot.
+        self._stub_roles()
+        self._stub_reader()
+        body = self._body(text="fix the parser")
+        gw.add_vision(body, "coder")
+        self.assertEqual(body["messages"][0]["content"][0],
+                         {"type": "text", "text": "fix the parser"})
+
+    def test_each_image_is_replaced_in_its_own_slot(self):
+        self._stub_roles()
+        saved = gw._read_image
+        gw._read_image = lambda part, asked: ("seer", part["image_url"]["url"])
+        self.addCleanup(setattr, gw, "_read_image", saved)
+        body = self._body()
+        body["messages"][0]["content"].append(
+            {"type": "image_url", "image_url": {"url": "SECOND"}})
+        gw.add_vision(body, "coder")
+        parts = body["messages"][0]["content"]
+        self.assertIn("data:image/png;base64,AAAA", parts[1]["text"])
+        self.assertIn("SECOND", parts[2]["text"])
+
+    def test_a_malformed_body_is_not_reported_as_a_vision_failure(self):
+        # This runs on EVERY request. Anything raising here turns a request
+        # that used to be forwarded into a 502 blamed on vision.
+        self._stub_roles()
+        self._stub_reader()
+        for messages in ([None], ["a string"], [{"content": None}],
+                         [{"content": ["not a dict"]}], "not a list", None):
+            body = {"model": "coder", "messages": messages}
+            self.assertIsNone(gw.add_vision(body, "coder"), repr(messages))
+
+    def test_a_non_string_text_part_does_not_abort_the_read(self):
+        self._stub_roles()
+        calls = self._stub_reader()
+        body = self._body()
+        body["messages"][0]["content"][0] = {"type": "text", "text": {"oops": 1}}
+        gw.add_vision(body, "coder")
+        self.assertEqual(len(calls), 1)
+
+    def test_it_reads_the_latest_user_turn_for_context(self):
+        self._stub_roles()
+        calls = self._stub_reader()
+        body = self._body(text="the newest question")
+        body["messages"].insert(0, {"role": "user", "content": "an older one"})
+        body["messages"].insert(1, {"role": "assistant", "content": "sure"})
+        gw.add_vision(body, "coder")
+        self.assertEqual(calls[0][1], "the newest question")
+
+    def test_seeing_is_decided_by_the_projector_on_disk(self):
+        # bin/fxlla passes --mmproj when it finds one, so that file is what
+        # decides whether an image can be forwarded untouched. A catalog role
+        # is only a declaration and the two can disagree.
+        blind = os.path.join(_MODELS, "no-eyes")
+        seeing = os.path.join(_MODELS, "has-eyes")
+        os.makedirs(blind, exist_ok=True)
+        os.makedirs(seeing, exist_ok=True)
+        open(os.path.join(seeing, "mmproj-f16.gguf"), "wb").close()
+        self.assertFalse(gw._can_see("no-eyes"))
+        self.assertTrue(gw._can_see("has-eyes"))
+
+    def test_an_override_naming_a_blind_model_is_refused(self):
+        # Sending an image to a text model would surface as a vision failure
+        # blaming the reader rather than the misconfiguration.
+        os.makedirs(os.path.join(_MODELS, "no-eyes"), exist_ok=True)
+        os.environ["FXLLA_VISION_MODEL"] = "no-eyes"
+        self.addCleanup(os.environ.pop, "FXLLA_VISION_MODEL", None)
+        with self.assertRaises(RuntimeError) as ctx:
+            gw._vision_alias()
+        self.assertIn("projector", str(ctx.exception))
 
 
 if __name__ == "__main__":
