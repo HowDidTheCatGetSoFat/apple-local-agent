@@ -19,6 +19,8 @@ import fcntl
 import json
 import os
 import re
+import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -260,10 +262,30 @@ def notify(rec):
                                 "failed" if failed else "ready", took)
     body = (rec.get("summary") or rec["id"]) if failed else (
         os.path.basename(rec.get("output") or "") or rec["id"])
+    _post(title, body[:120], rec.get("output") if not failed else None)
+
+
+def _post(title, body, output):
+    """Show it, and make clicking it land somewhere sensible.
+
+    `osascript` notifications belong to Script Editor, so clicking one opened
+    Script Editor - an app the user never invoked and which has nothing to do
+    with the render. terminal-notifier can attach the finished file to the
+    click; without it, attributing the notification to Finder at least means a
+    click opens a file browser rather than a script IDE."""
     try:
+        if shutil.which("terminal-notifier"):
+            cmd = ["terminal-notifier", "-title", title, "-message", body,
+                   "-sender", "com.apple.finder", "-group", "fxlla-media"]
+            if output and os.path.exists(output):
+                # Reveal the file itself: the one thing a click could usefully do.
+                cmd += ["-execute", "open -R %s" % shlex.quote(output)]
+            subprocess.run(cmd, capture_output=True, timeout=10, check=False)
+            return
         subprocess.run(
-            ["osascript", "-e", "display notification %s with title %s"
-             % (_as(body[:120]), _as(title))],
+            ["osascript", "-e",
+             "tell application \"Finder\" to display notification %s with title %s"
+             % (_as(body), _as(title))],
             capture_output=True, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError):
         pass

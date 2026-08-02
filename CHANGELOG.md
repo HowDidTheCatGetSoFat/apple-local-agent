@@ -187,6 +187,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   for is queued behind a render that is not going any faster for being watched.
 
 ### Fixed
+- Clicking a render's desktop notification opened Script Editor. A plain
+  `osascript` notification belongs to `com.apple.ScriptEditor2`, so the click
+  landed in an app the user never invoked and which has nothing to do with the
+  render. With `terminal-notifier` on PATH the notification now reveals the
+  finished file in Finder; without it the notification is attributed to Finder,
+  so the click at least opens a file browser. A failed render offers nothing to
+  open, since there is no file.
+- Three notification tests asserted the `osascript` form without pinning it, so
+  they passed or failed depending on whether `terminal-notifier` happened to be
+  installed - green here and red in CI, or the reverse. Each now pins the branch
+  it means to exercise.
 - `observed` gave no seconds-per-megapixel for `edit` or `upscale`. Both
   produce a single still, so their cost scales with its area exactly as a
   render's does; the normalisation was keyed on `kind == "image"` alone, so

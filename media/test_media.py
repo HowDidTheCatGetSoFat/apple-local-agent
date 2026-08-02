@@ -2077,6 +2077,14 @@ class TestJobNotification(unittest.TestCase):
         jobs.sys.platform = "darwin"
         self.addCleanup(setattr, jobs.sys, "platform", self.real_platform)
 
+    def _osascript_only(self):
+        """Pin the fallback branch. Without this these assertions depend on
+        whether terminal-notifier happens to be installed, which made them pass
+        here and fail in CI - or the reverse."""
+        saved = jobs.shutil.which
+        jobs.shutil.which = lambda _n: None
+        self.addCleanup(setattr, jobs.shutil, "which", saved)
+
     def _rec(self, **over):
         rec = {"id": "1785500000-abcdef", "kind": "image", "status": "done",
                "output": "/out/fxlla-krea2-1785500000.png", "summary": "s",
@@ -2085,6 +2093,7 @@ class TestJobNotification(unittest.TestCase):
         return rec
 
     def test_a_finished_render_says_what_and_how_long(self):
+        self._osascript_only()
         jobs.notify(self._rec())
         script = self.sent[0][-1]
         self.assertIn("fxlla-krea2-1785500000.png", script)
@@ -2094,10 +2103,12 @@ class TestJobNotification(unittest.TestCase):
     def test_a_failure_is_announced_too(self):
         # Eight minutes of waiting for nothing is what most needs saying, and
         # silence reads as still running.
+        self._osascript_only()
         jobs.notify(self._rec(status="failed", output=None))
         self.assertIn("failed", self.sent[0][-1])
 
     def test_quotes_in_a_prompt_cannot_escape_the_script(self):
+        self._osascript_only()
         jobs.notify(self._rec(status="failed", output=None,
                               summary='a "quoted" \\ prompt'))
         script = self.sent[0][-1]
@@ -2105,6 +2116,35 @@ class TestJobNotification(unittest.TestCase):
         # One unescaped quote would close the literal and leave the rest of
         # somebody's prompt to be interpreted as AppleScript.
         self.assertEqual(script.count('"') % 2, 0)
+
+    def test_a_click_lands_on_the_file_when_it_can(self):
+        # An osascript notification belongs to Script Editor, so clicking one
+        # opened an app the user never invoked and which has nothing to do with
+        # the render. terminal-notifier can attach the finished file instead.
+        saved = jobs.shutil.which
+        jobs.shutil.which = lambda n: "/usr/local/bin/" + n
+        self.addCleanup(setattr, jobs.shutil, "which", saved)
+        with tempfile.NamedTemporaryFile(suffix=".png") as fh:
+            jobs.notify(self._rec(output=fh.name))
+        cmd = self.sent[0]
+        self.assertEqual(cmd[0], "terminal-notifier")
+        self.assertIn("-execute", cmd)
+        self.assertIn(fh.name, cmd[cmd.index("-execute") + 1])
+
+    def test_without_it_a_click_at_least_opens_finder(self):
+        saved = jobs.shutil.which
+        jobs.shutil.which = lambda _n: None
+        self.addCleanup(setattr, jobs.shutil, "which", saved)
+        jobs.notify(self._rec())
+        script = self.sent[0][-1]
+        self.assertIn('application "Finder"', script)
+
+    def test_a_failure_offers_no_file_to_open(self):
+        saved = jobs.shutil.which
+        jobs.shutil.which = lambda n: "/usr/local/bin/" + n
+        self.addCleanup(setattr, jobs.shutil, "which", saved)
+        jobs.notify(self._rec(status="failed", output=None))
+        self.assertNotIn("-execute", self.sent[0])
 
     def test_it_stays_quiet_where_there_is_no_desktop(self):
         jobs.sys.platform = "linux"
