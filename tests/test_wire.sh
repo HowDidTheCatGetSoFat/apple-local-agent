@@ -112,10 +112,12 @@ for var in FXLLA_AGENT_MODEL FXLLA_DEFAULT_MODEL FXLLA_AGENT_MAX_STEPS FXLLA_AGE
 done
 
 # and cmd_do actually exports that list, not just declares it
-if grep -q 'export \$FXLLA_AGENT_ENV' "$FXLLA"; then pass "cmd_do exports the agent env"
+# shellcheck disable=SC2016  # the literal text is what is being searched for
+if grep -qF 'export $FXLLA_AGENT_ENV' "$FXLLA"; then pass "cmd_do exports the agent env"
 else fail "cmd_do exports the agent env"; fi
 
-out="$(FXLLA_STORE=/tmp XDG_CONFIG_HOME="$CFG" bash "$FXLLA" do --help 2>&1 || true)"
+# 'do' quoted: unquoted it reads as the loop keyword to shellcheck (SC1010).
+out="$(FXLLA_STORE=/tmp XDG_CONFIG_HOME="$CFG" bash "$FXLLA" 'do' --help 2>&1 || true)"
 if grep -qi "max-steps" <<< "$out"; then pass "do is wired to the loop"
 else fail "do is wired to the loop (got: $(tail -1 <<< "$out"))"; fi
 
