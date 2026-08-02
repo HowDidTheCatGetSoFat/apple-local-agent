@@ -2,6 +2,60 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-02: the loop picks the verb, not just the noun
+
+`fxlla do` could choose a model. It could not choose what to DO, which is most
+of what "decide" means. Naming an image that exists now makes editing
+available, so the same command plans a render for "a red bicycle" and an edit
+for "make the wall in shot.png yellow", with nothing to select.
+
+Editing is the right second operation for a reason that is not convenience.
+It produces an image, so the look and the check work on it unchanged - but
+more than that, it is where verifying earns the most. The failure that
+motivated `describe_image` in the first place was an edit: it removed an
+object from a photograph, left a visible ghost of it, and every mechanical
+check passed. A loop that edits without looking is the exact machine for
+producing that silently.
+
+The design decision worth recording is what the planner is NOT asked for. It
+never transcribes the input path. fxlla extracts the image paths from the
+request itself, offers that list, and refuses any choice outside it. A path
+repeated back by a model has to be right character by character, and this
+project has already learned, twice in one day, that telling a model a
+constraint is not the same as holding it to one - first when a planner
+re-chose a model it had just been told had failed, then when an adversarial
+review found that removing that model from the menu without also rejecting it
+on the way back was not a constraint either. The same reflex applies here
+before it can cost anything: put the rule where compliance is structural, and
+use the prose only to explain.
+
+The rest follows from that. Only `seed` carries over to an edit, because
+steps, guidance and aspect mean nothing to qwen-edit and would arrive as a
+TypeError rather than a message. And a failed edit does not withhold its model
+the way a failed generate does - there is one edit model, so excluding it
+would leave the next plan with nowhere to go.
+
+Verified on the render from the entry below: "make the wall in <that png>
+bright yellow instead of blue" planned an edit, ran qwen-edit, and settled on
+the first attempt in 530 s. The wall is yellow and the bicycle survived
+intact.
+
+And the run found the loop's clearest limitation, which is worth more than the
+success. Comparing the two descriptions of the same scene:
+
+    before   the ground is a light grey CONCRETE surface
+    after    positioned on a light gray WOODEN surface
+
+Nobody asked for the ground to change. The check passed anyway, because every
+word the plan committed to was present, and the check only ever asks whether
+what was promised turned up. The enumeration recorded the side effect
+faithfully - it is sitting there in the output - but nothing compares it
+against the description of the input, so a change nobody requested reads
+exactly like a clean edit. That comparison is the obvious next thing: for an
+edit, the before-description is already available for free, and what appeared
+or vanished between the two is a fact plain code can extract, with no model
+judging anything.
+
 ## 2026-08-02: fxlla decides, and the line moves on purpose
 
 The entry below draws a line: answering an image behind an endpoint is what a

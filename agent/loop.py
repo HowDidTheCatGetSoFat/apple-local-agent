@@ -12,9 +12,13 @@ like. A caller cannot plan well against a menu it has to guess at.
 The shape is deliberately small, and each step is a different KIND of thing so
 that no step is trusted with a job it cannot do:
 
-    plan    a local model turns the intent into one concrete call, chosen
-            from the real catalog. Anything it invents is refused here,
-            before a render spends four minutes proving it.
+    plan    a local model turns the intent into one concrete call: which
+            OPERATION (make a new image, or change one that exists) and then
+            which model or which file. Anything it invents is refused here,
+            before a render spends four minutes proving it. The one thing it
+            is never asked to produce is a path - fxlla extracts those from
+            the request and the plan may only choose among them, because a
+            transcribed path has to be right character by character.
     act     the existing generator runs. No new render path.
     look    the vision model ENUMERATES what is in the result. It is never
             asked whether the result is correct: a model asked "is this a red
@@ -34,6 +38,7 @@ a loop that confidently discards good work because a describer was terse.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -67,6 +72,11 @@ LOOK = ("List what is actually visible in this image: subjects, setting, "
 # planner that invents one should learn that here and not in the backend.
 FIELDS = ("model", "prompt", "seed", "steps", "width", "height", "aspect",
           "negative", "guidance", "preset")
+
+# Editing takes one model and one extra flag, so it needs no menu of its own.
+EDIT_FIELDS = ("prompt", "image", "seed")
+
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 
 
 class PlanError(Exception):
@@ -183,23 +193,60 @@ def _extract_json(text):
     raise PlanError("no JSON object in the planner's reply: %s" % text[:200])
 
 
-PROMPT = """You plan ONE local image generation and nothing else.
+def images_in(intent):
+    """Existing image files named in the intent, in the order they appear.
 
-Reply with a single JSON object, no prose:
-{"model": "...", "prompt": "...", "expect": ["...", "..."], "why": "..."}
+    Plain code, deliberately. The planner is never asked to transcribe a path:
+    a model that repeats one back has to get every character right, and it has
+    already been shown here that a model told a constraint in prose does not
+    reliably honour it. Extracting the paths and letting it choose from the
+    list makes a wrong or invented one impossible rather than unlikely.
+    """
+    found, seen = [], set()
+    # Quoted runs first, so a path containing spaces survives the split.
+    candidates = re.findall(r'"([^"]+)"|\'([^\']+)\'', intent)
+    tokens = [a or b for a, b in candidates] + intent.split()
+    for token in tokens:
+        token = token.strip().strip("\"'").rstrip(".,;:)")
+        if not token.lower().endswith(IMAGE_SUFFIXES):
+            continue
+        path = os.path.abspath(os.path.expanduser(token))
+        if path in seen or not os.path.isfile(path):
+            continue
+        seen.add(path)
+        found.append(path)
+    return found
 
-Rules:
+
+PROMPT = """You plan ONE local image operation and nothing else.
+
+Reply with a single JSON object, no prose.
+
+To make a new image:
+{"action": "generate", "model": "...", "prompt": "...", "expect": ["...", "..."], "why": "..."}
 - "model" MUST be one from the list below.
 - Only include an optional key if that model's "accepts" list allows it:
   %s
 - "prompt" is the text the image model receives. Write it for an image model.
+
+To change an image that already exists:
+{"action": "edit", "image": "...", "prompt": "...", "expect": ["...", "..."], "why": "..."}
+- "image" MUST be copied exactly from the "images you may edit" list below.
+  If that list is empty you cannot edit anything; generate instead.
+- "prompt" describes the CHANGE to make, not the whole picture.
+
+Both:
 - "expect" is 2 to 5 SINGLE distinctive words that should be visible in the
   result - concrete nouns and colours, never adjectives about quality. They
-  are checked against an independent description of the render, so choose
-  words a describer would actually use.
-- "why" is one short sentence on why this model.
+  are checked against an independent description of the result, so choose
+  words a describer would actually use. For an edit, choose words that are
+  true only if the change actually happened.
+- "why" is one short sentence on the choice.
 
-Available models:
+Available models for "generate":
+%s
+
+Images you may edit:
 %s"""
 
 
@@ -217,19 +264,21 @@ def _last_line(text):
     return (lines[-1] if lines else "")[:300]
 
 
-def plan(intent, feedback=None, exclude=(), timeout_s=180):
+def plan(intent, feedback=None, exclude=(), timeout_s=180, editable=()):
     """One concrete call, validated against what the catalog can honour."""
     offered = [row for row in menu() if row["model"] not in exclude]
-    if not offered and exclude:
-        raise PlanError(
-            "every usable model failed on this request: %s" % ", ".join(sorted(exclude)))
-    if not offered:
+    if not offered and not editable:
+        if exclude:
+            raise PlanError("every usable model failed on this request: %s"
+                            % ", ".join(sorted(exclude)))
         raise PlanError(
             "no image model on this machine has its weights downloaded. Pull "
             "one first: fxlla media weights, then fxlla pull media:<alias>")
     optional = ", ".join(f for f in FIELDS if f not in ("model", "prompt"))
     messages = [
-        {"role": "system", "content": PROMPT % (optional, json.dumps(offered, indent=1))},
+        {"role": "system", "content": PROMPT % (optional,
+                                                json.dumps(offered, indent=1),
+                                                json.dumps(list(editable), indent=1))},
         {"role": "user", "content": intent},
     ]
     if feedback:
@@ -252,10 +301,11 @@ def plan(intent, feedback=None, exclude=(), timeout_s=180):
                              "did not mention: %s.\nThe description was:\n%s\n\n"
                              "Plan one more attempt at the original request."
                              % (", ".join(feedback["missing"]), feedback["described"])})
-    return _validate(_extract_json(_chat(messages, PLANNER, timeout_s)), exclude)
+    return _validate(_extract_json(_chat(messages, PLANNER, timeout_s)),
+                     exclude, editable)
 
 
-def _validate(chosen, exclude=()):
+def _validate(chosen, exclude=(), editable=()):
     """Refuse what the generator cannot be asked, and only that.
 
     Deliberately does NOT re-check the model's capabilities. build_command
@@ -266,36 +316,80 @@ def _validate(chosen, exclude=()):
     week removing from the other direction. What is left is what the generator
     genuinely cannot tell us: an alias that does not exist, an empty prompt, a
     plan that commits to nothing checkable, and an invented key that would
-    reach generate_image as a TypeError instead of a message.
+    reach the generator as a TypeError instead of a message.
     """
     if not isinstance(chosen, dict):
         raise PlanError("the plan is not an object")
-    model = chosen.get("model")
-    if model not in generate.MODELS:
-        raise PlanError("unknown model %r; the catalog has: %s"
-                        % (model, ", ".join(sorted(generate.MODELS))))
-    if model in exclude:
-        # Withholding a model from the menu is not the same as refusing it.
-        # The whole point of removing a failed model was that obeying should
-        # not be optional, and a planner that names it anyway - which is
-        # exactly what the one here did when merely told in prose - would
-        # otherwise sail straight through into another doomed render.
-        raise PlanError("%s already failed on this request and was withheld "
-                        "from the list; it cannot be chosen again" % model)
+    action = (chosen.get("action") or "generate").strip().lower()
+    if action not in ("generate", "edit"):
+        raise PlanError("unknown action %r; this plans 'generate' or 'edit'" % action)
     if not (chosen.get("prompt") or "").strip():
         raise PlanError("the plan has no prompt")
     expect = [w for w in (chosen.get("expect") or []) if isinstance(w, str) and w.strip()]
     if not expect:
         raise PlanError("the plan commits to nothing visible; 'expect' is empty")
-    out = {"model": model, "prompt": chosen["prompt"].strip(),
+
+    out = {"action": action, "prompt": chosen["prompt"].strip(),
            "expect": [w.strip() for w in expect][:5],
            "why": (chosen.get("why") or "").strip()}
-    for field in FIELDS:
-        if field in ("model", "prompt") or field not in chosen:
+
+    if action == "edit":
+        # The path must be one WE found on disk, not one the planner typed.
+        # Comparing against the extracted set is what makes a hallucinated or
+        # mistyped path impossible rather than merely unlikely - and an edit
+        # aimed at the wrong file would overwrite nothing but would waste a
+        # render and describe an image nobody asked about.
+        wanted = (chosen.get("image") or "").strip()
+        allowed = {os.path.abspath(os.path.expanduser(p)): p for p in editable}
+        resolved = os.path.abspath(os.path.expanduser(wanted)) if wanted else ""
+        if resolved not in allowed:
+            raise PlanError(
+                "the plan edits %r, which is not one of the images found in the "
+                "request: %s" % (wanted, ", ".join(editable) or "(none)"))
+        out["image"] = allowed[resolved]
+        fields = EDIT_FIELDS
+    else:
+        model = chosen.get("model")
+        if model not in generate.MODELS:
+            raise PlanError("unknown model %r; the catalog has: %s"
+                            % (model, ", ".join(sorted(generate.MODELS))))
+        if model in exclude:
+            # Withholding a model from the menu is not the same as refusing
+            # it. The whole point of removing a failed model was that obeying
+            # should not be optional, and a planner that names it anyway -
+            # exactly what the one here did when merely told in prose - would
+            # otherwise sail straight through into another doomed render.
+            raise PlanError("%s already failed on this request and was withheld "
+                            "from the list; it cannot be chosen again" % model)
+        out["model"] = model
+        fields = FIELDS
+
+    for field in fields:
+        if field in ("model", "prompt", "image") or field not in chosen:
             continue
         if chosen[field] not in (None, ""):
             out[field] = chosen[field]
     return out
+
+
+def _target(chosen):
+    """What this plan is about, for a log line: a model, or a file being edited."""
+    if chosen.get("action") == "edit":
+        return os.path.basename(chosen.get("image") or "?")
+    return chosen.get("model") or "?"
+
+
+def _act(chosen):
+    """Run the planned operation through the generator that already exists.
+
+    No new render path: `fxlla do` is a way of deciding, not a second way of
+    rendering. Both of these are what `fxlla media` calls, so a fix or a cap
+    correction there reaches here without anything being mirrored."""
+    fields = {k: v for k, v in chosen.items()
+              if k not in ("expect", "why", "action")}
+    if chosen["action"] == "edit":
+        return generate.generate_edit(**fields)
+    return generate.generate_image(**fields)
 
 
 def look(path, timeout_s):
@@ -324,6 +418,11 @@ def run(intent, max_steps=MAX_STEPS, max_seconds=MAX_SECONDS, out=sys.stderr):
     # planner chose schnell again with the same reasoning - so the constraint
     # is applied where obeying it is not optional.
     failed = set()
+    # Resolved once, from the intent, before any model sees it.
+    editable = images_in(intent)
+    if editable:
+        print("[do] %d image(s) in the request are editable" % len(editable),
+              file=out, flush=True)
 
     def left():
         return max_seconds - (time.time() - started)
@@ -334,7 +433,8 @@ def run(intent, max_steps=MAX_STEPS, max_seconds=MAX_SECONDS, out=sys.stderr):
         print("[do] planning (%d/%d)" % (attempt, max_steps), file=out, flush=True)
         try:
             chosen = plan(intent, feedback, exclude=failed,
-                          timeout_s=max(30, min(180, left())))
+                          timeout_s=max(30, min(180, left())),
+                          editable=editable)
         except PlanError as exc:
             # Only the FIRST plan is allowed to end the run. After that an
             # artifact may already exist, and letting a bad reply escape here
@@ -348,13 +448,13 @@ def run(intent, max_steps=MAX_STEPS, max_seconds=MAX_SECONDS, out=sys.stderr):
             steps.append({"attempt": attempt, "plan": None, "output": None,
                           "described": None, "missing": [], "refused": str(exc)})
             break
-        print("[do] %s: %s" % (chosen["model"], chosen["why"] or chosen["prompt"][:70]),
+        print("[do] %s %s: %s" % (chosen["action"], _target(chosen),
+                                  chosen["why"] or chosen["prompt"][:70]),
               file=out, flush=True)
         if left() <= 0:
             break
         try:
-            path = generate.generate_image(**{k: v for k, v in chosen.items()
-                                              if k not in ("expect", "why")})
+            path = _act(chosen)
         except (ValueError, RuntimeError) as exc:
             # Two shapes, one response. ValueError is the generator refusing a
             # flag before spending the render, naming both it and the models
@@ -365,8 +465,12 @@ def run(intent, max_steps=MAX_STEPS, max_seconds=MAX_SECONDS, out=sys.stderr):
             # continue knowing what happened rather than end: a second model
             # is usually available and usually works.
             reason = _last_line(exc)
-            failed.add(chosen["model"])
-            print("[do] %s failed: %s" % (chosen["model"], reason), file=out, flush=True)
+            # Only a generate model can be withheld: there is one edit model,
+            # so excluding it would leave the next plan with nowhere to go.
+            if chosen["action"] == "generate":
+                failed.add(chosen["model"])
+            print("[do] %s failed: %s" % (_target(chosen), reason),
+                  file=out, flush=True)
             record = {"attempt": attempt, "plan": chosen, "output": None,
                       "described": None, "missing": [], "refused": reason}
             steps.append(record)
@@ -407,10 +511,10 @@ def report(result, out=sys.stdout):
         for step in result["steps"]:
             if step.get("refused"):
                 # A step whose planning failed has no plan to name.
-                chosen = (step.get("plan") or {}).get("model")
+                chosen = step.get("plan")
                 print("  attempt %d %s: %s"
                       % (step["attempt"],
-                         "planned %s and it failed" % chosen if chosen
+                         "planned %s and it failed" % _target(chosen) if chosen
                          else "could not be planned",
                          step["refused"]), file=out)
         if not result["steps"]:
@@ -421,7 +525,10 @@ def report(result, out=sys.stdout):
     print(file=out)
     print(final["output"], file=out)
     print(file=out)
-    print("model    %s" % final["plan"]["model"], file=out)
+    if final["plan"]["action"] == "edit":
+        print("edited   %s" % final["plan"]["image"], file=out)
+    else:
+        print("model    %s" % final["plan"]["model"], file=out)
     print("prompt   %s" % final["plan"]["prompt"], file=out)
     if final["plan"].get("why"):
         print("why      %s" % final["plan"]["why"], file=out)

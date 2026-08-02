@@ -82,6 +82,7 @@ Then open opencode and pick the `local` provider.
 | `fxlla kb ...`                | Local RAG knowledge bases (MCP: rag_search) |
 | `fxlla graph ...`             | Multi-language code graph (MCP: find_definition, ...) |
 | `fxlla media image\|video\|voice` | Local media generation (MCP: generate_*) |
+| `fxlla do "<what you want>"`  | State an outcome; fxlla decides and checks |
 | `fxlla logs`                  | Follow the server log                     |
 | `fxlla skills install`        | Install the tool-usage skill pack         |
 | `fxlla doctor`                | Diagnose the environment                  |
@@ -548,6 +549,44 @@ keep it under the calling client's timeout, because a call held open longer
 than the client waits comes back as a timeout, and a timeout reads as a
 failure: one model, unable to tell the two apart, submitted the same render
 four times. `async: false` holds the call open until the file is written.
+
+## State an outcome instead: fxlla do
+
+Every other command answers a question asked precisely - which model, which
+flags, which prompt. `fxlla do` takes an outcome and works the rest out:
+
+```bash
+fxlla do "a red bicycle leaning against a blue wall"
+fxlla do "make the wall in ~/shots/room.png bright yellow instead of blue"
+```
+
+Naming an image that exists is what makes editing available, so the first
+plans a render and the second plans an edit, from the same command with
+nothing to select. It needs a running gateway (`fxlla serve`): the planner and
+the eyes are both local models served by it.
+
+Five steps, each a different kind of thing so that none is trusted with a job
+it cannot do. A local model turns the intent into one concrete call, chosen
+from the real catalog and limited to models whose weights are actually here.
+The generator stays the only authority on what each model accepts and refuses
+anything else by name, before a render spends four minutes proving it. The
+vision model then enumerates what is in the result - it is never asked whether
+the result is correct, because a model asked "is this a red car?" agrees, and
+an agreement is worth nothing. Plain code compares that enumeration against
+words the plan committed to in advance. No model judges another model's
+output: one states expectations, another reports sightings, and arithmetic
+decides whether they line up.
+
+A word the description never mentioned is reported as exactly that - a fact
+about the description, not a verdict on the image - and buys one more attempt
+rather than discarding the file. The distinction is not academic: on the first
+run recorded here the describer called a red fender black while getting
+everything else right.
+
+Two budgets bound it, `--max-steps` and `--max-seconds`, because one slow
+render can outlast any reasonable number of attempts on its own. `--json`
+prints the whole record: every plan, every description, and what was missing.
+`FXLLA_AGENT_MODEL` chooses the planner.
 
 ## Tools and skills
 

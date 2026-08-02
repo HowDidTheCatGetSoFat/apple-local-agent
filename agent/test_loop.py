@@ -122,6 +122,132 @@ class TestValidation(unittest.TestCase):
         self.assertEqual(len(out["expect"]), 5)
 
 
+class TestImagesInTheIntent(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        self.png = os.path.join(self.dir, "shot.png")
+        open(self.png, "wb").close()
+
+    def test_a_named_file_that_exists_is_found(self):
+        self.assertEqual(loop.images_in("make the wall green in %s" % self.png),
+                         [self.png])
+
+    def test_a_file_that_does_not_exist_is_not_offered(self):
+        self.assertEqual(loop.images_in("edit %s/absent.png" % self.dir), [])
+
+    def test_a_path_with_spaces_survives_when_quoted(self):
+        spaced = os.path.join(self.dir, "two words.png")
+        open(spaced, "wb").close()
+        self.assertEqual(loop.images_in('edit "%s" please' % spaced), [spaced])
+
+    def test_trailing_punctuation_does_not_break_the_path(self):
+        self.assertEqual(loop.images_in("look at %s, then fix it" % self.png),
+                         [self.png])
+
+    def test_the_same_file_twice_is_listed_once(self):
+        self.assertEqual(loop.images_in("%s and %s" % (self.png, self.png)),
+                         [self.png])
+
+    def test_a_prompt_with_no_paths_offers_nothing(self):
+        self.assertEqual(loop.images_in("a red bicycle against a blue wall"), [])
+
+    def test_a_non_image_file_is_not_offered(self):
+        other = os.path.join(self.dir, "notes.txt")
+        open(other, "wb").close()
+        self.assertEqual(loop.images_in("read %s" % other), [])
+
+
+class TestEditPlans(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.real = generate.MODELS
+        generate.MODELS = {"fast": {"caps": {"seed"}, "steps": 8, "note": ""}}
+        self.addCleanup(setattr, generate, "MODELS", self.real)
+        self.dir = tempfile.mkdtemp()
+        self.png = os.path.join(self.dir, "shot.png")
+        open(self.png, "wb").close()
+
+    def _edit(self, **over):
+        base = {"action": "edit", "image": self.png, "prompt": "make it green",
+                "expect": ["green"]}
+        base.update(over)
+        return base
+
+    def test_an_edit_naming_a_found_image_is_accepted(self):
+        out = loop._validate(self._edit(), editable=[self.png])
+        self.assertEqual(out["action"], "edit")
+        self.assertEqual(out["image"], self.png)
+        self.assertNotIn("model", out)
+
+    def test_an_invented_path_is_refused(self):
+        # The planner is never trusted to transcribe a path. A hallucinated or
+        # mistyped one must be impossible, not merely unlikely.
+        with self.assertRaises(loop.PlanError) as ctx:
+            loop._validate(self._edit(image="/tmp/not-in-the-request.png"),
+                           editable=[self.png])
+        self.assertIn("not one of the images", str(ctx.exception))
+
+    def test_an_edit_with_no_editable_images_is_refused(self):
+        with self.assertRaises(loop.PlanError):
+            loop._validate(self._edit(), editable=[])
+
+    def test_the_same_file_written_differently_still_matches(self):
+        # A planner echoing the path with a redundant ./ or a ~ must not be
+        # rejected for a difference that resolves to the same file.
+        odd = os.path.join(self.dir, ".", "shot.png")
+        out = loop._validate(self._edit(image=odd), editable=[self.png])
+        self.assertEqual(out["image"], self.png)
+
+    def test_an_edit_carries_no_generation_only_fields(self):
+        # steps/guidance/aspect mean nothing to qwen-edit and would reach it
+        # as a TypeError rather than a message.
+        out = loop._validate(self._edit(steps=40, guidance=3.0, aspect="16:9"),
+                             editable=[self.png])
+        for absent in ("steps", "guidance", "aspect"):
+            self.assertNotIn(absent, out)
+
+    def test_an_edit_may_carry_a_seed(self):
+        out = loop._validate(self._edit(seed=7), editable=[self.png])
+        self.assertEqual(out["seed"], 7)
+
+    def test_an_unknown_action_is_refused(self):
+        with self.assertRaises(loop.PlanError) as ctx:
+            loop._validate(self._edit(action="upscale"), editable=[self.png])
+        self.assertIn("unknown action", str(ctx.exception))
+
+    def test_a_plan_with_no_action_still_means_generate(self):
+        out = loop._validate({"model": "fast", "prompt": "a cat",
+                              "expect": ["cat"]})
+        self.assertEqual(out["action"], "generate")
+
+    def test_an_edit_is_dispatched_to_the_edit_generator(self):
+        seen = {}
+        saved = (generate.generate_edit, generate.generate_image)
+        generate.generate_edit = lambda **k: seen.update(k) or "/tmp/edited.png"
+        generate.generate_image = lambda **k: self.fail("edit went to generate")
+        self.addCleanup(lambda: (setattr(generate, "generate_edit", saved[0]),
+                                 setattr(generate, "generate_image", saved[1])))
+        plan = loop._validate(self._edit(), editable=[self.png])
+        self.assertEqual(loop._act(plan), "/tmp/edited.png")
+        self.assertEqual(seen["image"], self.png)
+        self.assertEqual(seen["prompt"], "make it green")
+        self.assertNotIn("action", seen)
+
+    def test_a_generate_is_dispatched_to_the_image_generator(self):
+        seen = {}
+        saved = (generate.generate_edit, generate.generate_image)
+        generate.generate_image = lambda **k: seen.update(k) or "/tmp/made.png"
+        generate.generate_edit = lambda **k: self.fail("generate went to edit")
+        self.addCleanup(lambda: (setattr(generate, "generate_edit", saved[0]),
+                                 setattr(generate, "generate_image", saved[1])))
+        plan = loop._validate({"model": "fast", "prompt": "a cat",
+                               "expect": ["cat"]})
+        self.assertEqual(loop._act(plan), "/tmp/made.png")
+        self.assertEqual(seen["model"], "fast")
+        self.assertNotIn("action", seen)
+
+
 class TestCheck(unittest.TestCase):
     def test_a_mentioned_word_is_not_missing(self):
         self.assertEqual(loop.check(["cat"], "A CAT sitting on a mat."), [])
@@ -153,7 +279,7 @@ class TestLoop(unittest.TestCase):
         """Drive the loop with canned plans, renders and descriptions."""
         queue = list(plans)
 
-        def fake_plan(intent, feedback=None, exclude=(), timeout_s=180):
+        def fake_plan(intent, feedback=None, exclude=(), timeout_s=180, editable=()):
             self.planned.append(feedback)
             self.excluded.append(set(exclude))
             return loop._validate(queue.pop(0))
@@ -293,7 +419,7 @@ class TestLoop(unittest.TestCase):
         # made nothing, with the finished PNG never mentioned.
         queue = [{"model": "fast", "prompt": "a", "expect": ["hat"]}]
 
-        def fake_plan(intent, feedback=None, exclude=(), timeout_s=180):
+        def fake_plan(intent, feedback=None, exclude=(), timeout_s=180, editable=()):
             if not queue:
                 raise loop.PlanError("unknown model 'imaginary'")
             return loop._validate(queue.pop(0))
@@ -313,7 +439,7 @@ class TestLoop(unittest.TestCase):
         # Nothing was made, so there is nothing to preserve and the planner's
         # error is the whole story. Swallowing it would report an empty
         # success instead.
-        def fake_plan(intent, feedback=None, exclude=(), timeout_s=180):
+        def fake_plan(intent, feedback=None, exclude=(), timeout_s=180, editable=()):
             raise loop.PlanError("unknown model 'imaginary'")
 
         saved = loop.plan

@@ -55,8 +55,9 @@ fxlla - local models (MLX + GGUF) on Apple Silicon
   fxlla media loras           LoRAs you have downloaded, and built-in styles
   fxlla media weights         Media weight catalog and what is cached
   fxlla media jobs            Background media jobs (also job <id>, cancel <id>)
-  fxlla do "<what you want>"  State an outcome, not a command: fxlla picks the
-                              model, renders, looks at the result with the
+  fxlla do "<what you want>"  State an outcome, not a command: fxlla decides
+                              whether to make an image or edit one you named,
+                              picks the model, looks at the result with the
                               vision model and retries once. Needs 'fxlla serve'
   fxlla wire-opencode [--all] Register the local provider (--all: + MCP + skills)
   fxlla skills install        Install the tool-usage skills (opencode + Claude Code)
