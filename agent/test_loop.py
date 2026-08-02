@@ -29,6 +29,26 @@ class TestPlanExtraction(unittest.TestCase):
         found = loop._extract_json('{"a": {"b": 1}, "c": 2}')
         self.assertEqual(found["c"], 2)
 
+    def test_an_unbalanced_brace_inside_a_string_does_not_close_the_object(self):
+        # ideogram4 takes a JSON caption, so a brace inside "prompt" is the
+        # normal case here. It must be UNBALANCED to be a real test: a
+        # matched pair inside a string leaves naive counting at the same
+        # answer by luck, and a version of this with "{...}" in the prompt
+        # passed against an implementation that ignored strings entirely.
+        found = loop._extract_json(
+            '{"model": "ideogram4", "prompt": "a cat } wearing a hat", '
+            '"expect": ["cat"]}')
+        self.assertEqual(found["model"], "ideogram4")
+        self.assertEqual(found["expect"], ["cat"])
+
+    def test_an_escaped_quote_does_not_end_the_string(self):
+        found = loop._extract_json('{"prompt": "she said \\"} \\" and left", "model": "m"}')
+        self.assertEqual(found["model"], "m")
+
+    def test_an_unbalanced_brace_in_prose_before_the_object_is_skipped(self):
+        found = loop._extract_json('use } carefully. {"model": "m", "prompt": "p"}')
+        self.assertEqual(found["model"], "m")
+
     def test_a_reply_with_no_object_is_a_plan_error(self):
         with self.assertRaises(loop.PlanError):
             loop._extract_json("I cannot do that.")
@@ -83,6 +103,19 @@ class TestValidation(unittest.TestCase):
         out = loop._validate(self._plan(nonsense="x", temperature=2))
         self.assertNotIn("nonsense", out)
         self.assertNotIn("temperature", out)
+
+    def test_a_withheld_model_cannot_be_chosen_anyway(self):
+        # Removing a failed model from the menu is only a constraint if naming
+        # it regardless is refused. Filtering the prompt alone left the planner
+        # free to pick it - which the real one did - and it sailed into
+        # another doomed render.
+        with self.assertRaises(loop.PlanError) as ctx:
+            loop._validate(self._plan(model="fast"), exclude={"fast"})
+        self.assertIn("already failed", str(ctx.exception))
+
+    def test_excluding_one_model_does_not_refuse_the_others(self):
+        out = loop._validate(self._plan(model="fancy"), exclude={"fast"})
+        self.assertEqual(out["model"], "fancy")
 
     def test_expectations_are_capped(self):
         out = loop._validate(self._plan(expect=["a", "b", "c", "d", "e", "f", "g"]))
@@ -252,6 +285,62 @@ class TestLoop(unittest.TestCase):
         result = loop.run("x", max_steps=5, max_seconds=0, out=self.quiet)
         self.assertFalse(result["settled"])
         self.assertEqual(len(self.rendered), 0)
+
+    def test_a_later_planning_failure_does_not_discard_the_render(self):
+        # The worst shape this had: attempt 1 renders, attempt 2's planner
+        # names something unusable, the PlanError escapes run(), and main()
+        # prints the planner's error and exits 1 - identical to a run that
+        # made nothing, with the finished PNG never mentioned.
+        queue = [{"model": "fast", "prompt": "a", "expect": ["hat"]}]
+
+        def fake_plan(intent, feedback=None, exclude=(), timeout_s=180):
+            if not queue:
+                raise loop.PlanError("unknown model 'imaginary'")
+            return loop._validate(queue.pop(0))
+
+        saved = (loop.plan, generate.generate_image, loop.look)
+        loop.plan = fake_plan
+        generate.generate_image = lambda **k: "/tmp/kept.png"
+        loop.look = lambda path, timeout_s: "a cat"
+        self.addCleanup(lambda: (setattr(loop, "plan", saved[0]),
+                                 setattr(generate, "generate_image", saved[1]),
+                                 setattr(loop, "look", saved[2])))
+        result = loop.run("x", max_steps=2, out=self.quiet)
+        self.assertFalse(result["settled"])
+        self.assertEqual(result["output"], "/tmp/kept.png")
+
+    def test_the_very_first_planning_failure_still_ends_the_run(self):
+        # Nothing was made, so there is nothing to preserve and the planner's
+        # error is the whole story. Swallowing it would report an empty
+        # success instead.
+        def fake_plan(intent, feedback=None, exclude=(), timeout_s=180):
+            raise loop.PlanError("unknown model 'imaginary'")
+
+        saved = loop.plan
+        loop.plan = fake_plan
+        self.addCleanup(setattr, loop, "plan", saved)
+        with self.assertRaises(loop.PlanError):
+            loop.run("x", max_steps=2, out=self.quiet)
+
+    def test_a_report_naming_no_plan_does_not_crash(self):
+        import io
+        result = {"intent": "x", "settled": False, "attempts": 1, "seconds": 1.0,
+                  "output": None, "unsettled": None,
+                  "steps": [{"attempt": 1, "plan": None, "output": None,
+                             "described": None, "missing": [],
+                             "refused": "unknown model 'imaginary'"}]}
+        buffer = io.StringIO()
+        loop.report(result, out=buffer)
+        self.assertIn("could not be planned", buffer.getvalue())
+
+    def test_the_last_line_skips_traceback_frames_and_carets(self):
+        # A traceback truncated mid-frame ends on a caret line; taking the
+        # last non-blank line would report "^^^^^^" as the failure.
+        self.assertEqual(
+            loop._last_line('  File "/x/y.py", line 9, in load\n'
+                            "    weights = load(component)\n"
+                            "              ^^^^^^^^^^^^^^^"),
+            "weights = load(component)")
 
     def test_a_report_of_a_run_that_rendered_nothing_does_not_crash(self):
         import io

@@ -98,5 +98,26 @@ out="$(FXLLA_STORE=/tmp XDG_CONFIG_HOME="$CFG" bash "$FXLLA" __complete kb)"
 if grep -qx stop <<< "$out"; then pass "completions list 'stop'"
 else fail "completions list 'stop'"; fi
 
+# --- fxlla do forwards the variables that choose the planner --------------
+# config.env assigns with `: "${VAR:=default}"`, which sets without exporting,
+# so a name missing from the export lists never reaches the subprocess. That is
+# exactly how FXLLA_AGENT_MODEL - documented as the way to pick the planner -
+# was being dropped, leaving every run on the hardcoded fallback silently.
+for var in FXLLA_AGENT_MODEL FXLLA_DEFAULT_MODEL FXLLA_AGENT_MAX_STEPS FXLLA_AGENT_MAX_SECONDS; do
+  if grep -q "$var" <<< "$(sed -n '/^FXLLA_AGENT_ENV=/,/"$/p' "$FXLLA")"; then
+    pass "fxlla do forwards $var"
+  else
+    fail "fxlla do forwards $var"
+  fi
+done
+
+# and cmd_do actually exports that list, not just declares it
+if grep -q 'export \$FXLLA_AGENT_ENV' "$FXLLA"; then pass "cmd_do exports the agent env"
+else fail "cmd_do exports the agent env"; fi
+
+out="$(FXLLA_STORE=/tmp XDG_CONFIG_HOME="$CFG" bash "$FXLLA" do --help 2>&1 || true)"
+if grep -qi "max-steps" <<< "$out"; then pass "do is wired to the loop"
+else fail "do is wired to the loop (got: $(tail -1 <<< "$out"))"; fi
+
 if [ "$fails" -ne 0 ]; then printf '\n%d test(s) failed\n' "$fails"; exit 1; fi
 printf '\nall wire tests passed\n'

@@ -1727,14 +1727,26 @@ FXLLA_VIDEO_BIN FXLLA_LORA_DIRS FXLLA_VOICE_PYTHON FXLLA_VOICE_MODEL FXLLA_VOICE
 FXLLA_HOST FXLLA_PORT FXLLA_MEDIA_KEEP_MODELS FXLLA_MEDIA_SKIP_QUALITY \
 FXLLA_MCP_WAIT_S FXLLA_ASSUME_YES"
 
+# What `fxlla do` reads on top of the media set: which model plans, and the
+# two budgets. FXLLA_DEFAULT_MODEL is here because the planner falls back to it.
+FXLLA_AGENT_ENV="FXLLA_AGENT_MODEL FXLLA_DEFAULT_MODEL \
+FXLLA_AGENT_MAX_STEPS FXLLA_AGENT_MAX_SECONDS"
+
 # One outcome in, one artifact out: fxlla plans, renders, looks at the result
 # and retries once. It needs the media environment because it drives the same
 # generators `fxlla media` does, and a running gateway because both the planner
 # and the eyes are local models served by it.
 cmd_do() {
   need python3; require_store
+  # The media set plus the ones only the loop reads. config.env assigns with
+  # `: "${VAR:=default}"`, which sets without exporting, so a name missing from
+  # these lists never reaches the subprocess: FXLLA_AGENT_MODEL was documented
+  # as the way to choose the planner and was being dropped on the floor, which
+  # left every run on the hardcoded fallback with nothing saying so.
   # shellcheck disable=SC2086,SC2163  # export the names in the list, split on spaces
   export $FXLLA_MEDIA_ENV
+  # shellcheck disable=SC2086,SC2163
+  export $FXLLA_AGENT_ENV
   python3 "$REPO_ROOT/agent/loop.py" "$@"
 }
 

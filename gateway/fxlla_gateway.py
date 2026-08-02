@@ -105,7 +105,12 @@ CATALOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 
 def _role_aliases(role):
-    """Catalog aliases with this role."""
+    """Catalog aliases with this role, or None when the catalog cannot be read.
+
+    None and the empty set are different answers - "nothing declares this
+    role" versus "there was no way to find out" - and collapsing them made a
+    catalog that existed but could not be opened look like a catalog that
+    declared nothing, which denies every model instead of failing open."""
     out = set()
     try:
         with open(CATALOG, encoding="utf-8") as fh:
@@ -114,7 +119,7 @@ def _role_aliases(role):
                 if len(parts) >= 5 and not parts[0].startswith("#") and parts[3] == role:
                     out.add(parts[0])
     except OSError:
-        pass
+        return None
     return out
 
 
@@ -150,14 +155,15 @@ def _can_see(alias):
     by default: an undeclared model gets a description from one chosen for the
     job rather than being trusted with its own untested eyes. Declaring it is a
     deliberate act, and role 'vision' in the catalog is where it is made."""
-    if not os.path.isfile(CATALOG):
-        # A checkout whose catalog moved has no declarations to read, and
-        # requiring one there would take working eyes away: with no reader to
-        # be found either, the description path cannot run and the request
-        # would 502. Fail open to the projector, as the rest of the gateway
-        # fails open to the old behavior when the catalog is unreachable.
+    declared = _role_aliases("vision")
+    if declared is None:
+        # Unreadable, not merely absent: a moved catalog and an unreadable one
+        # are the same situation from here. There are no declarations to read
+        # AND no reader to be found, so demanding a declaration would turn a
+        # working vision model into a 502. Fail open to the projector, which
+        # is the only evidence left.
         return _has_projector(alias)
-    return alias in _role_aliases("vision") and _has_projector(alias)
+    return alias in declared and _has_projector(alias)
 
 
 def _vision_alias():
@@ -173,7 +179,7 @@ def _vision_alias():
                 "FXLLA_VISION_MODEL is set to %r, which has no multimodal "
                 "projector on disk and cannot read an image" % preferred)
         return preferred
-    for alias in sorted(_role_aliases("vision")):
+    for alias in sorted(_role_aliases("vision") or ()):
         if _has_projector(alias):
             return alias
     return None

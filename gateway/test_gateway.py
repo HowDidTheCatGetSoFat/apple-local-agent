@@ -489,17 +489,51 @@ class TestVisionForModelsThatCannotSee(unittest.TestCase):
         self.assertTrue(gw._can_see("has-eyes"))
         self.assertFalse(gw._can_see("no-eyes"))
 
+    def test_an_unreadable_catalog_fails_open_like_a_missing_one(self):
+        # Present but unopenable is the same situation as moved: no
+        # declarations to read AND no reader to find. Treating it as "the
+        # catalog declares nothing" denied every model instead.
+        self._make_model("has-eyes", projector=True)
+        blocked = os.path.join(_STORE, "unreadable.conf")
+        with open(blocked, "w") as fh:
+            fh.write("vision | org/x | 7GB | vision | gguf | n\n")
+        os.chmod(blocked, 0o000)
+        self.addCleanup(os.chmod, blocked, 0o644)
+        saved = gw.CATALOG
+        gw.CATALOG = blocked
+        self.addCleanup(setattr, gw, "CATALOG", saved)
+        if gw._role_aliases("vision") is not None:
+            self.skipTest("running as a user that can read a 0o000 file")
+        self.assertTrue(gw._can_see("has-eyes"))
+
+    def test_a_readable_catalog_that_declares_nothing_is_not_fail_open(self):
+        # The other half of the same distinction: an empty answer is an
+        # answer, and must not be mistaken for "could not find out".
+        self._make_model("has-eyes", projector=True)
+        empty = os.path.join(_STORE, "empty.conf")
+        with open(empty, "w") as fh:
+            fh.write("# no rows\n")
+        saved = gw.CATALOG
+        gw.CATALOG = empty
+        self.addCleanup(setattr, gw, "CATALOG", saved)
+        self.assertEqual(gw._role_aliases("vision"), set())
+        self.assertFalse(gw._can_see("has-eyes"))
+
     def test_an_image_free_request_never_touches_the_disk(self):
         # add_vision runs on every request. Answering "is there an image" in
         # memory first keeps the common case off the filesystem entirely.
+        # The alias must be one the catalog DOES declare: an undeclared one
+        # makes _can_see return False on role membership alone, so the disk is
+        # never reached whatever the ordering, and the test proves nothing.
         def explode(alias):
             raise AssertionError("the disk was read for a request with no image")
 
+        self._stub_roles(vision=["seer"])
         saved = gw._has_projector
         gw._has_projector = explode
         self.addCleanup(setattr, gw, "_has_projector", saved)
         body = {"messages": [{"role": "user", "content": "no image here"}]}
-        self.assertIsNone(gw.add_vision(body, "coder"))
+        self.assertIsNone(gw.add_vision(body, "seer"))
 
     def test_an_override_naming_a_blind_model_is_refused(self):
         # Sending an image to a text model would surface as a vision failure

@@ -148,9 +148,27 @@ def _extract_json(text):
 
     Local models wrap JSON in prose or a fence more often than not, and losing
     a correct plan to a stray "Here you go:" would be a self-inflicted retry.
+
+    Braces are counted only OUTSIDE strings. Counting them everywhere looks
+    fine until a prompt contains one, and prompts here contain them often -
+    ideogram4 takes a JSON caption, so a brace inside the "prompt" value is
+    the normal case rather than the exotic one. A depth that closed early
+    turned a perfectly valid plan into "no JSON object in the planner's reply".
     """
-    depth, start = 0, None
+    depth, start, in_string, escaped = 0, None, False, False
     for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            if depth:
+                in_string = True
+            continue
         if char == "{":
             if depth == 0:
                 start = index
@@ -234,11 +252,10 @@ def plan(intent, feedback=None, exclude=(), timeout_s=180):
                              "did not mention: %s.\nThe description was:\n%s\n\n"
                              "Plan one more attempt at the original request."
                              % (", ".join(feedback["missing"]), feedback["described"])})
-    chosen = _extract_json(_chat(messages, PLANNER, timeout_s))
-    return _validate(chosen)
+    return _validate(_extract_json(_chat(messages, PLANNER, timeout_s)), exclude)
 
 
-def _validate(chosen):
+def _validate(chosen, exclude=()):
     """Refuse what the generator cannot be asked, and only that.
 
     Deliberately does NOT re-check the model's capabilities. build_command
@@ -257,6 +274,14 @@ def _validate(chosen):
     if model not in generate.MODELS:
         raise PlanError("unknown model %r; the catalog has: %s"
                         % (model, ", ".join(sorted(generate.MODELS))))
+    if model in exclude:
+        # Withholding a model from the menu is not the same as refusing it.
+        # The whole point of removing a failed model was that obeying should
+        # not be optional, and a planner that names it anyway - which is
+        # exactly what the one here did when merely told in prose - would
+        # otherwise sail straight through into another doomed render.
+        raise PlanError("%s already failed on this request and was withheld "
+                        "from the list; it cannot be chosen again" % model)
     if not (chosen.get("prompt") or "").strip():
         raise PlanError("the plan has no prompt")
     expect = [w for w in (chosen.get("expect") or []) if isinstance(w, str) and w.strip()]
@@ -307,8 +332,22 @@ def run(intent, max_steps=MAX_STEPS, max_seconds=MAX_SECONDS, out=sys.stderr):
         if left() <= 0:
             break
         print("[do] planning (%d/%d)" % (attempt, max_steps), file=out, flush=True)
-        chosen = plan(intent, feedback, exclude=failed,
-                      timeout_s=max(30, min(180, left())))
+        try:
+            chosen = plan(intent, feedback, exclude=failed,
+                          timeout_s=max(30, min(180, left())))
+        except PlanError as exc:
+            # Only the FIRST plan is allowed to end the run. After that an
+            # artifact may already exist, and letting a bad reply escape here
+            # threw it away: the render was logged, then main() printed the
+            # planner's error and exited 1, indistinguishable from a run that
+            # produced nothing. A later planning failure is recorded like any
+            # other and the report still hands over what was made.
+            if not steps:
+                raise
+            print("[do] planning failed: %s" % exc, file=out, flush=True)
+            steps.append({"attempt": attempt, "plan": None, "output": None,
+                          "described": None, "missing": [], "refused": str(exc)})
+            break
         print("[do] %s: %s" % (chosen["model"], chosen["why"] or chosen["prompt"][:70]),
               file=out, flush=True)
         if left() <= 0:
@@ -367,9 +406,13 @@ def report(result, out=sys.stdout):
         print("nothing was rendered.", file=out)
         for step in result["steps"]:
             if step.get("refused"):
-                print("  attempt %d planned %s and was refused: %s"
-                      % (step["attempt"], step["plan"]["model"], step["refused"]),
-                      file=out)
+                # A step whose planning failed has no plan to name.
+                chosen = (step.get("plan") or {}).get("model")
+                print("  attempt %d %s: %s"
+                      % (step["attempt"],
+                         "planned %s and it failed" % chosen if chosen
+                         else "could not be planned",
+                         step["refused"]), file=out)
         if not result["steps"]:
             print("  the budget ran out before the first attempt finished",
                   file=out)
