@@ -114,6 +114,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Added
+- An image sent to a model that cannot read one is no longer a crash. The
+  gateway reads it with a model that can and hands the chosen one a
+  description: one request in, one answer out, two models used, with the
+  capability behind the endpoint rather than in whatever is calling it - a
+  client with no MCP support gets it too. Measured end to end at 7 s through
+  coder-3b and 12 s through qwen3-coder, and the description carried lettering
+  a generator had invented, which the answering model then identified.
+  A model that CAN see gets the image untouched, since a description is
+  strictly lossier. The reader is never asked to confirm anything, only to
+  enumerate: asked "is the lettering correct?" a vision model said yes and
+  missed a whole invented block; asked to list every piece of text it reported
+  it at once. Two models having answered is said out loud, in the log and in
+  `X-Fxlla-Vision`, because a description that goes wrong otherwise reads as
+  the answering model being wrong. Descriptions are cached by image content,
+  since an OpenAI client resends the whole conversation each turn and without
+  it a picture is re-read every turn and described differently each time.
+  `FXLLA_VISION_ROUTING`, `FXLLA_VISION_MODEL` and `FXLLA_VISION_MAX_IMAGES`.
+- `describe_image` on the media MCP, the same capability for a client that
+  would rather orchestrate it itself.
 - fxlla can see. A `vision` model (Qwen2.5-VL 7B, gguf) joins the catalog, and
   the gguf path learned the second file a vision model needs: a multimodal
   projector. `mflux`-style discovery rather than new config - a `mmproj*.gguf`

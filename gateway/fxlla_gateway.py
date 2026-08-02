@@ -21,8 +21,18 @@ Config via environment:
                                 "context" in /v1/models
   FXLLA_STATS_FILE              passive metrics time-series (default: the CLI's
                                 stats.jsonl under the state dir)
+  FXLLA_VISION_ROUTING          0 to stop reading images for models that cannot
+                                (default on). Off, an image sent to a text model
+                                fails in the backend as it used to.
+  FXLLA_VISION_MODEL            which model reads them (default: the first
+                                catalog alias with role 'vision' that has a
+                                multimodal projector on disk)
+  FXLLA_VISION_MAX_IMAGES       images one request may carry (default 4); each
+                                is read separately, so a batch holds the
+                                connection for as long as all of them take
 """
 
+import hashlib
 import json
 import os
 import signal
@@ -188,6 +198,30 @@ def _asked(body):
     return ""
 
 
+# Descriptions already produced, keyed by the image bytes. An OpenAI client
+# resends the whole conversation every turn, so without this a picture sent
+# once is re-read on every subsequent turn - paying its cost again and, worse,
+# describing it differently each time, so the answering model sees the same
+# image change its mind. Bounded because the entries are long-lived by design.
+_SEEN = {}
+_SEEN_ORDER = []
+_SEEN_MAX = 64
+_SEEN_LOCK = threading.Lock()
+
+# Serial reads with an independent timeout each, so one request could hold a
+# connection for images x 600 s. Four covers comparing a couple of renders,
+# which is what a caller actually does; more than that is a client bug or a
+# way to occupy the gateway indefinitely.
+MAX_IMAGES = int(os.environ.get("FXLLA_VISION_MAX_IMAGES", "4"))
+
+
+def _cache_key(part):
+    url = ((part or {}).get("image_url") or {}).get("url")
+    if not isinstance(url, str):
+        return None
+    return hashlib.sha256(url.encode("utf-8", "replace")).hexdigest()
+
+
 def _read_image(part, asked):
     """One image, as text, from the local vision model."""
     alias = _vision_alias()
@@ -226,6 +260,25 @@ def _read_image(part, asked):
     return alias, text
 
 
+def _read_cached(part, asked):
+    """The description for this image, computed once per conversation."""
+    key = _cache_key(part)
+    if key is not None:
+        with _SEEN_LOCK:
+            hit = _SEEN.get(key)
+        if hit:
+            return hit
+    result = _read_image(part, asked)
+    if key is not None:
+        with _SEEN_LOCK:
+            if key not in _SEEN:
+                _SEEN[key] = result
+                _SEEN_ORDER.append(key)
+                while len(_SEEN_ORDER) > _SEEN_MAX:
+                    _SEEN.pop(_SEEN_ORDER.pop(0), None)
+    return result
+
+
 def add_vision(body, alias):
     """Replace images the chosen model cannot read with a description of them.
 
@@ -238,9 +291,15 @@ def add_vision(body, alias):
     parts = _image_parts(body)
     if not parts:
         return None
+    if len(parts) > MAX_IMAGES:
+        raise RuntimeError(
+            "this request carries %d images and the limit is %d: each is read "
+            "separately, so a large batch holds the connection open for as long "
+            "as all of them take. Send fewer, or raise "
+            "FXLLA_VISION_MAX_IMAGES." % (len(parts), MAX_IMAGES))
     reader = None
     for message, index in parts:
-        reader, text = _read_image(message["content"][index], _asked(body))
+        reader, text = _read_cached(message["content"][index], _asked(body))
         # Marked as a description on purpose: the model downstream must not
         # answer as though it had seen the image itself.
         message["content"][index] = {

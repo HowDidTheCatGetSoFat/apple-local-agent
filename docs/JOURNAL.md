@@ -2,6 +2,70 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-02: fxlla reads the image itself
+
+The question that drove this was architectural, and I got the framing wrong
+twice before hearing it. Asked whether a "virtual model" could route to the
+right underlying model, I designed a router. Asked again with a concrete
+prompt - "look at this image and fix the program" - I built an MCP tool, which
+was better but still made the client do the work. The correction was blunt and
+right: fxlla should be a service, providing capabilities through one channel,
+the way a hosted API understands an image without its client orchestrating
+anything.
+
+That resolves a tension I had been citing wrongly. The project's stated
+position is to provide models and leave orchestration to its clients, and I
+had been reading it as "do nothing inside". But answering an image behind an
+endpoint is not orchestration; it is what a provider is. Orchestration starts
+where a loop decides to generate, judge and regenerate.
+
+So the gateway does it. An image reaching a model that cannot read one used to
+raise "Only 'text' content type is supported" - anything is an improvement on
+a crash. It is now read by a model that can, and the chosen model receives a
+description. Measured: 7 s through coder-3b, 12 s through qwen3-coder, and the
+description carried the invented lettering from a poster generated here, which
+the answering model then identified as nonsense. Two models, one prompt, one
+channel.
+
+Three things it deliberately does not do. It never translates for a model that
+can see, because a description is strictly lossier than the image. It never
+asks the reader to confirm - that lesson cost a real miss, where "this should
+say LA USINA, is the lettering correct?" got a confident yes over a block of
+gibberish the same model listed immediately when asked to enumerate. And it
+says two models answered, in the log and in a response header, because a
+description that goes wrong otherwise reads as the answering model being
+wrong, and the debugging goes to the wrong place.
+
+**The review found nine things I had not.** Twenty confirmed findings across
+four lenses, each put to an agent whose job was to refute it. Ten were already
+fixed - I had acted on the partial journal while the verification was still
+running - and the rest were real: malformed message bodies crashed the scan and
+were reported as vision failures even for requests carrying no image; the
+override naming the reader was trusted without checking it could see, which on
+a projector-less GGUF would have let it invent a description from the prompt
+alone and hand it over as fact; the header was missing on the error path; and
+the new tests sat after the `__main__` guard, so running the file directly
+skipped all eight of them silently.
+
+Two findings were about cost rather than correctness and were the most useful.
+An OpenAI client resends the whole conversation every turn, so an image sent
+once was re-read on every subsequent turn - paying for it again and describing
+it differently each time, which means the answering model watches the same
+picture change its mind. Descriptions are cached by content now. And there was
+no cap on images per request, each read serially with its own timeout, so one
+request could hold the connection for as long as all of them took.
+
+A test written for that review then caught a real bug on its own: the reader
+was being handed the FIRST user message as context rather than the latest, so
+an older question in the same conversation steered it at the wrong thing.
+
+**And a process failure worth recording.** A mutation-testing loop timed out
+partway through, and its `cp` restore put back a stale backup - silently
+reverting the gateway to HEAD and losing the vision work. It was recovered from
+another backup, but the near-miss is the lesson: a mutation harness that
+restores from a file is a harness that can destroy the thing it is testing. It
+belongs on a branch or a stash, not on a `cp`.
+
 ## 2026-08-02: fxlla can see, and the blocker was smaller than the review said
 
 Yesterday's review killed the vision-judge idea on two grounds, and one of them

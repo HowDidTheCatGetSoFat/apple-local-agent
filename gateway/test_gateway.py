@@ -260,6 +260,15 @@ class TestVisionForModelsThatCannotSee(unittest.TestCase):
     calling it - a client with no MCP support at all still gets it.
     """
 
+    def setUp(self):
+        # The description cache lives at module scope, which makes any test
+        # touching it order-dependent on every other one. Cleared per test so a
+        # cached description from an earlier case cannot answer a later one.
+        gw._SEEN.clear()
+        del gw._SEEN_ORDER[:]
+        self.addCleanup(gw._SEEN.clear)
+        self.addCleanup(lambda: gw._SEEN_ORDER.__delitem__(slice(None)))
+
     def _body(self, model="coder", text="what is this?"):
         return {"model": model, "messages": [{"role": "user", "content": [
             {"type": "text", "text": text},
@@ -432,6 +441,64 @@ class TestVisionForModelsThatCannotSee(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             gw._vision_alias()
         self.assertIn("projector", str(ctx.exception))
+
+    def test_the_same_image_is_read_once_across_turns(self):
+        # An OpenAI client resends the whole conversation every turn. Without a
+        # cache the picture from turn one is re-read on every later turn, paying
+        # its cost again and describing it differently each time, so the
+        # answering model watches the same image change its mind.
+        self._stub_roles()
+        calls = self._stub_reader()
+        first = self._body()
+        gw.add_vision(first, "coder")
+        second = self._body()          # same image, next turn
+        gw.add_vision(second, "coder")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(first["messages"][0]["content"][1]["text"],
+                         second["messages"][0]["content"][1]["text"])
+
+    def test_a_different_image_is_read_again(self):
+        self._stub_roles()
+        calls = self._stub_reader()
+        gw.add_vision(self._body(), "coder")
+        other = self._body()
+        other["messages"][0]["content"][1]["image_url"]["url"] = "data:image/png;base64,ZZZZ"
+        gw.add_vision(other, "coder")
+        self.assertEqual(len(calls), 2)
+
+    def test_the_cache_does_not_grow_without_bound(self):
+        self._stub_roles()
+        self._stub_reader()
+        for i in range(gw._SEEN_MAX + 10):
+            body = self._body()
+            body["messages"][0]["content"][1]["image_url"]["url"] = "u%d" % i
+            gw.add_vision(body, "coder")
+        self.assertLessEqual(len(gw._SEEN), gw._SEEN_MAX)
+        self.assertEqual(len(gw._SEEN), len(gw._SEEN_ORDER))
+
+    def test_too_many_images_is_refused_with_the_limit_named(self):
+        # Each is read serially with its own timeout, so a large batch holds the
+        # connection for as long as all of them take.
+        self._stub_roles()
+        calls = self._stub_reader()
+        body = self._body()
+        for i in range(gw.MAX_IMAGES):
+            body["messages"][0]["content"].append(
+                {"type": "image_url", "image_url": {"url": "extra%d" % i}})
+        with self.assertRaises(RuntimeError) as ctx:
+            gw.add_vision(body, "coder")
+        self.assertIn(str(gw.MAX_IMAGES), str(ctx.exception))
+        self.assertEqual(calls, [], "nothing should be read once it is refused")
+
+    def test_exactly_the_limit_is_allowed(self):
+        # The legitimate case the rule must not catch: comparing a few renders.
+        self._stub_roles()
+        self._stub_reader()
+        body = self._body()
+        body["messages"][0]["content"] = [{"type": "text", "text": "compare"}] + [
+            {"type": "image_url", "image_url": {"url": "n%d" % i}}
+            for i in range(gw.MAX_IMAGES)]
+        self.assertEqual(gw.add_vision(body, "coder"), "seer")
 
 
 if __name__ == "__main__":
