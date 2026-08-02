@@ -287,11 +287,16 @@ class TestVisionForModelsThatCannotSee(unittest.TestCase):
         return calls
 
     def _stub_roles(self, vision=("seer",)):
-        """Which models can see. Keyed on the projector, as the real code is."""
-        saved_can, saved_role = gw._can_see, gw._role_aliases
-        gw._can_see = lambda alias: alias in set(vision)
+        """Which models the catalog declares as readers.
+
+        Only the catalog is faked. _can_see is left real so that what these
+        tests exercise is the actual rule - declaration and projector both -
+        rather than a stub standing in for it. Each declared model gets a
+        projector on disk so the pair genuinely agrees."""
+        for alias in vision:
+            self._make_model(alias, projector=True)
+        saved_role = gw._role_aliases
         gw._role_aliases = lambda role: set(vision) if role == "vision" else set()
-        self.addCleanup(setattr, gw, "_can_see", saved_can)
         self.addCleanup(setattr, gw, "_role_aliases", saved_role)
 
     def test_the_image_becomes_text_for_a_model_that_cannot_see(self):
@@ -420,17 +425,81 @@ class TestVisionForModelsThatCannotSee(unittest.TestCase):
         gw.add_vision(body, "coder")
         self.assertEqual(calls[0][1], "the newest question")
 
-    def test_seeing_is_decided_by_the_projector_on_disk(self):
-        # bin/fxlla passes --mmproj when it finds one, so that file is what
-        # decides whether an image can be forwarded untouched. A catalog role
-        # is only a declaration and the two can disagree.
-        blind = os.path.join(_MODELS, "no-eyes")
-        seeing = os.path.join(_MODELS, "has-eyes")
-        os.makedirs(blind, exist_ok=True)
-        os.makedirs(seeing, exist_ok=True)
-        open(os.path.join(seeing, "mmproj-f16.gguf"), "wb").close()
-        self.assertFalse(gw._can_see("no-eyes"))
+    def _make_model(self, alias, projector=False):
+        """A model directory, optionally with a multimodal projector in it."""
+        path = os.path.join(_MODELS, alias)
+        os.makedirs(path, exist_ok=True)
+        if projector:
+            open(os.path.join(path, "mmproj-f16.gguf"), "wb").close()
+        return path
+
+    def test_a_projector_is_what_reaches_llama_server(self):
+        # bin/fxlla passes --mmproj when it finds one, so that file alone
+        # decides whether an image can physically reach the model.
+        self._make_model("no-eyes")
+        self._make_model("has-eyes", projector=True)
+        self.assertFalse(gw._has_projector("no-eyes"))
+        self.assertTrue(gw._has_projector("has-eyes"))
+
+    def test_an_undeclared_projector_does_not_make_a_model_trusted(self):
+        # The regression this exists for: a model that ships a vision tower it
+        # inherited and never tuned. The file is there, so it COULD be handed
+        # the image, but nobody declared the eyes worth using.
+        self._make_model("inherited-eyes", projector=True)
+        self._stub_roles()
+        self.assertTrue(gw._has_projector("inherited-eyes"))
+        self.assertFalse(gw._can_see("inherited-eyes"))
+
+    def test_a_declaration_without_a_projector_is_not_enough_either(self):
+        # The other direction: the catalog can claim a role the disk cannot
+        # honour, and a pull that fetched no projector is exactly that.
+        # _stub_roles is bypassed here on purpose - it lays down a projector
+        # for what it declares, which is the very thing being withheld.
+        self._make_model("claims-eyes")
+        saved = gw._role_aliases
+        gw._role_aliases = lambda role: {"claims-eyes"} if role == "vision" else set()
+        self.addCleanup(setattr, gw, "_role_aliases", saved)
+        self.assertFalse(gw._can_see("claims-eyes"))
+
+    def test_both_together_are_what_forwards_an_image_untouched(self):
+        self._make_model("real-eyes", projector=True)
+        self._stub_roles(vision=["real-eyes"])
+        self.assertTrue(gw._can_see("real-eyes"))
+
+    def test_an_undeclared_projector_still_gets_a_description(self):
+        # End to end: the model could have taken the image, and is handed a
+        # description anyway because its vision was never declared.
+        self._make_model("inherited-eyes", projector=True)
+        self._stub_roles()
+        calls = self._stub_reader()
+        body = self._body()
+        self.assertEqual(gw.add_vision(body, "inherited-eyes"), "seer")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(body["messages"][-1]["content"][1]["type"], "text")
+
+    def test_a_missing_catalog_falls_back_to_the_projector(self):
+        # With the catalog moved there is no declaration to read AND no reader
+        # to find, so demanding one would turn a working vision model into a
+        # 502. The projector is the only evidence left, so it decides.
+        self._make_model("has-eyes", projector=True)
+        self._make_model("no-eyes")
+        saved = gw.CATALOG
+        gw.CATALOG = "/nonexistent/models.conf"
+        self.addCleanup(setattr, gw, "CATALOG", saved)
         self.assertTrue(gw._can_see("has-eyes"))
+        self.assertFalse(gw._can_see("no-eyes"))
+
+    def test_an_image_free_request_never_touches_the_disk(self):
+        # add_vision runs on every request. Answering "is there an image" in
+        # memory first keeps the common case off the filesystem entirely.
+        def explode(alias):
+            raise AssertionError("the disk was read for a request with no image")
+
+        saved = gw._has_projector
+        gw._has_projector = explode
+        self.addCleanup(setattr, gw, "_has_projector", saved)
+        body = {"messages": [{"role": "user", "content": "no image here"}]}
+        self.assertIsNone(gw.add_vision(body, "coder"))
 
     def test_an_override_naming_a_blind_model_is_refused(self):
         # Sending an image to a text model would surface as a vision failure

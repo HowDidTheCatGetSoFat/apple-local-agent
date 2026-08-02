@@ -23,10 +23,16 @@ Config via environment:
                                 stats.jsonl under the state dir)
   FXLLA_VISION_ROUTING          0 to stop reading images for models that cannot
                                 (default on). Off, an image sent to a text model
-                                fails in the backend as it used to.
+                                fails in the backend as it used to. An image is
+                                forwarded untouched only to a model the catalog
+                                gives role 'vision' AND that has a projector on
+                                disk; a model carrying an inherited, undeclared
+                                vision tower gets a description like any other.
   FXLLA_VISION_MODEL            which model reads them (default: the first
                                 catalog alias with role 'vision' that has a
-                                multimodal projector on disk)
+                                multimodal projector on disk). Naming one here
+                                is itself a declaration, so it need only have
+                                the projector.
   FXLLA_VISION_MAX_IMAGES       images one request may carry (default 4); each
                                 is read separately, so a batch holds the
                                 connection for as long as all of them take
@@ -122,14 +128,36 @@ def _role_aliases(role):
 VISION_ROUTING = os.environ.get("FXLLA_VISION_ROUTING", "1") not in ("0", "false", "")
 
 
-def _can_see(alias):
-    """True when this model has a multimodal projector on disk.
+def _has_projector(alias):
+    """True when a multimodal projector sits next to this model's weights.
 
-    The catalog's role is a declaration; the projector is what llama-server is
-    actually handed (bin/fxlla passes --mmproj when it finds one), so the disk
-    is what decides whether an image can be forwarded untouched."""
+    This answers whether llama-server CAN be handed an image: bin/fxlla passes
+    --mmproj when it finds one, and without it the image goes nowhere."""
     import glob
     return bool(glob.glob(os.path.join(MODELS_DIR, alias, "mmproj*.gguf")))
+
+
+def _can_see(alias):
+    """True when this model is trusted to read an image itself.
+
+    Two separate questions had been collapsed into one. The projector on disk
+    says an image CAN reach the model; the catalog role says its vision was
+    meant to be used. Those came apart the first time a model shipped a vision
+    tower it had inherited and never tuned - a Qwen3.5 derivative whose own
+    author writes that text-only training did not evaluate image understanding.
+    Reading the file's existence as a statement about quality was inferring a
+    claim nobody had made, so both now have to agree, and the safe answer wins
+    by default: an undeclared model gets a description from one chosen for the
+    job rather than being trusted with its own untested eyes. Declaring it is a
+    deliberate act, and role 'vision' in the catalog is where it is made."""
+    if not os.path.isfile(CATALOG):
+        # A checkout whose catalog moved has no declarations to read, and
+        # requiring one there would take working eyes away: with no reader to
+        # be found either, the description path cannot run and the request
+        # would 502. Fail open to the projector, as the rest of the gateway
+        # fails open to the old behavior when the catalog is unreachable.
+        return _has_projector(alias)
+    return alias in _role_aliases("vision") and _has_projector(alias)
 
 
 def _vision_alias():
@@ -138,13 +166,15 @@ def _vision_alias():
     if preferred:
         # Validated, not trusted: an override naming a text model would send
         # it an image and surface as a vision failure blaming the wrong thing.
-        if not _can_see(preferred):
+        # Only the projector is required - naming a model here IS the
+        # declaration, and it should not have to be in the catalog to be used.
+        if not _has_projector(preferred):
             raise RuntimeError(
                 "FXLLA_VISION_MODEL is set to %r, which has no multimodal "
                 "projector on disk and cannot read an image" % preferred)
         return preferred
     for alias in sorted(_role_aliases("vision")):
-        if _can_see(alias):
+        if _has_projector(alias):
             return alias
     return None
 
@@ -283,13 +313,20 @@ def add_vision(body, alias):
     """Replace images the chosen model cannot read with a description of them.
 
     Returns the alias that did the reading, or None when nothing was done -
-    no image, routing disabled, or the chosen model can see for itself, in
-    which case the image is passed through untouched because a description is
-    strictly lossier than the thing itself."""
-    if not VISION_ROUTING or _can_see(alias):
+    no image, routing disabled, or the chosen model is trusted to see for
+    itself, in which case the image is passed through untouched because a
+    description is strictly lossier than the thing itself.
+
+    The order matters. Whether there is an image at all is answered in memory,
+    so a request without one - nearly all of them - never touches the disk."""
+    if not VISION_ROUTING:
         return None
     parts = _image_parts(body)
     if not parts:
+        return None
+    # Checked before the cap: the cap exists because each image costs a serial
+    # read, and a model reading them itself pays no such price.
+    if _can_see(alias):
         return None
     if len(parts) > MAX_IMAGES:
         raise RuntimeError(

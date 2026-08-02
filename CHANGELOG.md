@@ -231,6 +231,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   for is queued behind a render that is not going any faster for being watched.
 
 ### Fixed
+- The gateway decided a model could see by looking for a projector file next to
+  its weights, which answered the wrong question. Whether an image CAN reach a
+  model and whether its eyes are worth using are separate, and they came apart
+  the first time a model shipped a vision tower inherited from its base and
+  never tuned - a Qwen3.5 derivative whose own author writes that text-only
+  training did not evaluate image understanding. Reading a file's existence as
+  a statement about quality was inferring a claim nobody had made, so an image
+  is now forwarded untouched only when the catalog gives the model role
+  `vision` and the projector is present. Both, or it gets a description from a
+  model chosen for the job - the safe answer by default, since granting the
+  role is a deliberate act made after measuring. `FXLLA_VISION_MODEL` needs
+  only the projector, because naming a model there is itself the declaration.
+  A checkout whose catalog moved falls back to the projector alone: with no
+  declaration to read and no reader to find, requiring one would have turned a
+  working vision model into a 502.
 - Clicking a render's desktop notification opened Script Editor. A plain
   `osascript` notification belongs to `com.apple.ScriptEditor2`, so the click
   landed in an app the user never invoked and which has nothing to do with the
