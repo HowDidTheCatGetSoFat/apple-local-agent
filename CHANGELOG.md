@@ -114,6 +114,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Added
+- fxlla can see. A `vision` model (Qwen2.5-VL 7B, gguf) joins the catalog, and
+  the gguf path learned the second file a vision model needs: a multimodal
+  projector. `mflux`-style discovery rather than new config - a `mmproj*.gguf`
+  beside the weights is passed to `llama-server --mmproj`, and the pull brings
+  every projector a repo ships because they carry their OWN quant tag, so
+  `--quant Q4_K_M` selected the weights and silently left the projector behind.
+  The entry marker now excludes projectors too: with `--quant Q8_0` both files
+  match and the server could have been launched on the projector. Verified
+  end to end - the model described a generated workshop scene in 9 s and
+  correctly reported the gibberish on the licence plates, which is the check a
+  render actually needs. `mlx_lm.server` raises on any non-text content, so
+  vision runs on the gguf engine; that is a property of the server, not of MLX.
+  The f16 projector is preferred explicitly because glob expansion is collated:
+  a bare `mmproj*.gguf` picks f16 under a UTF-8 locale and Q8_0 under `C`, and
+  which projector a model runs with must not depend on the environment.
 - The image catalog is now checked against the backend instead of trusted.
   mflux-cv 0.18.34 publishes `mflux-capabilities`, a machine-readable dump of
   which options each CLI honours - `honored`, `ignored` or `conditional`, read

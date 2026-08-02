@@ -370,8 +370,17 @@ cmd_pull() {
       echo "$ggufs" | while IFS= read -r l; do echo "  $l"; done >&2
       die "Recommended for this RAM: Q4_K_M (balanced) or Q5_K_M / Q6_K (higher quality)."
     fi
-    local entry; entry="$(echo "$sel" | grep -- '-00001-of-' | head -1 || true)"
-    [ -z "$entry" ] && entry="$(echo "$sel" | head -1)"
+    # A vision model is two files: the weights and a multimodal projector,
+    # named mmproj-* and carrying their OWN quant tag. Selecting by --quant
+    # alone leaves the projector behind and the model cannot see; it is under
+    # 1.5 GB, so take every one the repo has rather than guess which pairs.
+    local mmproj; mmproj="$(echo "$ggufs" | grep -i '^mmproj' || true)"
+    [ -n "$mmproj" ] && sel="$(printf '%s\n%s\n' "$sel" "$mmproj" | sort -u | grep .)"
+    # The entry is the model, never the projector: with --quant Q8_0 both match
+    # and a plain head -1 could launch llama-server on the projector.
+    local weights; weights="$(echo "$sel" | grep -iv '^mmproj' || true)"
+    local entry; entry="$(echo "$weights" | grep -- '-00001-of-' | head -1 || true)"
+    [ -z "$entry" ] && entry="$(echo "$weights" | head -1)"
   else
     sel="$(echo "$listing" | awk -F'\t' '{print $2}')"
   fi
@@ -975,8 +984,17 @@ cmd_backend() {
     local entry; entry="$(cat "$dest/.entry" 2>/dev/null || true)"
     if [ -z "$entry" ]; then local f; for f in "$dest"/*.gguf; do [ -e "$f" ] && { entry="$(basename "$f")"; break; }; done; fi
     [ -z "$entry" ] && die "No .gguf found in $dest"
+    # A multimodal projector beside the weights makes this a vision model, and
+    # llama-server needs it named: without --mmproj the same weights serve as
+    # text-only and every image in a request is dropped. Discovered from disk
+    # rather than declared, the way .entry already is. f16 preferred where the
+    # repo ships both - the projector is small and it is the better one.
+    local mm=""
+    for f in "$dest"/mmproj*f16*.gguf "$dest"/mmproj*.gguf; do
+      [ -e "$f" ] && { mm="$f"; break; }
+    done
     # shellcheck disable=SC2086
-    exec llama-server --model "$dest/$entry" --alias "$name" --host 127.0.0.1 --port "$port" -ngl "$FXLLA_NGL" -c "$FXLLA_CTX" --jinja $FXLLA_SERVER_ARGS
+    exec llama-server --model "$dest/$entry" --alias "$name" --host 127.0.0.1 --port "$port" -ngl "$FXLLA_NGL" -c "$FXLLA_CTX" --jinja ${mm:+--mmproj "$mm"} $FXLLA_SERVER_ARGS
   else
     # shellcheck disable=SC2086
     exec mlx_lm.server --model "$dest" --host 127.0.0.1 --port "$port" $FXLLA_SERVER_ARGS

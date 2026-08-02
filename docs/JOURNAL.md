@@ -2,6 +2,47 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-02: fxlla can see, and the blocker was smaller than the review said
+
+Yesterday's review killed the vision-judge idea on two grounds, and one of them
+was wrong. The architectural objection stands: judging is orchestration, and
+this project's stated position is to provide models and leave orchestration to
+its clients. The feasibility objection did not: it concluded a vision model
+needed a new engine because `mlx_lm.server` raises on any non-text content -
+true, and I confirmed it at the source - and then stopped there.
+
+`llama-server` takes `--mmproj`. fxlla already runs `llama-server` for every
+gguf model, and `cmd_backend` already forwards `$FXLLA_SERVER_ARGS`. A vision
+model in gguf *is* a gguf model: no new engine, no change to the binary
+gguf/mlx marker, no mlx-vlm. The blocker was one flag away and the review's
+"day-plus of foundational plumbing" was an estimate nobody checked.
+
+What did need work was the second file. A vision model is weights plus a
+projector, and three things assumed one file:
+
+- the projector carries its OWN quant tag (`mmproj-...-Q8_0.gguf`), so
+  `--quant Q4_K_M` selected the weights and silently left it behind - a model
+  that cannot see and does not say so
+- with `--quant Q8_0` both files match, and an entry picked by position could
+  have launched the server on the projector
+- nothing passed `--mmproj`, so even with both files on disk every image in a
+  request would have been dropped
+
+All three are the same shape as the week's other bugs: something present,
+reachable, and never wired. Fixed by discovering from disk rather than
+declaring - the way `.entry` already worked.
+
+Verified end to end rather than by argument: asked about a workshop scene
+generated here yesterday, the model described it correctly in 9 seconds and
+reported the licence plates as text, quoting the gibberish on them. That is
+precisely the check a render needs and precisely what `check_png` cannot do.
+
+A mutation earned its keep. Removing the explicit f16-first glob left the test
+passing, because glob expansion is collated and this machine's UTF-8 locale
+happens to sort `f16` before `Q8_0`. Under `LC_ALL=C` it picks the other one.
+Which projector a model runs with was depending on the environment's language,
+and the test now pins the locale that exposes it.
+
 ## 2026-08-02: The transcription is now checked, and the loop closes
 
 Four times in one week a capability was declared that the backend accepts and
