@@ -114,6 +114,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   `fxlla doctor` checks the directory when the knob is set.
 
 ### Added
+- The image catalog is now checked against the backend instead of trusted.
+  mflux-cv 0.18.34 publishes `mflux-capabilities`, a machine-readable dump of
+  which options each CLI honours - `honored`, `ignored` or `conditional`, read
+  from the same constants its runtime warnings use. A test diffs the catalog
+  against it on every run: nothing declared may be one the backend discards or
+  one its CLI does not have, nothing honoured may be silently unreachable, and
+  the init-image spelling must be the one that CLI actually has. Re-introducing
+  each of this week's four capability bugs one at a time is caught by it. The
+  test skips where mflux is absent or predates the dump, since a machine that
+  cannot check must not report agreement.
 - `--pid-decode` and `--pid-degrade-sigma`, from mflux-cv 0.18.33 (pin moved
   there): NVIDIA's pixel-diffusion decoder replaces the VAE decode and emits
   **4x the requested size**, so it is an upscale that happens inside the render

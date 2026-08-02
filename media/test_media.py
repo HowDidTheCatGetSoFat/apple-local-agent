@@ -1549,11 +1549,15 @@ class TestBackendWarnings(unittest.TestCase):
         # The invariant, checked structurally so a sixth backend call cannot be
         # added with the failure branch and without the success one - which is
         # exactly how the first five came to drop their warnings.
+        # Counted by how a GENERATOR reports failure - it raises RuntimeError
+        # with the backend's stderr. Metadata queries against the same backend
+        # (the capability dump) swallow a bad exit and return None instead, and
+        # their stderr is not something a caller needs relayed.
         source = open(media.__file__.replace(".pyc", ".py")).read()
-        failures = source.count("if proc.returncode != 0:")
+        failures = source.count("raise RuntimeError((proc.stderr")
         reports = source.count("_report_warnings(proc.stderr)")
         self.assertEqual(reports, failures,
-                         "%d backend calls handle failure, %d report warnings"
+                         "%d generator calls raise on failure, %d report warnings"
                          % (failures, reports))
 
     def test_a_finished_job_carries_them(self):
@@ -1707,6 +1711,94 @@ class TestNegativeNeedsCfg(unittest.TestCase):
         cmd = media.build_command(media.MODELS["krea2"], "p", "/o.png",
                                   negative="watermark", model_name="krea2")
         self.assertEqual(cmd[cmd.index("--negative-prompt") + 1], "watermark")
+
+
+class TestCatalogMatchesTheBackend(unittest.TestCase):
+    """The catalog is transcribed; mflux publishes the same contract. Diff them.
+
+    Over one week four capabilities were declared that the backend accepts and
+    silently discards - negative and guidance on the CFG-off models, steps and
+    guidance on ideogram4, negative on the FLUX family, and an init-image flag
+    the depth CLI never had. Every one was found by reading mflux's source
+    after something behaved oddly. mflux-cv now publishes which options each
+    CLI honours, so the table can be checked on every run instead.
+
+    Skipped where mflux is absent or predates the dump, which is CI: a machine
+    that cannot check must not report agreement.
+    """
+
+    # fxlla cap -> the flag mflux would report. Deliberately partial: caps that
+    # describe fxlla's own shaping of an argument (control-spec, controlnet,
+    # depth-image) have no one-to-one flag and are covered by their own tests.
+    FLAGS = {"negative": "--negative-prompt", "guidance": "--guidance",
+             "steps": "--steps", "seed": "--seed", "quantize": "--quantize",
+             "aspect": "--aspect", "dimensions": "--width", "lora": "--lora",
+             "lora-style": "--lora-style", "prompt-file": "--prompt-file",
+             "preset": "--preset", "pid-decode": "--pid-decode",
+             "save-depth": "--save-depth-map",
+             "controlnet-strength": "--controlnet-strength"}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dump = media.backend_capabilities()
+        if cls.dump is None:
+            raise unittest.SkipTest("mflux capability dump unavailable")
+        cls.status = {c["command"]: {o["flag"]: o["status"] for o in c["options"]}
+                      for c in cls.dump["commands"]}
+
+    def _rows(self):
+        for name, spec in media.MODELS.items():
+            status = self.status.get(spec["cli"])
+            if status is not None:
+                yield name, spec, status
+
+    def test_every_catalog_cli_is_in_the_dump(self):
+        missing = sorted(s["cli"] for s in media.MODELS.values()
+                         if s["cli"] not in self.status)
+        self.assertEqual(missing, [], "not reported by mflux: %s" % missing)
+
+    def test_nothing_declared_is_discarded_by_the_backend(self):
+        # The failure this whole class exists for: a flag accepted and thrown
+        # away. Nothing fails, the image is plausible, and the only evidence is
+        # that the option had no effect.
+        bad = ["%s.%s" % (name, cap)
+               for name, spec, status in self._rows()
+               for cap, flag in self.FLAGS.items()
+               if cap in spec["caps"] and status.get(flag) == "ignored"]
+        self.assertEqual(bad, [], "declared but ignored by mflux: %s" % bad)
+
+    def test_nothing_declared_is_absent_from_its_cli(self):
+        # The depth model never gained --image; emitting it died in argparse.
+        bad = ["%s.%s (no %s)" % (name, cap, flag)
+               for name, spec, status in self._rows()
+               for cap, flag in self.FLAGS.items()
+               if cap in spec["caps"] and flag not in status]
+        self.assertEqual(bad, [], "declared but absent: %s" % bad)
+
+    def test_nothing_honoured_is_silently_omitted(self):
+        # The other direction: a capability the backend has and callers cannot
+        # reach. `conditional` is not a disagreement - the dump cannot know
+        # --base-model, and this catalog splits such a CLI into one alias per
+        # base model, which is strictly more precise.
+        bad = ["%s.%s" % (name, cap)
+               for name, spec, status in self._rows()
+               for cap, flag in self.FLAGS.items()
+               if cap not in spec["caps"] and status.get(flag) == "honored"]
+        self.assertEqual(bad, [], "honoured but unreachable: %s" % bad)
+
+    def test_the_init_image_spelling_is_the_one_that_cli_has(self):
+        # --image and --image-path are alternatives, not synonyms: the second
+        # is deprecated and cannot carry a strength, so where both exist the
+        # newer one is claimed on purpose.
+        for name, spec, status in self._rows():
+            claimed = {"init-image", "init-image-path"} & spec["caps"]
+            self.assertLessEqual(len(claimed), 1, "%s claims both" % name)
+            if claimed:
+                flag = "--image" if "init-image" in claimed else "--image-path"
+                self.assertEqual(status.get(flag), "honored",
+                                 "%s claims %s" % (name, flag))
+            elif status.get("--image") == "honored":
+                self.fail("%s could take --image and claims neither" % name)
 
 
 class TestPidDecode(unittest.TestCase):

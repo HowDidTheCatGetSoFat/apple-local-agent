@@ -46,6 +46,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -138,6 +139,48 @@ def mflux_cli(name):
             "FXLLA_MFLUX_BIN_DIR is set (%s) but '%s' is not in it"
             % (MFLUX_BIN_DIR, name))
     return path
+
+def backend_capabilities(timeout_s=300):
+    """mflux's own dump of which options each CLI honours, or None.
+
+    The catalog below transcribes this by hand, and a transcription rots: over
+    one week four flags were declared that the backend accepts and silently
+    discards, each found by reading mflux's source after the fact. mflux-cv
+    0.18.34 publishes the contract instead - status is honored, ignored or
+    conditional, read from the same constants the runtime warnings use - so the
+    table can be checked rather than trusted.
+
+    None when the backend is not installed or is too old to have the dump,
+    which is the normal case on a machine that has never run `fxlla setup
+    --media`; a caller treats that as "cannot check", never as "agrees"."""
+    try:
+        binary = mflux_cli("mflux-generate")
+    except ValueError:
+        return None  # a misconfigured bin dir is "cannot check", not a failure
+    path = shutil.which(binary) or (binary if os.path.isfile(binary) else None)
+    if not path:
+        return None
+    # The console script's shebang names the interpreter of the venv mflux is
+    # installed in. Going through it runs the module even when that venv's
+    # entry points predate the dump, which is exactly the case after an
+    # in-place upgrade of an editable install.
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            first = fh.readline()
+    except OSError:
+        return None
+    python = first[2:].strip() if first.startswith("#!") else ""
+    if not os.path.isfile(python):
+        return None
+    try:
+        proc = subprocess.run([python, "-m", "mflux.cli.capabilities"],
+                              capture_output=True, text=True, timeout=timeout_s)
+        if proc.returncode != 0:
+            return None
+        return json.loads(proc.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
 
 # Media generation and the gateway's resident LLMs share unified memory. Before
 # a job, ask a running gateway to free its models so the render has headroom;

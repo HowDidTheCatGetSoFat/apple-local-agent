@@ -2,6 +2,41 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-02: The transcription is now checked, and the loop closes
+
+Four times in one week a capability was declared that the backend accepts and
+silently discards: negative and guidance on the CFG-off models, steps and
+guidance on Ideogram 4, negative across the FLUX family, and an init-image flag
+the depth CLI never had. Every one was found by reading mflux's source after
+something behaved oddly, which is not a method - it is luck with extra steps.
+
+That is over. mflux-cv shipped `mflux-capabilities`, a machine-readable dump of
+what each CLI honours, classified from the same constants its runtime warnings
+read, so the dump and the warnings cannot disagree. Reported three problems
+with it - a `PosixPath` default crashing the JSON writer and leaving a
+truncated document behind, and two CLIs plus one conditional misclassified -
+and all three were fixed within the hour, which is the part of this that no
+amount of care on one side substitutes for.
+
+Diffing the catalog against the fixed dump: sixteen of sixteen agree. The first
+run said ten disagreed, and all ten were the diff being wrong - it treated
+`--image-path`, the deprecated spelling those CLIs still accept, as a
+capability being omitted rather than an alternative deliberately not chosen. A
+comparison tool that has not been debugged is not evidence.
+
+It is a test now, and the check that matters is not that it passes. Each of
+this week's four bugs was re-introduced into the catalog one at a time; the
+test caught all four. It skips where mflux is absent, because a machine that
+cannot check must not report agreement.
+
+Two smaller things. The dump found a regression I had shipped the day before -
+the depth CLI never gained `--image`, so switching init images to the newer
+spelling broke it - which is the tool doing its job on its first day. And the
+structural test that keeps every generator surfacing backend warnings caught my
+own new call site immediately; it needed its invariant sharpened rather than
+satisfied, since a metadata query is not a render and its stderr is not a
+warning anyone needs relayed.
+
 ## 2026-08-01: A decoder that upscales, and a gate that could not see it coming
 
 mflux-cv 0.18.33 landed one feature: NVIDIA's PiD, a pixel-diffusion decoder
