@@ -420,22 +420,33 @@ def build_command(spec, prompt, output, steps=None, seed=None, width=None,
     # possible at all, and it was unreachable while fxlla passed the flag that
     # cannot carry it.
     if init_image:
-        _require_cap(spec, "init-image", "--image", model_name)
+        # Two spellings, and which one a CLI has is not uniform: the depth model
+        # never gained mflux's newer `--image PATH [STRENGTH]` and still takes
+        # only the deprecated `--image-path`, so emitting the new flag there
+        # died in argparse. Verified per CLI from mflux's own capability dump.
+        legacy = "init-image-path" in spec.get("caps", ())
+        _require_cap(spec, "init-image-path" if legacy else "init-image",
+                     "--image-path" if legacy else "--image", model_name)
         parts = split_ref(init_image)
         path = os.path.expanduser(parts[0])
         if not os.path.isfile(path):
             raise ValueError("init image not found: %s" % parts[0])
-        if strength is not None and len(parts) > 1:
-            raise ValueError(
-                "give the strength once: either --image %s,%s or --strength %s"
-                % (parts[0], parts[1], strength))
-        if strength is not None:
-            parts = [path, str(strength)]
+        if legacy:
+            if strength is not None or len(parts) > 1:
+                raise ValueError(
+                    "%s takes an init image but no strength: its CLI only has "
+                    "the deprecated --image-path, which cannot carry one"
+                    % model_name)
+            cmd += ["--image-path", path]
         else:
-            parts = [path] + parts[1:]
-        if len(parts) > 1:
-            _check_strength(parts[1])
-        cmd += ["--image"] + parts
+            if strength is not None and len(parts) > 1:
+                raise ValueError(
+                    "give the strength once: either --image %s,%s or --strength %s"
+                    % (parts[0], parts[1], strength))
+            parts = [path, str(strength)] if strength is not None else [path] + parts[1:]
+            if len(parts) > 1:
+                _check_strength(parts[1])
+            cmd += ["--image"] + parts
     elif strength is not None:
         raise ValueError("--strength needs an --init-image to apply to")
     # LoRAs: `--lora PATH [SCALE]`, repeatable. Until now `fxlla pull

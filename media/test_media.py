@@ -1644,6 +1644,31 @@ class TestInitImageStrength(unittest.TestCase):
             self._image_args(init_image="/nope/missing.png", strength=0.4)
         self.assertIn("missing.png", str(ctx.exception))
 
+    def test_the_legacy_flag_is_used_where_that_is_the_only_one(self):
+        # mflux's newer `--image PATH [STRENGTH]` did not reach every CLI: the
+        # depth model still has only the deprecated --image-path, so emitting
+        # the new flag there died in argparse ("unrecognized arguments:
+        # --image"). Found by diffing this catalog against mflux's own
+        # capability dump, which is the point of having one.
+        cmd = media.build_command(media.MODELS["depth"], "x", "/o.png",
+                                  model_name="depth", init_image=self.png)
+        self.assertIn("--image-path", cmd)
+        self.assertNotIn("--image", cmd)
+
+    def test_that_model_refuses_a_strength_it_cannot_carry(self):
+        with self.assertRaises(ValueError) as ctx:
+            media.build_command(media.MODELS["depth"], "x", "/o.png",
+                                model_name="depth", init_image=self.png,
+                                strength=0.4)
+        self.assertIn("--image-path", str(ctx.exception))
+
+    def test_exactly_one_init_image_cap_per_model(self):
+        # The two spellings are alternatives, never both: claiming each would
+        # make which flag gets emitted depend on evaluation order.
+        for name, spec in media.MODELS.items():
+            both = {"init-image", "init-image-path"} & spec["caps"]
+            self.assertLessEqual(len(both), 1, "%s claims %s" % (name, both))
+
     def test_a_model_without_img2img_refuses_it(self):
         with self.assertRaises(ValueError) as ctx:
             media.build_command(media.MODELS["boogu"], "x", "/o.png",
