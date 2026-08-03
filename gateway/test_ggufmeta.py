@@ -67,6 +67,21 @@ class TestTrainedContext(unittest.TestCase):
         path = self._model([("somethingnew.context_length", U64, struct.pack("<Q", 4096))])
         self.assertEqual(ggufmeta.trained_context(path), 4096)
 
+    def test_a_header_larger_than_one_read_is_still_walked(self):
+        # The first version slurped a fixed 8 MB prefix and parsed that. One
+        # publisher's build of an architecture already handled here carries a
+        # metadata block past it, and the model silently fell back to the
+        # global default with nothing said. The reader pulls more on demand
+        # now, so there is no size to get wrong.
+        filler = b"".join(_string("x" * 1024) for _ in range(12000))   # ~12 MB
+        path = self._model([
+            ("tokenizer.ggml.tokens", ARR,
+             struct.pack("<I", STR) + struct.pack("<Q", 12000) + filler),
+            ("qwen35.context_length", U32, struct.pack("<I", 262144)),
+        ])
+        self.assertGreater(os.path.getsize(path), 8 << 20)
+        self.assertEqual(ggufmeta.trained_context(path), 262144)
+
     def test_a_file_with_no_context_key_answers_nothing(self):
         path = self._model([("general.architecture", STR, _string("mystery"))])
         self.assertIsNone(ggufmeta.trained_context(path))

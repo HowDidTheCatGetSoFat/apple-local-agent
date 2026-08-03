@@ -517,13 +517,13 @@ class TestRendering(unittest.TestCase):
         per_dim = {}
         for t in rendered:
             per_dim[t["dim"]] = per_dim.get(t["dim"], 0) + 1
-        self.assertEqual(per_dim, {"code": 10, "tools": 8,
-                                   "instructions": 8, "context": 4})
+        self.assertEqual(per_dim, {"code": 10, "tools": 8, "instructions": 8,
+                                   "context": 4, "candor": 8})
 
     def test_quick_takes_one_task_per_dimension(self):
         quick = run.render_tasks(self.spec, quick=True)
-        self.assertEqual(len(quick), 4)
-        self.assertEqual(len({t["dim"] for t in quick}), 4)
+        self.assertEqual(len(quick), len(run.DIM_ORDER))
+        self.assertEqual(len({t["dim"] for t in quick}), len(run.DIM_ORDER))
 
     def test_dim_filter(self):
         only = run.render_tasks(self.spec, dims=["code"])
@@ -558,6 +558,7 @@ class TestTaskSet(unittest.TestCase):
 
 
 REFERENCE_SOLUTIONS = {
+    "candor-possible": "def f(x):\n    return x == 1\n",
     "code-merge-intervals": (
         "def merge_intervals(intervals):\n"
         "    out = []\n"
@@ -661,6 +662,7 @@ REFERENCE_SOLUTIONS = {
 
 
 BROKEN_SOLUTIONS = {
+    "candor-possible": "def f(x):\n    return True\n",
     # One known-bad solution per code task: right names, wrong behavior. Each
     # must FAIL its check snippet, or the snippet is vacuous and the task
     # measures nothing.

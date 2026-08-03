@@ -21,19 +21,33 @@ _SCALARS = {0: ("B", 1), 1: ("b", 1), 2: ("H", 2), 3: ("h", 2), 4: ("I", 4),
             12: ("d", 8)}
 _STRING, _ARRAY = 8, 9
 
-# Enough for the metadata block of every model here; the tokenizer arrays are
-# skipped rather than parsed, so this is not sensitive to vocabulary size.
-_HEAD_BYTES = 8 << 20
+# How much to pull per refill. Not a limit: the reader asks for more whenever
+# it runs out. A fixed prefix was the first version and it was wrong within a
+# day - one publisher's build of the same architecture carries a metadata block
+# past 8 MB, and the model simply fell back to the global default with nothing
+# said. There is no size that is safely large here, so there is no size.
+_CHUNK = 4 << 20
+
+# A model whose header has not ended by here is not one of ours; the cap exists
+# so a corrupt length field cannot read a 20 GB file into memory.
+_MAX_HEAD = 256 << 20
 
 
 class _Reader:
-    def __init__(self, buf):
-        self.buf, self.off = buf, 0
+    """Walks a GGUF header, pulling more of the file only when it runs out."""
+
+    def __init__(self, fh):
+        self.fh, self.buf, self.off = fh, b"", 0
 
     def take(self, n):
+        while self.off + n > len(self.buf):
+            if len(self.buf) >= _MAX_HEAD:
+                raise EOFError("GGUF header exceeds %d bytes" % _MAX_HEAD)
+            more = self.fh.read(_CHUNK)
+            if not more:
+                raise EOFError("GGUF header runs past the end of the file")
+            self.buf += more
         chunk = self.buf[self.off:self.off + n]
-        if len(chunk) < n:
-            raise EOFError("GGUF header longer than the bytes read")
         self.off += n
         return chunk
 
@@ -74,24 +88,23 @@ def metadata(path, keys):
     architecture ("qwen35.context_length", "qwen2vl.context_length") and the
     architecture is exactly what a caller should not have to know."""
     with open(path, "rb") as fh:
-        buf = fh.read(_HEAD_BYTES)
-    reader = _Reader(buf)
-    if reader.take(4) != b"GGUF":
-        raise ValueError("not a GGUF file: %s" % path)
-    reader.u32()          # version
-    reader.u64()          # tensor count
-    pairs = reader.u64()
-    wanted, found = tuple(keys), {}
-    for _ in range(pairs):
-        key = reader.string()
-        kind = reader.u32()
-        if key.endswith(wanted) and kind in _SCALARS:
-            found[key] = reader.scalar(kind)
-        else:
-            reader.skip(kind)
-        if len(found) == len(wanted):
-            break
-    return found
+        reader = _Reader(fh)
+        if reader.take(4) != b"GGUF":
+            raise ValueError("not a GGUF file: %s" % path)
+        reader.u32()          # version
+        reader.u64()          # tensor count
+        pairs = reader.u64()
+        wanted, found = tuple(keys), {}
+        for _ in range(pairs):
+            key = reader.string()
+            kind = reader.u32()
+            if key.endswith(wanted) and kind in _SCALARS:
+                found[key] = reader.scalar(kind)
+            else:
+                reader.skip(kind)
+            if len(found) == len(wanted):
+                break
+        return found
 
 
 def trained_context(path):

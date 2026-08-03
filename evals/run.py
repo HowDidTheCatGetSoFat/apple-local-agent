@@ -61,7 +61,7 @@ EVAL_DIR = os.environ.get("FXLLA_EVAL_DIR", "")
 TASKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.json")
 
 READY_POLL_S = 0.1   # the 1s-poll regression must not recur; a test times this
-DIM_ORDER = ("instructions", "tools", "code", "context")  # cheap first
+DIM_ORDER = ("instructions", "tools", "candor", "code", "context")  # cheap first
 PROBES = [
     "Alpha check: describe what a hash table is in about four sentences.",
     "Brief answer: explain the difference between a thread and a process.",
