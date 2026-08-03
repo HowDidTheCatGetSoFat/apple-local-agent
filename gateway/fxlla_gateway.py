@@ -16,9 +16,16 @@ Config via environment:
   FXLLA_BACKEND_PORT_BASE       first internal backend port (default 8100)
   FXLLA_GATEWAY_BUDGET_MB       resident RAM budget (default: ~GPU reservable)
   FXLLA_BIN                     path to the fxlla CLI (default: fxlla on PATH)
-  FXLLA_CTX                     context window llama-server serves for gguf
-                                models (default 8192); reported per model as
-                                "context" in /v1/models
+  FXLLA_CTX                     CEILING on the context window served to a gguf
+                                model (default 32768). Each one gets the window
+                                it was trained for, read from its own header,
+                                capped by this - so a 7B trained to 128k and a
+                                27B trained to 262k stop sharing one number.
+                                Raise it to let the big ones use their full
+                                window; the cost is RAM, since llama-server
+                                allocates the KV cache up front. Reported per
+                                model as "context" in /v1/models, from the same
+                                reader that starts the backend.
   FXLLA_STATS_FILE              passive metrics time-series (default: the CLI's
                                 stats.jsonl under the state dir)
   FXLLA_VISION_ROUTING          0 to stop reading images for models that cannot
@@ -50,7 +57,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import metrics  # noqa: E402  (local module, added to sys.path above)
+import ggufmeta  # noqa: E402  (local module, added to sys.path above)
+import metrics  # noqa: E402
 
 # Poll interval while waiting for a backend to answer. Small enough that a fast
 # model load is not rounded up to the next whole second.
@@ -372,7 +380,7 @@ def _embed_identities():
 # What llama-server is started with (-c) by cmd_backend: for gguf the SERVED
 # window, whatever the weights could do. mlx_lm.server serves the model's own
 # window, which config.json declares.
-SERVED_GGUF_CTX = int(os.environ.get("FXLLA_CTX", "8192"))
+SERVED_GGUF_CTX = int(os.environ.get("FXLLA_CTX", "32768"))
 
 
 def model_context(alias):
@@ -382,7 +390,12 @@ def model_context(alias):
     number."""
     d = os.path.join(MODELS_DIR, alias)
     if engine_for(alias) == "gguf":
-        return SERVED_GGUF_CTX
+        # The same reader bin/fxlla starts the backend with, so this reports
+        # what is actually served rather than a number that merely used to be
+        # passed. Falls back to the cap when the header cannot be read, which
+        # is what the backend falls back to as well.
+        served, _rope = ggufmeta.serve_plan(d, SERVED_GGUF_CTX)
+        return served or SERVED_GGUF_CTX
     try:
         with open(os.path.join(d, "config.json"), encoding="utf-8") as fh:
             value = json.load(fh).get("max_position_embeddings")

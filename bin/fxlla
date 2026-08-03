@@ -997,8 +997,25 @@ cmd_backend() {
     for f in "$dest"/mmproj*f16*.gguf "$dest"/mmproj*.gguf; do
       [ -e "$f" ] && { mm="$f"; break; }
     done
+    # The window each model was TRAINED for, capped by FXLLA_CTX, read from the
+    # file itself. One number for every gguf was wrong in both directions: it
+    # served a 27B with a 262k window at 8k, and asked a 7B for more than it
+    # was trained for. llama-server would do this on its own with -c 0, but its
+    # answer is whatever the file advertises - and a model shipped with YaRN
+    # advertises the STRETCHED window, so -c 0 buys a quarter of a million
+    # tokens of degraded attention nobody asked for. The same reader feeds the
+    # gateway's /v1/models, so the meter opencode runs matches what is served.
+    local ctx="$FXLLA_CTX" rope_off=0 derived
+    derived="$(python3 "$REPO_ROOT/gateway/ggufmeta.py" "$dest" "${FXLLA_CTX:-0}" 2>/dev/null || true)"
+    if [ -n "$derived" ]; then
+      ctx="${derived%% *}"; rope_off="${derived##* }"
+    fi
+    # Rope scaling off when serving at or below the trained window: the file
+    # bakes it in, llama.cpp honours it at every size, and below the original
+    # length it is pure loss.
+    local rope=""; [ "$rope_off" = 1 ] && rope="--rope-scaling none"
     # shellcheck disable=SC2086
-    exec llama-server --model "$dest/$entry" --alias "$name" --host 127.0.0.1 --port "$port" -ngl "$FXLLA_NGL" -c "$FXLLA_CTX" --jinja ${mm:+--mmproj "$mm"} $FXLLA_SERVER_ARGS
+    exec llama-server --model "$dest/$entry" --alias "$name" --host 127.0.0.1 --port "$port" -ngl "$FXLLA_NGL" -c "$ctx" $rope --jinja ${mm:+--mmproj "$mm"} $FXLLA_SERVER_ARGS
   else
     # shellcheck disable=SC2086
     exec mlx_lm.server --model "$dest" --host 127.0.0.1 --port "$port" $FXLLA_SERVER_ARGS

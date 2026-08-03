@@ -5,6 +5,28 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Changed
+- `FXLLA_CTX` is a ceiling now, not the window itself. Every gguf model was
+  served the same number, which was wrong in both directions: it gave a 27B
+  trained to 262k an 8k window, and asked a 7B for more than it had ever seen
+  in training. Each model is now served what its own header says it was
+  trained for, capped by `FXLLA_CTX`. The shipped default rises from 8192 to
+  32768, since a ceiling is not a target; raise it to let a big-window model
+  use its full window, and pay for it in RAM, because llama-server allocates
+  the KV cache up front whether or not it is filled. Measured here: Qwythos
+  27B at 262144 is 38.9 GB resident, 20.9 of it weights.
+  Two details make this more than reading a number. A model shipped with rope
+  scaling advertises the STRETCHED window as its context length - one here
+  says 1048576, which is 262144 multiplied by a YaRN factor of 4 - so the
+  window it was actually trained for is the one recorded beside the factor,
+  and that is what gets served. And because llama.cpp honours baked-in scaling
+  at every size, serving at or below the trained window now passes
+  `--rope-scaling none`: below the original length the stretch is pure loss,
+  which is what the model's own author warns about.
+  `bin/fxlla _backend` and the gateway's `/v1/models` read this through the
+  same function, so the window opencode's context meter and auto-compaction
+  run against is the one the backend is actually serving.
+
 ### Added
 - `fxlla do` chooses what to do, not just what to do it with. Naming an image
   that exists makes editing available, so "make the wall in shot.png yellow"
