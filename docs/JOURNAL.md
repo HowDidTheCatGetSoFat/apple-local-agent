@@ -2,6 +2,69 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-03: the file already knew
+
+A 27B trained to a quarter of a million tokens was being served at eight
+thousand, because `FXLLA_CTX` was one number for every GGUF. It was wrong in
+both directions - the same number asked a 7B for more than it had ever seen in
+training - and llama.cpp had solved this before we broke it: `-c 0` means "use
+the window the model declares". fxlla was overriding the solution.
+
+But `-c 0` is not the fix either, and that is the part worth writing down. A
+model shipped with rope scaling advertises the STRETCHED window as its context
+length. The one that prompted this says 1048576, which is 262144 multiplied by
+a YaRN factor of 4. Serving there buys a quarter of a million tokens of
+degraded attention across a window nobody fills. The window it was actually
+trained for is recorded right beside the factor, and that is the one to serve -
+with the scaling explicitly disabled, because llama.cpp honours a baked-in
+stretch at every size, so below the original length it is pure loss. The
+stretch is now opt-in through `FXLLA_ROPE_STRETCH`, and the flag only raises
+the ceiling: whether the scaling stays on is decided by what is actually
+served, so asking for it while the cap sits under the trained window gets
+neither.
+
+The same header carries `nextn_predict_layers`, which says the build can draft
+against itself. Passing `--spec-type draft-mtp` where it is present measured
+31.9 against 20.6 tokens/s on code and 40.9 against 21.7 on predictable text.
+The ratio is not what convinced me - the SHAPE is. The plain build is flat
+across every prompt because it is memory bound; the speculating one tracks how
+guessable the text is. That is what speculation predicts, and a result that
+matches the mechanism is worth more than one that merely looks good. Measuring
+only the counting prompt would have reported 1.9x and flattered it.
+
+Two costs of doing this were paid in mistakes rather than design.
+
+A download looked stalled, so I gave aria2 a speed floor. The stall was never
+confirmed - I had been reading a progress file that is flushed periodically,
+and the transfer was at the full 200 Mbps throughout - and the rule then killed
+a real 22 GB download that averaged 14 MiB/s because it dipped to 96 KB/s for a
+moment. That abort is terminal, not covered by retries. A rejection rule needs
+two names, the failure it catches and the legitimate case it must not; this one
+only ever had the second. Removed, with a test pinning its absence.
+
+And the eval harness was measuring the wrong thing about every reasoning model
+it had ever scored. Tasks were budgeted 256 or 512 output tokens, which a model
+that thinks before it answers spends on thinking - it was then scored on an
+empty string, and the number read as incapacity. `code`, alone at 2048, was the
+only dimension producing real answers. Every score the harness has produced is
+from before that floor.
+
+The measurement those changes were for came out null. Comparing a Qwen3.5 4B
+against the same base with its refusal direction orthogonalized out - same
+publisher, same quant, one operation apart - gave 12 discordant tasks split 5
+to 7, p = 0.774. My hypothesis was that candor would fall; it did not. That is
+consistent with the published claim that capabilities survive abliteration, and
+it is weak evidence: with 12 discordant pairs only a large effect would show.
+The 27B pair scores far apart, but it cannot answer the question - one side
+carries a large finetune as well as the alignment difference, so it measures
+both at once.
+
+The dimension written to detect that cost is worth keeping regardless. `candor`
+asks whether a model declines what cannot be done rather than complying: a
+fabricated stdlib symbol, a self-contradicting specification, data it was never
+given. Refusing correctly is a capability, and nothing here had ever asked for
+one.
+
 ## 2026-08-02: the loop picks the verb, not just the noun
 
 `fxlla do` could choose a model. It could not choose what to DO, which is most
@@ -403,7 +466,7 @@ through CFG**, so a model may declare `negative` only if it also declares
 four at once instead of one at a time.
 
 **Postscript, same day: the backend fixed its half.** mflux-cv 0.18.32 landed
-`warn_ignored_options` — one policy for the whole family of CLIs: an option a
+`warn_ignored_options` - one policy for the whole family of CLIs: an option a
 model cannot honour is still accepted, so existing scripts keep working, and a
 warning says so out loud. Applied to FLUX.1's dead `--negative-prompt`, Ideogram
 4's absent one, Z-Image Turbo and Boogu, and base Z-Image when guidance drops

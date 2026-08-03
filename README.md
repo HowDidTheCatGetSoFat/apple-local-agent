@@ -166,6 +166,41 @@ Pulls use `aria2c` with a bandwidth cap by default. For a xet-backed or awkward
 repo, `fxlla pull <repo> --downloader hf` fetches it with the Hugging Face CLI
 (run via `uvx`, no extra install); it is more robust but ignores the cap.
 
+## How a GGUF model is served
+
+Nothing here is configured per model. `fxlla` reads the model's own header and
+starts `llama-server` with what it finds:
+
+- **The context window it was trained for**, capped by `FXLLA_CTX` (32768 by
+  default). One number for every model was wrong in both directions - it gave a
+  27B trained to 262k an 8k window, and asked a 7B for more than it had ever
+  seen. The cost of raising the cap is RAM: llama-server allocates the KV cache
+  up front, and for a 27B that is under 2 GB at 32k and about 16 GB at 262k.
+- **Rope scaling turned off** when the file bakes it in and the served window
+  is at or below the trained one. A model shipped with YaRN advertises the
+  *stretched* window as its context length - 1048576 where it was trained at
+  262144 - and llama.cpp applies the scaling at every size, so below the
+  original length it is a cost with nothing bought. `FXLLA_ROPE_STRETCH=1`
+  opts into the advertised window instead; raise `FXLLA_CTX` to match or the
+  ceiling wins and you get neither.
+- **Self-speculation** (`--spec-type draft-mtp`) when the build carries a
+  multi-token-prediction head. Detected from the header, not the filename:
+  publishers ship both builds at the same quant and the name is a convention.
+  Measured on one such pair at a matched window: 31.9 against 20.6 tokens/s on
+  code, 40.9 against 21.7 on predictable text. The plain build is flat across
+  prompts because it is memory bound; the speculating one tracks how guessable
+  the next tokens are.
+- **The multimodal projector** beside the weights, so a vision model can see.
+
+`fxlla on` and the gateway derive these through the same code, and the gateway
+reports the resulting window as `context` in `/v1/models` - if those disagreed,
+opencode's context meter and its auto-compaction would run against a window the
+backend is not serving.
+
+The gateway also unloads a backend after `FXLLA_KEEP_WARM` idle minutes (10 by
+default, `0` never). A request in flight holds its backend: idleness is counted
+from when the answer finishes, not when it was asked for.
+
 ## Choosing between models: fxlla eval
 
 Rather than trusting the catalog's prose, measure. `fxlla eval` runs every
@@ -527,7 +562,7 @@ fxlla media timings                               # what renders have taken here
 A finished or failed job posts a **desktop notification** on macOS with what it
 produced and how long it took (`FXLLA_MEDIA_NOTIFY=0` to stop it). That is
 there because an MCP tool call is request/response and an agent turn ends when
-the model stops calling tools — nothing on the server side can reopen a turn to
+the model stops calling tools - nothing on the server side can reopen a turn to
 announce a render, so an assistant can only tell you when you ask. If your
 client can run work in the background and wake itself when it finishes (Claude
 Code does; `--async` composes with it), use that instead and the notification
@@ -537,18 +572,18 @@ is redundant.
 seconds and seconds-per-megapixel per model and per video stage. Nothing in it
 is estimated and nothing comes from other hardware, so a model with no runs
 shows no number rather than a guess. It is also what the MCP publishes as
-`observed`, which is where a step count stops being a useful proxy — krea2 and
+`observed`, which is where a step count stops being a useful proxy - krea2 and
 z-image-turbo both run 8 steps and are 9x apart here.
 
 Jobs run **one at a time**: renders share unified memory with the gateway's
 models, so a second submission waits (`queued`) until the current one finishes.
 State lives next to the outputs, in `<media out>/jobs`. Over MCP every render
 goes through this queue and the tool **returns a job id immediately**, so a
-render never holds the conversation open — the quickest one measured here takes
+render never holds the conversation open - the quickest one measured here takes
 about a minute and a poster took eight, so there is nothing to be gained by
 waiting. `media_job_status` answers instantly with the record or a
 still-running line; `list_media_jobs` and `cancel_media_job` complete the set.
-`FXLLA_MCP_WAIT_S` (default 0) can make a call wait for the result instead —
+`FXLLA_MCP_WAIT_S` (default 0) can make a call wait for the result instead -
 keep it under the calling client's timeout, because a call held open longer
 than the client waits comes back as a timeout, and a timeout reads as a
 failure: one model, unable to tell the two apart, submitted the same render
