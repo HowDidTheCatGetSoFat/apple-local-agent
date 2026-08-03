@@ -149,6 +149,28 @@ class TestImagesInTheIntent(unittest.TestCase):
         self.assertEqual(loop.images_in("%s and %s" % (self.png, self.png)),
                          [self.png])
 
+    def test_punctuation_wrapped_around_a_path_does_not_hide_it(self):
+        # People write paths inside parentheses and markdown brackets at least
+        # as often as they write them bare. Missing those is silent: the
+        # planner is shown an empty list and generates a fresh image instead
+        # of editing the file the request plainly named.
+        for phrasing in ("the photo (%s) needs a hat",
+                         "edit [%s] please",
+                         "make %s! brighter",
+                         "edit ![alt](%s) to add a hat",
+                         "look at <%s>",
+                         "about %s: make it green"):
+            with self.subTest(phrasing=phrasing):
+                self.assertEqual(loop.images_in(phrasing % self.png), [self.png])
+
+    def test_the_order_is_the_order_they_appear(self):
+        # Quoted runs were collected first, so a quoted path jumped ahead of
+        # an earlier unquoted one and the docstring's promise was false.
+        second = os.path.join(self.dir, "two words.png")
+        open(second, "wb").close()
+        self.assertEqual(loop.images_in('%s then "%s"' % (self.png, second)),
+                         [self.png, second])
+
     def test_a_prompt_with_no_paths_offers_nothing(self):
         self.assertEqual(loop.images_in("a red bicycle against a blue wall"), [])
 
@@ -197,6 +219,22 @@ class TestEditPlans(unittest.TestCase):
         # rejected for a difference that resolves to the same file.
         odd = os.path.join(self.dir, ".", "shot.png")
         out = loop._validate(self._edit(image=odd), editable=[self.png])
+        self.assertEqual(out["image"], self.png)
+
+    def test_a_different_case_still_names_the_same_file(self):
+        # This machine's volume is case-insensitive, so a planner echoing
+        # FOO.PNG for the foo.png it was shown named the same file and was
+        # refused for it. The comparison asks the filesystem, not the strings.
+        shouted = os.path.join(self.dir, "SHOT.PNG")
+        if not os.path.isfile(shouted):
+            self.skipTest("case-sensitive filesystem")
+        out = loop._validate(self._edit(image=shouted), editable=[self.png])
+        self.assertEqual(out["image"], self.png)
+
+    def test_a_symlink_to_an_offered_image_resolves_to_it(self):
+        link = os.path.join(self.dir, "link.png")
+        os.symlink(self.png, link)
+        out = loop._validate(self._edit(image=link), editable=[self.png])
         self.assertEqual(out["image"], self.png)
 
     def test_an_edit_carries_no_generation_only_fields(self):
@@ -467,6 +505,72 @@ class TestLoop(unittest.TestCase):
                             "    weights = load(component)\n"
                             "              ^^^^^^^^^^^^^^^"),
             "weights = load(component)")
+
+    def test_the_images_in_the_intent_reach_the_planner(self):
+        # The whole edit feature hangs off this one line in run(). Without a
+        # test, a regression that silently disabled it would look like the
+        # planner simply preferring to generate.
+        import tempfile
+        directory = tempfile.mkdtemp()
+        png = os.path.join(directory, "shot.png")
+        open(png, "wb").close()
+        offered = []
+
+        def fake_plan(intent, feedback=None, exclude=(), timeout_s=180, editable=()):
+            offered.append(list(editable))
+            return loop._validate({"model": "fast", "prompt": "p",
+                                   "expect": ["cat"]})
+
+        saved = (loop.plan, generate.generate_image, loop.look)
+        loop.plan = fake_plan
+        generate.generate_image = lambda **k: "/tmp/out.png"
+        loop.look = lambda path, timeout_s: "a cat"
+        self.addCleanup(lambda: (setattr(loop, "plan", saved[0]),
+                                 setattr(generate, "generate_image", saved[1]),
+                                 setattr(loop, "look", saved[2])))
+        loop.run("edit %s" % png, max_steps=1, out=self.quiet)
+        self.assertEqual(offered[0], [png])
+
+    def test_a_report_of_an_edit_names_the_file_not_a_model(self):
+        # An edit plan carries no "model" key, so an inverted branch here
+        # would be a KeyError on every real edit.
+        import io
+        result = {"intent": "x", "settled": True, "attempts": 1, "seconds": 1.0,
+                  "output": "/tmp/edited.png", "unsettled": None,
+                  "steps": [{"attempt": 1, "output": "/tmp/edited.png",
+                             "described": "a yellow wall", "missing": [],
+                             "plan": {"action": "edit", "image": "/tmp/in.png",
+                                      "prompt": "make it yellow",
+                                      "expect": ["yellow"], "why": ""}}]}
+        buffer = io.StringIO()
+        loop.report(result, out=buffer)
+        self.assertIn("edited   /tmp/in.png", buffer.getvalue())
+        self.assertNotIn("model  ", buffer.getvalue())
+
+    def test_a_failed_edit_is_not_told_a_model_was_withheld(self):
+        # Nothing is withheld on an edit failure - there is one edit model -
+        # so the generate-only phrasing described something that had not
+        # happened and pointed at a list the plan had not chosen from.
+        sent = []
+        saved = loop._chat
+        loop._chat = lambda messages, model, timeout_s, **k: (
+            sent.append(messages) or '{"model": "fast", "prompt": "p", "expect": ["c"]}')
+        self.addCleanup(setattr, loop, "_chat", saved)
+        loop.plan("x", feedback={"plan": {"action": "edit", "image": "/tmp/a.png"},
+                                 "refused": "qwen-edit exploded"})
+        text = sent[0][-1]["content"]
+        self.assertNotIn("removed from the list", text)
+        self.assertIn("generating a new image instead is allowed", text)
+
+    def test_a_failed_generate_is_still_told_the_model_was_withheld(self):
+        sent = []
+        saved = loop._chat
+        loop._chat = lambda messages, model, timeout_s, **k: (
+            sent.append(messages) or '{"model": "fast", "prompt": "p", "expect": ["c"]}')
+        self.addCleanup(setattr, loop, "_chat", saved)
+        loop.plan("x", feedback={"plan": {"action": "generate", "model": "fancy"},
+                                 "refused": "boom"})
+        self.assertIn("removed from the list", sent[0][-1]["content"])
 
     def test_a_report_of_a_run_that_rendered_nothing_does_not_crash(self):
         import io

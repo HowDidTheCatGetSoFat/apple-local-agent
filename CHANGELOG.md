@@ -14,12 +14,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   verifying earns the most - the failure that motivated `describe_image` in the
   first place was an edit that removed an object, left a visible ghost of it,
   and passed every mechanical check.
-  The input path is never transcribed by the planner. fxlla extracts the image
-  paths from the request itself, offers that list, and refuses any choice that
-  is not in it - the same reflex as withholding a failed model rather than
-  asking a model not to pick it. A path a model repeats back has to be right
-  character by character, and it has already been shown here that being told a
-  constraint in prose is not the same as being held to one. Only `seed` carries
+  What the planner says about the input path is never trusted. It is asked to
+  copy one back, but fxlla extracts the image paths from the request itself and
+  refuses any choice that is not one of them - the same reflex as withholding a
+  failed model rather than asking a model not to pick it. A path a model repeats
+  has to be right character by character, and it has already been shown here
+  that being told a constraint in prose is not the same as being held to one.
+  The comparison asks the filesystem rather than the strings, so the same file
+  named in a different case (this machine's volume is case-insensitive) or
+  through a symlink still matches. Only `seed` carries
   over to an edit; steps, guidance and aspect mean nothing to qwen-edit and
   would arrive as a TypeError rather than a message.
 - `fxlla do "<what you want>"`: state an outcome instead of a command and

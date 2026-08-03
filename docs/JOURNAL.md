@@ -17,10 +17,14 @@ object from a photograph, left a visible ghost of it, and every mechanical
 check passed. A loop that edits without looking is the exact machine for
 producing that silently.
 
-The design decision worth recording is what the planner is NOT asked for. It
-never transcribes the input path. fxlla extracts the image paths from the
-request itself, offers that list, and refuses any choice outside it. A path
-repeated back by a model has to be right character by character, and this
+The design decision worth recording is what the planner is not TRUSTED with.
+It is asked to copy the input path back - that part is unavoidable, it has to
+say which image it means - but fxlla extracts the paths from the request
+itself and refuses any choice that is not one of them. The guarantee is that a
+wrong path is caught, not that one is never typed; an adversarial review had
+to point out that four documents here claimed the stronger thing, including
+this one. A path repeated back by a model has to be right character by
+character, and this
 project has already learned, twice in one day, that telling a model a
 constraint is not the same as holding it to one - first when a planner
 re-chose a model it had just been told had failed, then when an adversarial

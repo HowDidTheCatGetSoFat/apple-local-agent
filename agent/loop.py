@@ -15,10 +15,10 @@ that no step is trusted with a job it cannot do:
     plan    a local model turns the intent into one concrete call: which
             OPERATION (make a new image, or change one that exists) and then
             which model or which file. Anything it invents is refused here,
-            before a render spends four minutes proving it. The one thing it
-            is never asked to produce is a path - fxlla extracts those from
-            the request and the plan may only choose among them, because a
-            transcribed path has to be right character by character.
+            before a render spends four minutes proving it. What it says
+            about a path is never TRUSTED: fxlla extracts the paths from the
+            request itself and refuses any choice that is not one of them, so
+            a path echoed back wrong is caught rather than acted on.
     act     the existing generator runs. No new render path.
     look    the vision model ENUMERATES what is in the result. It is never
             asked whether the result is correct: a model asked "is this a red
@@ -193,21 +193,38 @@ def _extract_json(text):
     raise PlanError("no JSON object in the planner's reply: %s" % text[:200])
 
 
+# Punctuation a person puts around a path without meaning it to be part of one.
+# Both ends, because a path arrives inside parentheses and markdown brackets at
+# least as often as it arrives bare: "the photo (shot.png) needs a hat".
+_EDGE = "\"'`(){}[]<>,;:!?"
+
+
 def images_in(intent):
     """Existing image files named in the intent, in the order they appear.
 
-    Plain code, deliberately. The planner is never asked to transcribe a path:
-    a model that repeats one back has to get every character right, and it has
-    already been shown here that a model told a constraint in prose does not
-    reliably honour it. Extracting the paths and letting it choose from the
-    list makes a wrong or invented one impossible rather than unlikely.
+    Plain code, deliberately. What the planner says about a path is never
+    trusted: it is asked to copy one back, and a model that repeats a path has
+    to get every character right, which this project has no reason to assume -
+    it has already watched one ignore a constraint it was given in prose.
+    Extracting the paths here and refusing any choice outside the list is what
+    makes a wrong or invented path impossible rather than merely unlikely.
     """
     found, seen = [], set()
-    # Quoted runs first, so a path containing spaces survives the split.
-    candidates = re.findall(r'"([^"]+)"|\'([^\']+)\'', intent)
-    tokens = [a or b for a, b in candidates] + intent.split()
-    for token in tokens:
-        token = token.strip().strip("\"'").rstrip(".,;:)")
+    # (position, token) so the result is genuinely in the order they appear.
+    # Listing every quoted run first put a quoted path ahead of an earlier
+    # unquoted one, which made the docstring's promise false.
+    spans = [(m.start(), m.group(1) or m.group(2))
+             for m in re.finditer(r'"([^"]+)"|\'([^\']+)\'', intent)]
+    # Markdown link and image forms, whose path is bracketed on BOTH sides by
+    # characters that also appear mid-token: stripping edges off
+    # "![alt](/a/b.png)" leaves "alt](/a/b.png", which still ends in .png and
+    # is not a file. Pulled out whole instead of trimmed down to.
+    spans += [(m.start(), m.group(1))
+              for m in re.finditer(r"!?\[[^\]]*\]\(([^)\s]+)\)", intent)]
+    for match in re.finditer(r"\S+", intent):
+        spans.append((match.start(), match.group()))
+    for position, token in sorted(spans, key=lambda pair: pair[0]):
+        token = token.strip(_EDGE).rstrip(".")
         if not token.lower().endswith(IMAGE_SUFFIXES):
             continue
         path = os.path.abspath(os.path.expanduser(token))
@@ -216,6 +233,19 @@ def images_in(intent):
         seen.add(path)
         found.append(path)
     return found
+
+
+def _same_file(one, other):
+    """Whether two paths name the same file, asked of the filesystem.
+
+    String comparison is the wrong instrument. This machine's volume is
+    case-insensitive, so a planner echoing FOO.PNG for the foo.png it was
+    shown named the same file and was refused for it. samefile answers with
+    the inode, which also settles symlinks and leftover '..' segments."""
+    try:
+        return os.path.samefile(one, other)
+    except OSError:
+        return os.path.abspath(one) == os.path.abspath(other)
 
 
 PROMPT = """You plan ONE local image operation and nothing else.
@@ -290,11 +320,21 @@ def plan(intent, feedback=None, exclude=(), timeout_s=180, editable=()):
         # worked, so it is passed through verbatim rather than summarised.
         messages.append({"role": "assistant", "content": json.dumps(feedback["plan"])})
         if feedback.get("refused"):
+            # Only a generate failure withholds anything. Telling a failed
+            # edit that "the model has been removed from the list" described a
+            # thing that had not happened - there is one edit model and it is
+            # never withheld - and pointed at a list that is not the one it
+            # chose from.
+            withheld = ((feedback.get("plan") or {}).get("action") == "generate")
             messages.append({"role": "user", "content":
-                             "That plan failed: %s\nThat model has been removed "
-                             "from the list above. Plan one more attempt at the "
-                             "original request with one that is still listed."
-                             % feedback["refused"]})
+                             "That plan failed: %s\n%s" % (
+                                 feedback["refused"],
+                                 "That model has been removed from the list above. "
+                                 "Plan one more attempt at the original request "
+                                 "with one that is still listed." if withheld else
+                                 "Plan one more attempt at the original request; "
+                                 "generating a new image instead is allowed if "
+                                 "editing cannot work.")})
         else:
             messages.append({"role": "user", "content":
                              "That render was made. An independent description of it "
@@ -340,13 +380,15 @@ def _validate(chosen, exclude=(), editable=()):
         # aimed at the wrong file would overwrite nothing but would waste a
         # render and describe an image nobody asked about.
         wanted = (chosen.get("image") or "").strip()
-        allowed = {os.path.abspath(os.path.expanduser(p)): p for p in editable}
-        resolved = os.path.abspath(os.path.expanduser(wanted)) if wanted else ""
-        if resolved not in allowed:
+        resolved = os.path.expanduser(wanted) if wanted else ""
+        match = next((p for p in editable if _same_file(resolved, p)), None)
+        if match is None:
             raise PlanError(
                 "the plan edits %r, which is not one of the images found in the "
                 "request: %s" % (wanted, ", ".join(editable) or "(none)"))
-        out["image"] = allowed[resolved]
+        # The path WE found, not the one it echoed: the two can differ in case
+        # or in redundant segments and still be the same file.
+        out["image"] = match
         fields = EDIT_FIELDS
     else:
         model = chosen.get("model")
