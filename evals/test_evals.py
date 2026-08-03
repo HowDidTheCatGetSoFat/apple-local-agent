@@ -520,6 +520,37 @@ class TestRendering(unittest.TestCase):
         self.assertEqual(per_dim, {"code": 10, "tools": 8, "instructions": 8,
                                    "context": 4, "candor": 8})
 
+    def test_no_task_is_rendered_below_the_answer_floor(self):
+        # A reasoning model spends tokens thinking before it answers, so a
+        # budget sized for the answer alone is gone before the answer starts.
+        # Measured on a Qwen3.5 pair: every dimension budgeted at 256 or 512
+        # collapsed to empty replies, code at 2048 did not, and the two models
+        # differed mostly by how much each happened to think.
+        rendered = run.render_tasks(self.spec)
+        low = [t["id"] for t in rendered if t["max_tokens"] < run.ANSWER_FLOOR]
+        self.assertEqual(low, [], "budgeted below the floor: %s" % low)
+
+    def test_a_task_asking_for_more_than_the_floor_keeps_it(self):
+        # The floor raises, never lowers: a task that declares it needs room
+        # knows something the floor does not.
+        rendered = {t["id"]: t["max_tokens"] for t in run.render_tasks(self.spec)}
+        declared = {t["id"]: t["max_tokens"] for t in self.spec["tasks"]}
+        for tid, want in declared.items():
+            if want > run.ANSWER_FLOOR:
+                self.assertEqual(rendered[tid], want)
+
+    def test_the_floor_is_inside_the_fingerprint(self):
+        # Changing it changes what is measured, so runs either side of the
+        # change must not look comparable.
+        before = run.fingerprint(run.render_tasks(self.spec))
+        saved = run.ANSWER_FLOOR
+        run.ANSWER_FLOOR = saved * 2
+        try:
+            after = run.fingerprint(run.render_tasks(self.spec))
+        finally:
+            run.ANSWER_FLOOR = saved
+        self.assertNotEqual(before, after)
+
     def test_quick_takes_one_task_per_dimension(self):
         quick = run.render_tasks(self.spec, quick=True)
         self.assertEqual(len(quick), len(run.DIM_ORDER))

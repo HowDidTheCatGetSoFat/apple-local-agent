@@ -62,6 +62,20 @@ TASKS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.jso
 
 READY_POLL_S = 0.1   # the 1s-poll regression must not recur; a test times this
 DIM_ORDER = ("instructions", "tools", "candor", "code", "context")  # cheap first
+
+# No task is given less than this, whatever it declares. A reasoning model
+# spends tokens thinking BEFORE it answers, and a budget sized for the answer
+# alone is spent before the answer starts: the model is scored on an empty
+# reply and the number reads as incapacity. Measured here on a Qwen3.5 pair -
+# every dimension budgeted at 256 or 512 collapsed, `code` at 2048 did not, and
+# the two models' scores differed mostly by how much each one happened to think.
+# A budget that small is not a hard test, it is an unrealistic one: nothing
+# calling these models in practice caps them there.
+#
+# Raising it changes what is measured, so it changes the fingerprint too - the
+# floor is applied at render, which is the form that gets hashed. Scores from
+# before it are not comparable, and the run header says so on its own.
+ANSWER_FLOOR = int(os.environ.get("FXLLA_EVAL_ANSWER_FLOOR", "2048"))
 PROBES = [
     "Alpha check: describe what a hash table is in about four sentences.",
     "Brief answer: explain the difference between a thread and a process.",
@@ -131,7 +145,7 @@ def render_tasks(spec, dims=None, quick=False):
         out = {
             "id": task["id"],
             "dim": task["dim"],
-            "max_tokens": task["max_tokens"],
+            "max_tokens": max(task["max_tokens"], ANSWER_FLOOR),
             "check": task["check"],
             "stream": task["dim"] in ("code", "context"),
         }
