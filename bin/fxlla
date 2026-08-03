@@ -229,8 +229,10 @@ _pull_civitai() {
   [ -n "${FXLLA_CIVITAI_TOKEN:-}" ] && url="$url?token=$FXLLA_CIVITAI_TOKEN"
   info "Civitai:  model-version $vid -> $dir"
   info "Cap:      ${FXLLA_RATE_MBIT} Mbps"
+  # shellcheck disable=SC2086  # the stall guard is a deliberate word split
   aria2c --dir="$dir" --continue=true --auto-file-renaming=false \
     --max-overall-download-limit="$(rate_bytes)" \
+    $ARIA_STALL_GUARD \
     --content-disposition-default-utf8=true "$url" \
     || die "civitai download failed (is FXLLA_CIVITAI_TOKEN set and the id valid?)"
   ok "Downloaded to $dir"
@@ -447,10 +449,12 @@ cmd_pull() {
     local auth=(); [ -n "${HF_TOKEN:-}" ] && auth=(--header="Authorization: Bearer $HF_TOKEN")
 
     info "Downloading (resumable; Ctrl-C and re-run the same command to resume)..."
+    # shellcheck disable=SC2086  # the stall guard is a deliberate word split
     aria2c --input-file="$input" \
       --max-overall-download-limit="$(rate_bytes)" \
       --continue=true --auto-file-renaming=false \
       --max-connection-per-server=4 --max-concurrent-downloads=2 --split=4 \
+      $ARIA_STALL_GUARD \
       --summary-interval=10 --console-log-level=warn ${auth[@]+"${auth[@]}"}
 
     rm -f "$input"

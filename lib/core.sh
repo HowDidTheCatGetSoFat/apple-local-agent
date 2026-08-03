@@ -87,6 +87,24 @@ mkdir -p "$STATE_DIR"
 # bytes/s for aria2c from the configured megabits
 rate_bytes() { echo $(( FXLLA_RATE_MBIT * 1000000 / 8 )); }
 
+# Drop a connection that has stopped delivering, and keep retrying.
+#
+# aria2 defaults --lowest-speed-limit to 0, which means it NEVER abandons a slow
+# connection - and a socket that stays OPEN while delivering nothing is not a
+# timeout, so nothing else rescues it either. A 22 GB pull here sat at 2.0 GB for
+# minutes with the connection established and zero bytes moving, and would have
+# sat there indefinitely.
+#
+# 128 KB/s is the threshold because it has to separate "stalled" from "genuinely
+# slow", not from "fast": the rate cap is a ceiling, not a promise, and a real
+# transfer can legitimately run far below it. Anything under this for the timeout
+# window is a hang, not a bad day.
+#
+# Unlimited retries on purpose. These are model weights: the download either
+# completes or the user starts again from the beginning, and giving up after five
+# tries chooses the second on their behalf.
+ARIA_STALL_GUARD="--lowest-speed-limit=128K --timeout=60 --connect-timeout=30 --max-tries=0 --retry-wait=5"
+
 # Consent for a large download.
 #
 # The load-bearing case is a transfer nobody asked for: an agent, a script, an MCP
