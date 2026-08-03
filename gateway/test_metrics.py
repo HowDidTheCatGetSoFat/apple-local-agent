@@ -173,5 +173,52 @@ class TestAppendSample(unittest.TestCase):
         self.assertIsNone(s["tps"])
 
 
+
+class TestUnmeasurableRate(unittest.TestCase):
+    """A rate the transport invented rather than the model produced.
+
+    Measured on a real eval run: tok_s came back with a max of 1,865,386 and a
+    median pulled up with it, because the response arrived buffered and every
+    delta was parsed microseconds apart.
+    """
+
+    def _stream(self, n_deltas):
+        sm = metrics.StreamMetrics(0.0)
+        for i in range(n_deltas):
+            sm.feed(b'data: {"choices":[{"delta":{"content":"x"}}]}\n')
+        return sm
+
+    def test_a_buffered_stream_reports_no_rate(self):
+        sm = self._stream(200)
+        # end essentially equal to the first-token stamp: the whole stream
+        # landed in one read, so nothing about decode speed was observed.
+        _ttft, tps, tokens = sm.result(sm.first + 0.0001)
+        self.assertEqual(tokens, 200)
+        self.assertIsNone(tps, "2,000,000 tok/s is the transport, not the model")
+
+    def test_a_real_rate_still_comes_through(self):
+        sm = self._stream(200)
+        _ttft, tps, _ = sm.result(sm.first + 4.0)   # 50 tok/s
+        self.assertEqual(tps, 50.0)
+
+    def test_a_fast_but_plausible_rate_is_kept(self):
+        # The bound must not throw away a genuinely quick small model.
+        sm = self._stream(600)
+        _ttft, tps, _ = sm.result(sm.first + 1.0)
+        self.assertEqual(tps, 600.0)
+
+    def test_one_delta_times_nothing(self):
+        sm = self._stream(1)
+        _ttft, tps, _ = sm.result(sm.first + 2.0)
+        self.assertIsNone(tps, "a rate is measured between arrivals")
+
+    def test_the_token_count_survives_either_way(self):
+        # Losing the rate must not lose the count: tokens_spent is a separate
+        # and still-correct fact.
+        sm = self._stream(120)
+        _ttft, tps, tokens = sm.result(sm.first + 0.00001)
+        self.assertIsNone(tps)
+        self.assertEqual(tokens, 120)
+
 if __name__ == "__main__":
     unittest.main()

@@ -1048,10 +1048,14 @@ class TestLifecycle(unittest.TestCase):
         body = lambda text: {"body": {
             "choices": [{"message": {"content": text}, "finish_reason": "stop"}],
             "usage": {"completion_tokens": 5}}}
+        # The 0.1 mid-stream is not decoration: a stream delivered in one burst
+        # has no decode timeline to measure, and the rate is reported as
+        # unmeasurable rather than as the transport's speed. Without a gap
+        # here the fake backend is exactly that burst.
         script = [
-            {"sse": [0.8] + deltas(70) + [stop, usage(70)]},   # probe 0: the load
-            {"sse": deltas(70) + [stop, usage(70)]},           # probe 1
-            {"sse": deltas(70) + [stop]},                      # probe 2: no usage
+            {"sse": [0.8] + deltas(35) + [0.1] + deltas(35) + [stop, usage(70)]},
+            {"sse": deltas(35) + [0.1] + deltas(35) + [stop, usage(70)]},   # probe 1
+            {"sse": deltas(35) + [0.1] + deltas(35) + [stop]},              # probe 2
             {"sse": deltas(10) + [stop, usage(10)]},           # probe 3: under gate
             body("BUILD OK 42"),                               # task, pass 1
             body("nope"),                                      # task, repeat pass

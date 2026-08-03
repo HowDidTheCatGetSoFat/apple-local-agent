@@ -40,6 +40,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   stretch while `FXLLA_CTX` still caps under the trained length gets neither,
   which is the honest outcome rather than a special case.
 
+- The eval's speed numbers were measuring the transport. Streamed probes were
+  read in 8 KB blocks, and `read(8192)` blocks until it has that many bytes or
+  the response ends - so every answer shorter than 8 KB, which is most of them,
+  was timed as if it had arrived in one piece. TTFT became the whole-response
+  time and the decode window collapsed to microseconds, which is how one run
+  reported 1,865,386 tokens/s and pulled its own median up with it. Reading a
+  line at a time is the granularity SSE actually has. On the same small model:
+  TTFT 110 ms to 52 ms, and the rate across probes tightened from 667..892 to
+  609..611 - more accurate and far less noisy at once.
+  A rate is now also reported as unmeasurable rather than invented when the
+  tokens did not arrive spread over time. Harness version bumped to 4, so
+  speed numbers either side of this do not look comparable.
+
 ### Changed
 - A gguf build carrying a multi-token-prediction head is served with
   `--spec-type draft-mtp`, so it drafts against itself with no second model

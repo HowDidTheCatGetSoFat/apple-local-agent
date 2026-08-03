@@ -67,6 +67,12 @@ def _usage_completion_tokens(obj):
     return None
 
 
+# Above this, the number is describing the transport rather than the model:
+# nothing decoding locally on Apple Silicon approaches it, so a rate past it
+# means the stream arrived in one piece and the timestamps collapsed.
+IMPLAUSIBLE_TPS = 2000
+
+
 class StreamMetrics:
     """Accumulate streamed SSE bytes and track first token and token count.
 
@@ -107,11 +113,31 @@ class StreamMetrics:
             self.deltas += 1
 
     def result(self, end):
-        """Return (ttft_ms, tps, tokens); ttft/tps are None when unmeasurable."""
+        """Return (ttft_ms, tps, tokens); ttft/tps are None when unmeasurable.
+
+        A decode rate needs the tokens to have ARRIVED spread over time. When a
+        response comes back buffered - one read carrying the whole stream - all
+        the deltas are parsed microseconds apart, so the first-token timestamp
+        lands next to the last and the division explodes. One real measurement
+        here reported 1,865,386 tokens/s that way, and it dragged the median it
+        was pooled into with it.
+
+        There is no local decode anywhere near IMPLAUSIBLE_TPS on this
+        hardware, so a computed rate above it is a statement about buffering
+        rather than about the model. Reported as unmeasurable instead: fewer
+        honest samples beat more invented ones, and the caller already knows
+        how to skip a None.
+        """
         tokens = self.usage_tokens if self.usage_tokens is not None else self.deltas
         ttft_ms = int((self.first - self.start) * 1000) if self.first else None
         gen = (end - self.first) if self.first else 0
-        tps = round(tokens / gen, 1) if gen > 0 and tokens else None
+        tps = None
+        # Two arrivals at minimum: a rate is measured BETWEEN token arrivals,
+        # and one of them times nothing.
+        if gen > 0 and tokens and self.deltas > 1:
+            rate = tokens / gen
+            if rate <= IMPLAUSIBLE_TPS:
+                tps = round(rate, 1)
         return ttft_ms, tps, tokens
 
 

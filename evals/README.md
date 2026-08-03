@@ -147,6 +147,25 @@ Helpfulness and style (not mechanically checkable), refusal behavior,
 multi-turn agent loops (fxlla has no agent loop), perplexity (needs logits,
 not a chat API), and cross-machine leaderboards.
 
+## What the speed numbers mean
+
+Probes are read a LINE at a time, not in fixed blocks. `read(8192)` blocks
+until it has that many bytes or the response ends, so any answer shorter than
+8 KB - which is most of them - was timed as though it had arrived in one
+piece: TTFT became the whole-response time and the decode window collapsed to
+microseconds. That is where a reported 1,865,386 tokens/s came from, and it
+dragged the median it was pooled into with it. Measured on the same small
+model before and after the change: TTFT 110 ms against 52 ms, and the rate
+across probes went from a 667..892 spread to 609..611.
+
+A rate is also reported as unmeasurable, rather than as a number, when the
+tokens did not arrive spread over time - one delta times nothing, and anything
+implying a decode faster than local hardware can do is describing the
+transport. Fewer honest samples beat more invented ones.
+
+Speed numbers from harness v3 and earlier are not comparable with these, which
+is what the version bump is for.
+
 ## Token budgets
 
 Every task declares a `max_tokens`, and the harness raises it to at least

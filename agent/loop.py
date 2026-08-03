@@ -439,6 +439,46 @@ def look(path, timeout_s):
     return generate.describe_image(path, question=LOOK, timeout_s=timeout_s)
 
 
+# Words that carry no scene: if one appears or vanishes between two
+# descriptions it says nothing about what changed in the picture.
+_FILLER = frozenset("""
+a an the this that these those and or but of in on at to for with from by is
+are was were be been being it its as into over under near behind above below
+there here show shows showing appears seems image picture photo photograph scene
+view background foreground left right side visible seen looks looking sits
+sitting stands standing placed positioned no not none nothing text
+""".split())
+
+
+def drifted(before, described):
+    """Nouns the description gained or lost that nobody asked about.
+
+    An edit is asked to change one thing, and it changes others. On the first
+    real edit run here the wall went yellow as requested - and the ground went
+    from "concrete" to "wooden", which nobody asked for and nothing flagged,
+    because the check only ever asks whether what was PROMISED turned up.
+
+    For an edit the before-description costs nothing: the input already exists
+    and the same eyes can read it. What appeared or vanished between the two
+    is then a fact plain code can extract, so no model judges anything here
+    either. Filler is dropped because a word that carries no scene says
+    nothing about the scene when it moves.
+
+    Returns (appeared, vanished). Reported, never acted on: a describer that
+    said "grey" once and "gray" the next time has drifted in its wording, not
+    in the image, and treating that as a defect would be the same mistake as
+    treating a missing word as proof of failure.
+    """
+    if not before:
+        return [], []          # nothing to compare against is not a change
+
+    def words(text):
+        return {w for w in re.findall(r"[a-z]+", (text or "").lower())
+                if len(w) > 3 and w not in _FILLER}
+    was, now = words(before), words(described)
+    return sorted(now - was), sorted(was - now)
+
+
 def check(expect, described):
     """Which committed words the description did not mention.
 
@@ -519,11 +559,28 @@ def run(intent, max_steps=MAX_STEPS, max_seconds=MAX_SECONDS, out=sys.stderr):
             last = record
             feedback = record
             continue
+        # For an edit, read the INPUT too. It costs one more look and it is the
+        # only way to see what the edit changed besides what was asked.
+        before = None
+        if chosen["action"] == "edit" and left() > 0:
+            try:
+                before = look(chosen["image"], timeout_s=max(30, min(300, left())))
+            except (RuntimeError, ValueError) as exc:
+                # Never let the extra look cost the render that already
+                # succeeded: this is commentary, not the verdict.
+                print("[do] could not read the original: %s" % _last_line(exc),
+                      file=out, flush=True)
         print("[do] rendered %s" % path, file=out, flush=True)
         described = look(path, timeout_s=max(30, min(600, left())))
         missing = check(chosen["expect"], described)
+        appeared, vanished = drifted(before, described) if before else ([], [])
+        if appeared or vanished:
+            print("[do] the description also changed: +%s -%s"
+                  % (", ".join(appeared[:6]) or "-", ", ".join(vanished[:6]) or "-"),
+                  file=out, flush=True)
         record = {"attempt": attempt, "plan": chosen, "output": path,
-                  "described": described, "missing": missing}
+                  "described": described, "missing": missing,
+                  "before": before, "appeared": appeared, "vanished": vanished}
         steps.append(record)
         last = record
         if not missing:
@@ -580,6 +637,16 @@ def report(result, out=sys.stdout):
     print("looked at it and saw:", file=out)
     for line in final["described"].splitlines():
         print("  %s" % line, file=out)
+    if final.get("appeared") or final.get("vanished"):
+        print(file=out)
+        print("The description also changed in ways nothing asked for:", file=out)
+        if final.get("appeared"):
+            print("  now mentions   %s" % ", ".join(final["appeared"][:10]), file=out)
+        if final.get("vanished"):
+            print("  no longer says %s" % ", ".join(final["vanished"][:10]), file=out)
+        print("Two descriptions differing is not proof the image changed - the "
+              "same eyes can word it differently. Worth a look, not a verdict.",
+              file=out)
     if final["missing"]:
         print(file=out)
         print("Not settled. The description never mentioned: %s."

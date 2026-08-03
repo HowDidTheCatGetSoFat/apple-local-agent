@@ -53,7 +53,16 @@ import sandbox
 #     definition), and plain concatenation broke on a third measured style:
 #     explanatory fragments that compile but are not self-contained, quoted
 #     while discussing the bug.
-EVAL_HARNESS_VERSION = 3
+# v4: the streamed probe reads a LINE at a time instead of an 8 KB block.
+#     read(8192) blocks until it has that many bytes or the response ends, so
+#     every answer shorter than 8 KB - which is most of them - was timed as if
+#     it arrived in one piece: TTFT became the whole-response time and the
+#     decode window collapsed to microseconds, which is where a reported
+#     1,865,386 tok/s came from. Measured on the same small model before and
+#     after: ttft 110 ms -> 52 ms, and the rate spread across probes went from
+#     667..892 to 609..611. Speed numbers from v3 and earlier are not
+#     comparable with these.
+EVAL_HARNESS_VERSION = 4
 
 EVAL_PORT = int(os.environ.get("FXLLA_EVAL_PORT", "8097"))
 FXLLA_BIN = os.environ.get("FXLLA_BIN", os.path.join(REPO_ROOT, "bin", "fxlla"))
@@ -509,7 +518,15 @@ def request_streamed(port, model_id, task_messages, max_tokens, tools=None, time
     with resp:
         buf = b""
         while True:
-            chunk = resp.read(8192)
+            # A LINE at a time, not a fixed block. `read(8192)` blocks until it
+            # has that many bytes or the response ends, so anything shorter
+            # than 8 KB - which is most probe answers - arrived in one piece as
+            # far as the clock could tell: the first-token stamp landed next to
+            # the last and the decode window collapsed to microseconds. That
+            # made TTFT the whole-response time and the rate a division by
+            # almost zero. readline returns as soon as one is available, which
+            # is the granularity SSE actually has.
+            chunk = resp.readline()
             if not chunk:
                 break
             sm.feed(chunk)

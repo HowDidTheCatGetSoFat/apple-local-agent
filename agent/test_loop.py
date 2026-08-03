@@ -286,6 +286,104 @@ class TestEditPlans(unittest.TestCase):
         self.assertNotIn("action", seen)
 
 
+class TestDrift(unittest.TestCase):
+    """What an edit changed besides what it was asked to change.
+
+    The check only ever asks whether what was PROMISED turned up, so an edit
+    that also altered something nobody mentioned passed clean.
+    """
+
+    def test_the_real_case_that_motivated_this(self):
+        # Measured on the first live edit: the wall went yellow as asked, and
+        # the ground went from concrete to wooden, which nothing flagged.
+        before = ("The image shows a red bicycle placed against a blue wall. "
+                  "The ground is a light grey concrete surface.")
+        after = ("The image shows a red bicycle placed against a bright yellow "
+                 "wall. The bicycle is positioned on a light gray wooden surface.")
+        appeared, vanished = loop.drifted(before, after)
+        self.assertIn("wooden", appeared)
+        self.assertIn("concrete", vanished)
+
+    def test_the_requested_change_shows_up_too(self):
+        # Not filtered out: the asked-for change is a change, and separating
+        # it would mean deciding what the user meant.
+        appeared, vanished = loop.drifted("a blue wall", "a yellow wall")
+        self.assertEqual((appeared, vanished), (["yellow"], ["blue"]))
+
+    def test_identical_descriptions_drift_in_neither_direction(self):
+        text = "A red bicycle against a blue wall on grey concrete."
+        self.assertEqual(loop.drifted(text, text), ([], []))
+
+    def test_filler_and_short_words_are_ignored(self):
+        # "the image shows" moving around says nothing about the image.
+        appeared, vanished = loop.drifted(
+            "The image shows a bicycle.", "This photo appears to show a bicycle.")
+        self.assertEqual((appeared, vanished), ([], []))
+
+    def test_case_and_punctuation_do_not_count_as_drift(self):
+        self.assertEqual(loop.drifted("A red Bicycle.", "a RED bicycle"), ([], []))
+
+    def test_no_before_means_no_drift_reported(self):
+        # A generate has nothing to compare against, and inventing a baseline
+        # would be worse than saying nothing.
+        self.assertEqual(loop.drifted(None, "a red bicycle"), ([], []))
+
+    def test_a_generate_never_reads_an_input(self):
+        looked = []
+        self._stub_for_drift(looked, action="generate")
+        loop.run("a red bicycle", max_steps=1, out=self.quiet)
+        self.assertEqual(len(looked), 1, "only the result should be read")
+
+    def test_an_edit_reads_the_input_as_well(self):
+        looked = []
+        self._stub_for_drift(looked, action="edit")
+        result = loop.run("make it yellow", max_steps=1, out=self.quiet)
+        self.assertEqual(len(looked), 2, "input and result")
+        self.assertIn("concrete", result["steps"][0]["vanished"])
+        self.assertIn("wooden", result["steps"][0]["appeared"])
+
+    def test_a_failed_read_of_the_input_does_not_lose_the_render(self):
+        # The extra look is commentary. It must never cost a render that
+        # already succeeded.
+        looked = []
+        self._stub_for_drift(looked, action="edit", raise_on_input=True)
+        result = loop.run("make it yellow", max_steps=1, out=self.quiet)
+        self.assertTrue(result["settled"])
+        self.assertEqual(result["output"], "/tmp/edited.png")
+
+    def _stub_for_drift(self, looked, action, raise_on_input=False):
+        import tempfile
+        directory = tempfile.mkdtemp()
+        png = os.path.join(directory, "shot.png")
+        open(png, "wb").close()
+        self.quiet = open(os.devnull, "w")
+        self.addCleanup(self.quiet.close)
+        real = generate.MODELS
+        generate.MODELS = {"fast": {"caps": {"seed"}, "steps": 8, "note": ""}}
+        self.addCleanup(setattr, generate, "MODELS", real)
+        plan = ({"action": "edit", "image": png, "prompt": "yellow",
+                 "expect": ["yellow"]} if action == "edit" else
+                {"model": "fast", "prompt": "a bike", "expect": ["yellow"]})
+
+        def fake_look(path, timeout_s):
+            looked.append(path)
+            if path == png:
+                if raise_on_input:
+                    raise RuntimeError("the vision model returned nothing")
+                return "a bicycle against a blue wall on grey concrete"
+            return "a bicycle against a yellow wall on a wooden surface"
+
+        saved = (loop.plan, generate.generate_image, generate.generate_edit, loop.look)
+        loop.plan = lambda *a, **k: loop._validate(plan, editable=[png])
+        generate.generate_image = lambda **kw: "/tmp/made.png"
+        generate.generate_edit = lambda **kw: "/tmp/edited.png"
+        loop.look = fake_look
+        self.addCleanup(lambda: (setattr(loop, "plan", saved[0]),
+                                 setattr(generate, "generate_image", saved[1]),
+                                 setattr(generate, "generate_edit", saved[2]),
+                                 setattr(loop, "look", saved[3])))
+
+
 class TestCheck(unittest.TestCase):
     def test_a_mentioned_word_is_not_missing(self):
         self.assertEqual(loop.check(["cat"], "A CAT sitting on a mat."), [])
