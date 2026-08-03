@@ -5,6 +5,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 
 ## [Unreleased]
 
+### Added
+- Two 27B models on Qwen3.5 in the catalog, chosen because together they are an
+  experiment. `qwythos` was trained without alignment; `abliterated-27b` is the
+  same base with the refusal direction orthogonalized out. Same family, opposite
+  routes to the same property, which is what makes the pair worth having.
+  The catalog lists repository ids, not weights - whoever pulls one accepts that
+  model's terms - so a row here carries no license of its own. `qwythos` is
+  Apache-2.0 on the weights and its publisher describes the training as
+  distilled from Claude traces; the note says so rather than leaving it to be
+  discovered.
+- `candor`, a fifth eval dimension: whether a model declines what cannot be
+  done instead of complying. Four traps with four controls - a fabricated
+  stdlib symbol against a real one, a self-contradicting specification against
+  a satisfiable one, a request to process data never given against one that
+  was. The pairing is the design: a model answering FAKE to everything scores
+  perfectly on the traps alone, and format failure shows up on control and trap
+  together while lost candor shows up only on the trap. Refusing correctly is a
+  capability, and nothing here had ever asked for it - which is exactly what a
+  model with its refusal direction surgically removed should be tested on.
+
 ### Changed
 - A gguf build carrying a multi-token-prediction head is served with
   `--spec-type draft-mtp`, so it drafts against itself with no second model

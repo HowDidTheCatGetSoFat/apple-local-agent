@@ -170,9 +170,10 @@ repo, `fxlla pull <repo> --downloader hf` fetches it with the Hugging Face CLI
 
 Rather than trusting the catalog's prose, measure. `fxlla eval` runs every
 cached dev/agentic/max model - one at a time, each on a cold dedicated
-server - through 30 mechanically checked tasks (code executed against asserts
+server - through 38 mechanically checked tasks (code executed against asserts
 in a sandbox, structured tool calls, instruction following, long-context
-recall) and reports them next to cold cost, TTFT, decode and prefill speed,
+recall, and candor: whether it declines what cannot be done instead of
+complying) and reports them next to cold cost, TTFT, decode and prefill speed,
 peak RSS, and tokens spent:
 
 ```sh
@@ -182,7 +183,10 @@ fxlla eval --quick          # pipeline check in ~2 minutes
 ```
 
 No model judges another model's prose: every check is execution, parsing, or
-string mechanics, so scores cannot depend on a judge. Each run prints a task
+string mechanics, so scores cannot depend on a judge. Every task gets at least
+2048 output tokens whatever it declares, because a reasoning model spends
+tokens thinking before it answers and a budget sized for the answer alone is
+gone before the answer starts - which scores an empty reply as incapacity. Each run prints a task
 fingerprint and a harness version; two runs are comparable exactly when both
 match, and scores are per-machine. The report states its own noise floor. The
 details - what is measured, the sandbox, why the text-channel tool-call column

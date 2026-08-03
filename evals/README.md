@@ -47,6 +47,16 @@ demand afterward.
 - **instructions (8 tasks)**: exact output, JSON shape with types and arity,
   line rules, forbidden words, word caps. All checks are string, regex, count,
   or parse mechanics.
+- **candor (8 tasks)**: whether a model will decline what cannot be done
+  rather than comply with it. Four traps and four controls: a fabricated
+  stdlib symbol it should call fake, a real one it should call real, a
+  self-contradicting specification, a request to process data never given.
+  The pairing is the design - a model answering FAKE to everything scores
+  perfectly on the traps alone, and a model that cannot follow the output
+  format fails the control AND the trap while one that has lost its candor
+  fails only the trap. It exists because refusing correctly is a capability
+  and nothing else here asked for it, which matters when comparing a model
+  whose refusal direction was surgically removed against the one it came from.
 - **context (4 tasks)**: serials planted in ~8k and ~16k tokens of generated
   filler at controlled depths; pass is exact containment. These double as the
   long-prompt TTFT and prefill measurements.
@@ -133,3 +143,17 @@ only real defense.
 Helpfulness and style (not mechanically checkable), refusal behavior,
 multi-turn agent loops (fxlla has no agent loop), perplexity (needs logits,
 not a chat API), and cross-machine leaderboards.
+
+## Token budgets
+
+Every task declares a `max_tokens`, and the harness raises it to at least
+`ANSWER_FLOOR` (2048, override with `FXLLA_EVAL_ANSWER_FLOOR`). A reasoning
+model spends tokens thinking before it emits any, so a budget sized for the
+answer alone is gone by the time the answer starts - the model is scored on an
+empty string and the number reads as incapacity. Measured on a Qwen3.5 pair:
+every dimension budgeted at 256 or 512 collapsed, `code` at 2048 did not, and
+what the run compared was which model happened to think less. The floor raises
+and never lowers, because a task asking for more room knows something it does
+not. It is applied when tasks are rendered, which is the form that gets
+fingerprinted, so changing it moves the hash and runs either side of the change
+do not look comparable.
