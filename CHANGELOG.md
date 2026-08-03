@@ -6,6 +6,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Changed
+- A gguf build carrying a multi-token-prediction head is served with
+  `--spec-type draft-mtp`, so it drafts against itself with no second model
+  involved. Detected from the header key rather than the filename, because
+  publishers ship both builds of the same weights at the same quant and the
+  name is a convention. Measured on that pair, same context and flags, same
+  prompts: 40.9 against 21.7 tokens/s counting, 31.9 against 20.6 on code,
+  28.5 against 20.7 on prose. The plain build is flat across all three because
+  it is memory bound; the speculating one tracks how guessable the next tokens
+  are, which is the shape the mechanism predicts and the reason to believe the
+  numbers. Through the gateway at a 262k window: 36.0 on code, 28.1 on prose.
+  The flag was verified against the real model before any of this was wired -
+  llama.cpp logs "creating MTP draft context against the target model" - since
+  a flag existing and a flag working are different claims.
+- `FXLLA_KEEP_WARM` reaches the gateway. It said "auto-stop after N idle
+  minutes" and was read by the single-model server alone, so the multi-model
+  path - the one most people run - freed memory only when the NEXT load would
+  not fit, while /health reported an idle counter nothing acted on. Two 27B
+  models held 45 GB between them after a quarter of an hour of silence here.
+  A reaper unloads a backend past the threshold now, deciding under the lock
+  and terminating outside it so a slow exit cannot block an arriving request.
+  The value also had to be added to the explicit list `fxlla serve` passes the
+  gateway: config.env assigns without exporting, so a user's setting never
+  arrived and the gateway silently used its own default. Same omission that
+  had swallowed `FXLLA_AGENT_MODEL`, now covered by a test over both.
 - `FXLLA_CTX` is a ceiling now, not the window itself. Every gguf model was
   served the same number, which was wrong in both directions: it gave a 27B
   trained to 262k an 8k window, and asked a 7B for more than it had ever seen

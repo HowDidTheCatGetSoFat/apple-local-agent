@@ -942,6 +942,7 @@ cmd_serve() {
     FXLLA_GATEWAY_BUDGET_MB="${FXLLA_GATEWAY_BUDGET_MB:-}" \
     FXLLA_STATS_FILE="$STATS_FILE" \
     FXLLA_CTX="$FXLLA_CTX" \
+    FXLLA_KEEP_WARM="$FXLLA_KEEP_WARM" \
     FXLLA_BIN="$SELF" \
     nohup python3 "$REPO_ROOT/gateway/fxlla_gateway.py" > "$GATEWAY_LOG" 2>&1 &
   echo $! > "$GATEWAY_PID"
@@ -1009,17 +1010,24 @@ cmd_backend() {
     # advertises the STRETCHED window, so -c 0 buys a quarter of a million
     # tokens of degraded attention nobody asked for. The same reader feeds the
     # gateway's /v1/models, so the meter opencode runs matches what is served.
-    local ctx="$FXLLA_CTX" rope_off=0 derived
+    local ctx="$FXLLA_CTX" rope_off=0 mtp=0 derived
     derived="$(python3 "$REPO_ROOT/gateway/ggufmeta.py" "$dest" "${FXLLA_CTX:-0}" 2>/dev/null || true)"
     if [ -n "$derived" ]; then
-      ctx="${derived%% *}"; rope_off="${derived##* }"
+      # shellcheck disable=SC2086  # three fields, positionally
+      set -- $derived
+      ctx="$1"; rope_off="$2"; mtp="$3"
     fi
     # Rope scaling off when serving at or below the trained window: the file
     # bakes it in, llama.cpp honours it at every size, and below the original
     # length it is pure loss.
     local rope=""; [ "$rope_off" = 1 ] && rope="--rope-scaling none"
+    # A build carrying a multi-token-prediction head can draft against itself,
+    # no second model involved. Measured on the pair of this one: 40.9 against
+    # 21.7 tokens/s on predictable text, 31.9 against 20.6 on code. Off unless
+    # the head is actually in the file, since the flag means nothing without it.
+    local spec=""; [ "$mtp" = 1 ] && spec="--spec-type draft-mtp"
     # shellcheck disable=SC2086
-    exec llama-server --model "$dest/$entry" --alias "$name" --host 127.0.0.1 --port "$port" -ngl "$FXLLA_NGL" -c "$ctx" $rope --jinja ${mm:+--mmproj "$mm"} $FXLLA_SERVER_ARGS
+    exec llama-server --model "$dest/$entry" --alias "$name" --host 127.0.0.1 --port "$port" -ngl "$FXLLA_NGL" -c "$ctx" $rope $spec --jinja ${mm:+--mmproj "$mm"} $FXLLA_SERVER_ARGS
   else
     # shellcheck disable=SC2086
     exec mlx_lm.server --model "$dest" --host 127.0.0.1 --port "$port" $FXLLA_SERVER_ARGS

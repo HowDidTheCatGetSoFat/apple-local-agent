@@ -41,11 +41,22 @@ else
   fail "all aria2c invocations carry the stall guard ($guarded of $calls)"
 fi
 
-# and the guard is not a no-op: aria2's own default for this is 0
-if grep -qE 'ARIA_STALL_GUARD=.*--lowest-speed-limit=[1-9]' "$ROOT/lib/core.sh"; then
-  pass "the guard sets a nonzero lowest-speed-limit"
+# a dead connection is caught by the timeout, which IS retryable
+if grep -qE 'ARIA_STALL_GUARD=.*--timeout=[0-9]' "$ROOT/lib/core.sh"; then
+  pass "a silent connection times out"
 else
-  fail "the guard sets a nonzero lowest-speed-limit"
+  fail "a silent connection times out"
+fi
+
+# and NOT by a speed floor. aria2 treats --lowest-speed-limit as a terminal
+# abort that --max-tries does not cover, so a 22 GB transfer averaging 14 MiB/s
+# was killed outright by one dip to 96 KB/s. Pinned so it does not come back.
+# Matched on the assignment, not the file: the comment above it names the flag
+# in order to explain why it is gone.
+if grep -E '^ARIA_STALL_GUARD=' "$ROOT/lib/core.sh" | grep -q 'lowest-speed-limit'; then
+  fail "no speed floor: it aborts a healthy download and does not retry"
+else
+  pass "no speed floor: it aborts a healthy download and does not retry"
 fi
 
 # retries are unlimited: these are model weights, and giving up partway means

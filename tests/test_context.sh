@@ -26,12 +26,13 @@ chmod +x "$BIN/llama-server"
 
 # Real GGUF headers, written byte by byte: the point is that the header is
 # parsed, and an empty file would only ever exercise the fallback.
-write_gguf() { # <path> <context> [original_context] [rope_factor]
+write_gguf() { # <path> <context> [original_context] [rope_factor] [mtp_layers]
   python3 - "$@" <<'PY'
 import struct, sys
 path, ctx = sys.argv[1], int(sys.argv[2])
 original = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
 factor = float(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
+mtp = int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5] else None
 
 def s(text):
     raw = text.encode()
@@ -44,6 +45,9 @@ if original:
 if factor:
     pairs.append(s("arch.rope.scaling.factor") + struct.pack("<I", 6)
                  + struct.pack("<f", factor))
+if mtp:
+    pairs.append(s("arch.nextn_predict_layers") + struct.pack("<I", 4)
+                 + struct.pack("<I", mtp))
 head = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 0) + struct.pack("<Q", len(pairs))
 open(path, "wb").write(head + b"".join(pairs))
 PY
@@ -96,6 +100,24 @@ out="$(FXLLA_CTX=262144 launch small)"
 case "$out" in
   *--rope-scaling*) fail "no --rope-scaling for a model without one";;
   *) pass "no --rope-scaling for a model without one";;
+esac
+
+# --- a build with an MTP head drafts against itself --------------------------
+# Two builds of the same weights at the same quant ship side by side, and the
+# file name is a convention while the header key is the fact. Measured on the
+# real pair: 40.9 against 21.7 tokens/s on predictable text, 31.9 against 20.6
+# on code. Without the head the flag promises llama.cpp something it cannot do.
+d="$(model speculating)"; write_gguf "$d/weights.gguf" 32768 "" "" 1
+out="$(FXLLA_CTX=32768 launch speculating)"
+case "$out" in
+  *"--spec-type draft-mtp"*) pass "an MTP build is served with self-speculation";;
+  *) fail "an MTP build is served with self-speculation (got: $out)";;
+esac
+
+out="$(FXLLA_CTX=32768 launch small)"
+case "$out" in
+  *--spec-type*) fail "no speculation flag for a build without the head";;
+  *) pass "no speculation flag for a build without the head";;
 esac
 
 # --- an unreadable header falls back to the ceiling --------------------------

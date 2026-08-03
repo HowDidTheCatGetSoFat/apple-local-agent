@@ -26,6 +26,12 @@ Config via environment:
                                 allocates the KV cache up front. Reported per
                                 model as "context" in /v1/models, from the same
                                 reader that starts the backend.
+  FXLLA_KEEP_WARM               idle minutes before a resident backend is
+                                unloaded (default 10, 0 = never). The same
+                                variable and units the single-model server
+                                uses, which used to be the only one honouring
+                                it - here the memory was freed only when the
+                                next load would not fit.
   FXLLA_STATS_FILE              passive metrics time-series (default: the CLI's
                                 stats.jsonl under the state dir)
   FXLLA_VISION_ROUTING          0 to stop reading images for models that cannot
@@ -394,7 +400,7 @@ def model_context(alias):
         # what is actually served rather than a number that merely used to be
         # passed. Falls back to the cap when the header cannot be read, which
         # is what the backend falls back to as well.
-        served, _rope = ggufmeta.serve_plan(d, SERVED_GGUF_CTX)
+        served, _rope, _mtp = ggufmeta.serve_plan(d, SERVED_GGUF_CTX)
         return served or SERVED_GGUF_CTX
     try:
         with open(os.path.join(d, "config.json"), encoding="utf-8") as fh:
@@ -613,6 +619,41 @@ class Manager:
                      "idle_s": int(time.monotonic() - b.last_used)}
                     for b in self.backends.values()]
 
+    def reap_idle(self, idle_s):
+        """Unload backends untouched for longer than idle_s. Returns aliases.
+
+        The gateway used to free memory only under pressure - a model was
+        evicted when the NEXT load would not fit, and otherwise sat there
+        forever. FXLLA_KEEP_WARM said "auto-stop after N idle minutes" and was
+        read by `fxlla on` alone, so the multi-model path, which is the one
+        most people run, quietly ignored it while /health reported an idle
+        counter that nothing acted on. Two 27B models held 45 GB between them
+        after a quarter of an hour of silence here.
+
+        Decided under the lock, terminated outside it, the way unload_all
+        does: a slow exit must not block the request that is arriving.
+        """
+        if idle_s <= 0:
+            return []
+        now = time.monotonic()
+        with self.lock:
+            victims = [b for b in self.backends.values()
+                       if now - b.last_used >= idle_s]
+            for b in victims:
+                del self.backends[b.alias]
+        for b in victims:
+            try:
+                b.proc.terminate()
+                try:
+                    b.proc.wait(timeout=10)
+                except Exception:
+                    b.proc.kill()
+            except Exception:
+                pass
+            log("unloaded %s (idle %ds, %d MB)"
+                % (b.alias, int(now - b.last_used), b.size_mb))
+        return [b.alias for b in victims]
+
     def unload_all(self):
         """Terminate every resident backend and clear the registry, freeing
         their memory. The gateway keeps serving and reloads a model on the next
@@ -819,6 +860,25 @@ def _term(signum, frame):
     raise KeyboardInterrupt()
 
 
+# Idle minutes before a resident backend is unloaded. Same name and same units
+# as the single-model server's watchdog, because a user who set it once should
+# not have to discover that it governed only one of the two ways to run this.
+KEEP_WARM_S = int(os.environ.get("FXLLA_KEEP_WARM", "10") or 0) * 60
+
+# Checked often enough that "10 minutes" is not really 15, cheap enough to
+# ignore: it walks a dict of at most a handful of entries.
+_REAP_INTERVAL_S = 30
+
+
+def _reaper():
+    while True:
+        time.sleep(_REAP_INTERVAL_S)
+        try:
+            MANAGER.reap_idle(KEEP_WARM_S)
+        except Exception as exc:      # never let the reaper kill the gateway
+            log("reaper: %s" % exc)
+
+
 def main():
     signal.signal(signal.SIGTERM, _term)
     if not STORE or not os.path.isdir(MODELS_DIR):
@@ -826,6 +886,9 @@ def main():
         sys.exit(1)
     log("store=%s budget=%d MB backends from :%d" % (STORE, BUDGET_MB, PORT_BASE))
     log("models: %s" % (", ".join(downloaded_models().keys()) or "(none)"))
+    if KEEP_WARM_S > 0:
+        log("keep-warm: unloading a backend after %d idle min" % (KEEP_WARM_S // 60))
+        threading.Thread(target=_reaper, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     log("listening on http://%s:%d/v1" % (HOST, PORT))
     try:

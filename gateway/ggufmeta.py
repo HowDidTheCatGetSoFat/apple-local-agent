@@ -133,6 +133,24 @@ def rope_is_stretched(path):
     return any(float(v) > 1.0 for v in meta.values())
 
 
+def has_mtp_head(path):
+    """Whether this file carries a multi-token-prediction head.
+
+    Some publishers ship two builds of the same weights at the same quant, one
+    with the head and one without, and the only difference in the header is
+    this key - the file names are a convention, not a guarantee. Measured on
+    the pair here: 40.9 against 21.7 tokens/s on predictable text, 31.9 against
+    20.6 on code. The plain build is flat across prompts because it is memory
+    bound; the MTP one varies with how guessable the next tokens are, which is
+    what speculation is.
+    """
+    try:
+        meta = metadata(path, (".nextn_predict_layers",))
+    except (OSError, ValueError, EOFError, KeyError, struct.error):
+        return False
+    return any(int(v) > 0 for v in meta.values())
+
+
 def _entry(directory):
     """The weights file in a model directory, never the projector."""
     marker = os.path.join(directory, ".entry")
@@ -150,31 +168,33 @@ def _entry(directory):
 
 
 def serve_plan(directory, cap):
-    """(context, turn_rope_scaling_off) for serving the model in `directory`.
+    """(context, turn_rope_scaling_off, use_mtp) for the model in `directory`.
 
-    `cap` bounds it because the window is paid for in RAM whether or not it is
-    used: llama-server allocates the KV cache up front, and a quarter of a
-    million tokens costs gigabytes. Returns (None, False) when the file cannot
-    be read, which leaves the caller on its own default rather than guessing.
+    `cap` bounds the context because the window is paid for in RAM whether or
+    not it is used: llama-server allocates the KV cache up front, and a quarter
+    of a million tokens costs gigabytes. Returns (None, False, False) when the
+    file cannot be read, which leaves the caller on its own default rather than
+    guessing.
     """
     path = _entry(directory) if os.path.isdir(directory) else directory
     if not path or not os.path.isfile(path):
-        return None, False
+        return None, False, False
+    mtp = has_mtp_head(path)
     trained = trained_context(path)
     if not trained:
-        return None, False
+        return None, False, mtp
     served = min(trained, cap) if cap else trained
     # Only worth disabling where the stretch is not being used. Above the
     # trained window the scaling is the whole reason the context is reachable.
-    return served, rope_is_stretched(path) and served <= trained
+    return served, rope_is_stretched(path) and served <= trained, mtp
 
 
 if __name__ == "__main__":
     # Called from bin/fxlla, which is shell and cannot read a binary header.
-    # Prints "<context> <rope-off:0|1>", or nothing at all when unreadable so
-    # the caller keeps its own default.
+    # Prints "<context> <rope-off:0|1> <mtp:0|1>", or nothing at all when
+    # unreadable so the caller keeps its own default.
     directory = sys.argv[1]
     cap = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 0
-    context, rope_off = serve_plan(directory, cap)
+    context, rope_off, mtp = serve_plan(directory, cap)
     if context:
-        print("%d %d" % (context, 1 if rope_off else 0))
+        print("%d %d %d" % (context, 1 if rope_off else 0, 1 if mtp else 0))

@@ -208,6 +208,67 @@ class _TermProc:
         pass
 
 
+class TestReapIdle(unittest.TestCase):
+    """Unloading a backend nobody has used for a while.
+
+    The gateway freed memory only under pressure: a model was evicted when the
+    NEXT load would not fit, and otherwise stayed forever. FXLLA_KEEP_WARM was
+    read by the single-model server alone, so the multi-model path ignored it
+    while /health reported an idle counter nothing acted on.
+    """
+
+    def _manager(self, ages):
+        m = gw.Manager()
+        procs = {}
+        now = time.monotonic()
+        for alias, age in ages.items():
+            procs[alias] = _TermProc()
+            b = gw.Backend(alias, 8100 + len(procs), procs[alias], 10, alias, "gguf")
+            b.last_used = now - age
+            m.backends[alias] = b
+        return m, procs
+
+    def test_an_idle_backend_is_unloaded(self):
+        m, procs = self._manager({"cold": 700})
+        self.assertEqual(m.reap_idle(600), ["cold"])
+        self.assertEqual(m.backends, {})
+        self.assertTrue(procs["cold"].terminated and procs["cold"].waited)
+
+    def test_a_recently_used_backend_is_left_alone(self):
+        # The whole risk of a reaper: unloading what someone is about to use,
+        # which for a 22 GB model costs minutes to undo.
+        m, procs = self._manager({"warm": 30})
+        self.assertEqual(m.reap_idle(600), [])
+        self.assertIn("warm", m.backends)
+        self.assertFalse(procs["warm"].terminated)
+
+    def test_only_the_idle_ones_go(self):
+        m, _ = self._manager({"cold": 900, "warm": 5, "older": 1200})
+        self.assertEqual(set(m.reap_idle(600)), {"cold", "older"})
+        self.assertEqual(list(m.backends), ["warm"])
+
+    def test_exactly_at_the_threshold_counts_as_idle(self):
+        m, _ = self._manager({"borderline": 600})
+        self.assertEqual(m.reap_idle(600), ["borderline"])
+
+    def test_zero_means_never(self):
+        # 0 is the documented "keep them forever" value, and reaping on it
+        # would unload every backend on the first tick.
+        m, procs = self._manager({"a": 99999})
+        self.assertEqual(m.reap_idle(0), [])
+        self.assertIn("a", m.backends)
+        self.assertFalse(procs["a"].terminated)
+
+    def test_reaping_an_empty_gateway_is_a_noop(self):
+        self.assertEqual(gw.Manager().reap_idle(600), [])
+
+    def test_the_gateway_reads_the_same_variable_as_the_cli(self):
+        # A user who set FXLLA_KEEP_WARM once should not have to discover it
+        # governed only one of the two ways to run this.
+        self.assertEqual(gw.KEEP_WARM_S % 60, 0)
+        self.assertGreaterEqual(gw.KEEP_WARM_S, 0)
+
+
 class TestUnloadAll(unittest.TestCase):
     def test_unload_frees_waits_and_reports(self):
         m = gw.Manager()

@@ -117,6 +117,20 @@ if grep -qF 'export $FXLLA_AGENT_ENV' "$FXLLA"; then pass "cmd_do exports the ag
 else fail "cmd_do exports the agent env"; fi
 
 # 'do' quoted: unquoted it reads as the loop keyword to shellcheck (SC1010).
+# --- the gateway is handed the knobs it reads -------------------------------
+# `fxlla serve` passes an explicit list, and config.env assigns with
+# `: "${VAR:=default}"` - which sets without exporting. A name missing from
+# that list means the user's value never arrives and the gateway silently
+# falls back to its own default, which is how FXLLA_AGENT_MODEL was lost.
+launch_block="$(grep -B 14 'nohup python3 .*fxlla_gateway.py' "$FXLLA")"
+for var in FXLLA_CTX FXLLA_KEEP_WARM FXLLA_STATS_FILE FXLLA_STORE; do
+  if grep -qE "(^|[[:space:]])$var=" <<< "$launch_block"; then
+    pass "serve forwards $var to the gateway"
+  else
+    fail "serve forwards $var to the gateway"
+  fi
+done
+
 out="$(FXLLA_STORE=/tmp XDG_CONFIG_HOME="$CFG" bash "$FXLLA" 'do' --help 2>&1 || true)"
 if grep -qi "max-steps" <<< "$out"; then pass "do is wired to the loop"
 else fail "do is wired to the loop (got: $(tail -1 <<< "$out"))"; fi

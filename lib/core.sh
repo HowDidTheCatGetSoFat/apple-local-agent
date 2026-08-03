@@ -87,23 +87,25 @@ mkdir -p "$STATE_DIR"
 # bytes/s for aria2c from the configured megabits
 rate_bytes() { echo $(( FXLLA_RATE_MBIT * 1000000 / 8 )); }
 
-# Drop a connection that has stopped delivering, and keep retrying.
+# Survive a connection that dies mid-transfer, without inventing a reason to
+# kill one that is merely having a bad minute.
 #
-# aria2 defaults --lowest-speed-limit to 0, which means it NEVER abandons a slow
-# connection - and a socket that stays OPEN while delivering nothing is not a
-# timeout, so nothing else rescues it either. A 22 GB pull here sat at 2.0 GB for
-# minutes with the connection established and zero bytes moving, and would have
-# sat there indefinitely.
+# --timeout is the mechanism that matters: a socket delivering NOTHING for this
+# long errors, and that error is retryable, so aria2 reconnects and resumes.
 #
-# 128 KB/s is the threshold because it has to separate "stalled" from "genuinely
-# slow", not from "fast": the rate cap is a ceiling, not a promise, and a real
-# transfer can legitimately run far below it. Anything under this for the timeout
-# window is a hang, not a bad day.
+# There is deliberately no --lowest-speed-limit here, and that is a correction
+# rather than an omission. It was set to 128K on the theory that anything slower
+# was a hang. A 22 GB pull running at 14 MiB/s average dipped to 96 KB/s for a
+# moment and aria2 killed it outright - that abort is terminal, NOT covered by
+# --max-tries, so the download simply ended. The rule was added for a stall that
+# was never confirmed (a progress reading misinterpreted; the transfer was at the
+# full 200 Mbps all along) and the only thing it ever caught was a healthy
+# download. A rejection rule needs both names: the failure it catches and the
+# legitimate case it must not. This one only ever had the second.
 #
-# Unlimited retries on purpose. These are model weights: the download either
-# completes or the user starts again from the beginning, and giving up after five
-# tries chooses the second on their behalf.
-ARIA_STALL_GUARD="--lowest-speed-limit=128K --timeout=60 --connect-timeout=30 --max-tries=0 --retry-wait=5"
+# Unlimited retries on purpose. These are model weights: giving up after five
+# tries chooses "start the 22 GB again" on the user's behalf.
+ARIA_STALL_GUARD="--timeout=60 --connect-timeout=30 --max-tries=0 --retry-wait=5"
 
 # Consent for a large download.
 #
