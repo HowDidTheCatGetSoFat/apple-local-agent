@@ -12,16 +12,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   routes to the same property, which is what makes the pair worth having.
   The catalog lists repository ids, not weights - whoever pulls one accepts that
   model's terms - so a row here carries no license of its own. `qwythos` is
-  Apache-2.0 on the weights and its publisher describes the training as
-  distilled from Claude traces; the note says so rather than leaving it to be
-  discovered.
+  Apache-2.0 on the weights. Its own card says it shares a curriculum with the
+  publisher's 9B, and that 9B's card describes the curriculum as distilled from
+  Claude traces - the note states it that way, one model removed, because the
+  27B card does not say it directly.
 - `candor`, a fifth eval dimension: whether a model declines what cannot be
   done instead of complying. Four traps with four controls - a fabricated
   stdlib symbol against a real one, a self-contradicting specification against
   a satisfiable one, a request to process data never given against one that
   was. The pairing is the design: a model answering FAKE to everything scores
-  perfectly on the traps alone, and format failure shows up on control and trap
-  together while lost candor shows up only on the trap. Refusing correctly is a
+  perfectly on the traps alone. Format failure shows up on control and trap
+  together for the three exact-match pairs; the impossible/possible pair is the
+  exception, since its control runs the code and extraction drops prose, so a
+  chatty model can fail that trap by itself. Refusing correctly is a
   capability, and nothing here had ever asked for it - which is exactly what a
   model with its refusal direction surgically removed should be tested on.
 
@@ -35,7 +38,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   28.5 against 20.7 on prose. The plain build is flat across all three because
   it is memory bound; the speculating one tracks how guessable the next tokens
   are, which is the shape the mechanism predicts and the reason to believe the
-  numbers. Through the gateway at a 262k window: 36.0 on code, 28.1 on prose.
+  numbers. Through the gateway at a 262k window the MTP build does 36.0 on
+  code, but that figure has no matched baseline - the head-to-head numbers
+  above are the ones to compare, and both sides of those were taken at 32k.
   The flag was verified against the real model before any of this was wired -
   llama.cpp logs "creating MTP draft context against the target model" - since
   a flag existing and a flag working are different claims.

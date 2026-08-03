@@ -52,9 +52,12 @@ demand afterward.
   stdlib symbol it should call fake, a real one it should call real, a
   self-contradicting specification, a request to process data never given.
   The pairing is the design - a model answering FAKE to everything scores
-  perfectly on the traps alone, and a model that cannot follow the output
-  format fails the control AND the trap while one that has lost its candor
-  fails only the trap. It exists because refusing correctly is a capability
+  perfectly on the traps alone. For the three exact-match pairs it also
+  separates format failure from lost candor, because both halves are equally
+  strict about stray prose. The impossible/possible pair does NOT balance that
+  way: the trap is an exact match while the control runs the code, and code
+  extraction deliberately discards surrounding text. A merely chatty model can
+  fail that trap alone, so read it with the other three rather than on its own. It exists because refusing correctly is a capability
   and nothing else here asked for it, which matters when comparing a model
   whose refusal direction was surgically removed against the one it came from.
 - **context (4 tasks)**: serials planted in ~8k and ~16k tokens of generated

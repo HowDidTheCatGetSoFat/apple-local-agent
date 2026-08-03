@@ -386,7 +386,19 @@ cmd_pull() {
     # and a plain head -1 could launch llama-server on the projector.
     local weights; weights="$(echo "$sel" | grep -iv '^mmproj' || true)"
     local entry; entry="$(echo "$weights" | grep -- '-00001-of-' | head -1 || true)"
-    [ -z "$entry" ] && entry="$(echo "$weights" | head -1)"
+    if [ -z "$entry" ]; then
+      # An ambiguous --quant is a substring, and a substring matches more than
+      # one build in repos that ship variants at the same quant: Q6_K hits both
+      # `<model>-Q6_K.gguf` and `<model>-MTP-Q6_K.gguf`. Downloading both is
+      # twice the bytes, and .entry then silently became whichever sorted
+      # first - so the model you ran was chosen by alphabetical accident.
+      if [ "$(echo "$weights" | grep -c .)" -gt 1 ]; then
+        warn "'--quant $quant' matches more than one build:"
+        echo "$weights" | while IFS= read -r l; do echo "  $l"; done >&2
+        die "Narrow it: pass enough of the file name to select exactly one."
+      fi
+      entry="$(echo "$weights" | head -1)"
+    fi
   else
     sel="$(echo "$listing" | awk -F'\t' '{print $2}')"
   fi
@@ -981,6 +993,35 @@ cmd_unserve() {
 }
 
 # internal: run one model server in the foreground on a port (spawned by the gateway)
+# The llama-server flags derived from the weights themselves, in the ONE place
+# that decides them. There were two copies of this launch - the gateway's
+# backend and `fxlla on` - and they had already drifted: the second never
+# passed the projector, so a vision model started with `fxlla on` served
+# text-only and dropped every image, and it never got the trained context
+# window, the rope-scaling override or MTP speculation either. Echoes a flag
+# string; the caller word-splits it deliberately.
+_llama_flags() {
+  local dest="$1" mm="" f ctx="$FXLLA_CTX" rope_off=0 mtp=0 derived
+  for f in "$dest"/mmproj*f16*.gguf "$dest"/mmproj*.gguf; do
+    [ -e "$f" ] && { mm="$f"; break; }
+  done
+  derived="$(python3 "$REPO_ROOT/gateway/ggufmeta.py" "$dest" "${FXLLA_CTX:-0}" 2>/dev/null || true)"
+  if [ -n "$derived" ]; then
+    # shellcheck disable=SC2086  # three fields, read positionally
+    set -- $derived
+    ctx="$1"; rope_off="$2"; mtp="$3"
+  fi
+  printf -- '-c %s' "$ctx"
+  # Below the trained window a baked-in rope stretch is pure loss, and
+  # llama.cpp applies it at every size unless told not to.
+  [ "$rope_off" = 1 ] && printf -- ' --rope-scaling none'
+  # Only when the head is in the file. FXLLA_SPEC_MTP=0 turns it off for a
+  # llama-server too old to know the flag, which otherwise exits at startup.
+  [ "$mtp" = 1 ] && [ "${FXLLA_SPEC_MTP:-1}" != 0 ] && printf -- ' --spec-type draft-mtp'
+  [ -n "$mm" ] && printf -- ' --mmproj %s' "$mm"
+  printf '\n'
+}
+
 cmd_backend() {
   require_store
   local q="${1:-}" port="${2:-}"
@@ -998,36 +1039,8 @@ cmd_backend() {
     # text-only and every image in a request is dropped. Discovered from disk
     # rather than declared, the way .entry already is. f16 preferred where the
     # repo ships both - the projector is small and it is the better one.
-    local mm=""
-    for f in "$dest"/mmproj*f16*.gguf "$dest"/mmproj*.gguf; do
-      [ -e "$f" ] && { mm="$f"; break; }
-    done
-    # The window each model was TRAINED for, capped by FXLLA_CTX, read from the
-    # file itself. One number for every gguf was wrong in both directions: it
-    # served a 27B with a 262k window at 8k, and asked a 7B for more than it
-    # was trained for. llama-server would do this on its own with -c 0, but its
-    # answer is whatever the file advertises - and a model shipped with YaRN
-    # advertises the STRETCHED window, so -c 0 buys a quarter of a million
-    # tokens of degraded attention nobody asked for. The same reader feeds the
-    # gateway's /v1/models, so the meter opencode runs matches what is served.
-    local ctx="$FXLLA_CTX" rope_off=0 mtp=0 derived
-    derived="$(python3 "$REPO_ROOT/gateway/ggufmeta.py" "$dest" "${FXLLA_CTX:-0}" 2>/dev/null || true)"
-    if [ -n "$derived" ]; then
-      # shellcheck disable=SC2086  # three fields, positionally
-      set -- $derived
-      ctx="$1"; rope_off="$2"; mtp="$3"
-    fi
-    # Rope scaling off when serving at or below the trained window: the file
-    # bakes it in, llama.cpp honours it at every size, and below the original
-    # length it is pure loss.
-    local rope=""; [ "$rope_off" = 1 ] && rope="--rope-scaling none"
-    # A build carrying a multi-token-prediction head can draft against itself,
-    # no second model involved. Measured on the pair of this one: 40.9 against
-    # 21.7 tokens/s on predictable text, 31.9 against 20.6 on code. Off unless
-    # the head is actually in the file, since the flag means nothing without it.
-    local spec=""; [ "$mtp" = 1 ] && spec="--spec-type draft-mtp"
-    # shellcheck disable=SC2086
-    exec llama-server --model "$dest/$entry" --alias "$name" --host 127.0.0.1 --port "$port" -ngl "$FXLLA_NGL" -c "$ctx" $rope $spec --jinja ${mm:+--mmproj "$mm"} $FXLLA_SERVER_ARGS
+    # shellcheck disable=SC2046,SC2086  # the derived flags are meant to split
+    exec llama-server --model "$dest/$entry" --alias "$name" --host 127.0.0.1 --port "$port" -ngl "$FXLLA_NGL" $(_llama_flags "$dest") --jinja $FXLLA_SERVER_ARGS
   else
     # shellcheck disable=SC2086
     exec mlx_lm.server --model "$dest" --host 127.0.0.1 --port "$port" $FXLLA_SERVER_ARGS
@@ -1200,9 +1213,10 @@ cmd_on() {
     fi
     [ -z "$entry" ] && die "No .gguf found in $dest"
     info "Starting $name (gguf/llama.cpp) at $BASE_URL ..."
-    # shellcheck disable=SC2086
+    # shellcheck disable=SC2046,SC2086  # the derived flags are meant to split
     nohup llama-server --model "$dest/$entry" --alias "$name" \
-      --host "$FXLLA_HOST" --port "$FXLLA_PORT" -ngl "$FXLLA_NGL" -c "$FXLLA_CTX" --jinja \
+      --host "$FXLLA_HOST" --port "$FXLLA_PORT" -ngl "$FXLLA_NGL" \
+      $(_llama_flags "$dest") --jinja \
       $FXLLA_SERVER_ARGS > "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
   else

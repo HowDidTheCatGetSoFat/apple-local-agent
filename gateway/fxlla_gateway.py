@@ -446,6 +446,12 @@ class Backend:
         self.model_field = model_field  # value to send in the proxied 'model' field
         self.engine = engine            # 'mlx' or 'gguf', resolved once at load
         self.last_used = time.monotonic()
+        # Requests currently being proxied to this backend. last_used is
+        # stamped when one is dispatched and never again, so a generation that
+        # runs longer than the keep-warm window looks idle while it is still
+        # streaming - and the reaper killed it mid-answer. A count, not a
+        # refreshed timestamp: it does not depend on anything ticking.
+        self.inflight = 0
 
 
 def engine_for(alias):
@@ -619,6 +625,23 @@ class Manager:
                      "idle_s": int(time.monotonic() - b.last_used)}
                     for b in self.backends.values()]
 
+    def begin(self, alias):
+        """Mark a request as in flight against this backend."""
+        with self.lock:
+            b = self.backends.get(alias)
+            if b is not None:
+                b.inflight += 1
+                b.last_used = time.monotonic()
+
+    def end(self, alias):
+        """Release it, and restamp: idleness starts when the answer finishes,
+        not when it was asked for."""
+        with self.lock:
+            b = self.backends.get(alias)
+            if b is not None:
+                b.inflight = max(0, b.inflight - 1)
+                b.last_used = time.monotonic()
+
     def reap_idle(self, idle_s):
         """Unload backends untouched for longer than idle_s. Returns aliases.
 
@@ -637,8 +660,12 @@ class Manager:
             return []
         now = time.monotonic()
         with self.lock:
+            # inflight, not just the clock: a long generation is stamped when
+            # it is dispatched and never again, so it reads as idle while it
+            # is still streaming. Killing it there cuts the answer off mid
+            # sentence for a client that is doing nothing wrong.
             victims = [b for b in self.backends.values()
-                       if now - b.last_used >= idle_s]
+                       if not b.inflight and now - b.last_used >= idle_s]
             for b in victims:
                 del self.backends[b.alias]
         for b in victims:
@@ -766,6 +793,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json(503, {"error": {"message": "could not load '%s': %s" % (alias, e)}})
             return
 
+        # Held for the whole request, not just the dispatch: the reaper reads
+        # this, and a generation that outlives the keep-warm window was being
+        # terminated while it streamed.
+        MANAGER.begin(alias)
+        try:
+            self._proxy(alias, port, model_field, body, reader)
+        finally:
+            MANAGER.end(alias)
+
+    def _proxy(self, alias, port, model_field, body, reader):
         # send the model value each backend expects (path for MLX, alias for GGUF)
         if reader:
             log("read the image with %s, answering with %s" % (reader, alias))
@@ -863,7 +900,24 @@ def _term(signum, frame):
 # Idle minutes before a resident backend is unloaded. Same name and same units
 # as the single-model server's watchdog, because a user who set it once should
 # not have to discover that it governed only one of the two ways to run this.
-KEEP_WARM_S = int(os.environ.get("FXLLA_KEEP_WARM", "10") or 0) * 60
+def _keep_warm_s():
+    """Idle seconds before a backend is unloaded, or 0 for never.
+
+    Parsed defensively because it is read at import: a typo like "10m" used to
+    raise at module scope and take the whole gateway down before it bound a
+    port, while the single-model watchdog treats the same bad value as an
+    ignorable nuisance and keeps serving. A malformed setting should cost the
+    feature, not the process."""
+    raw = (os.environ.get("FXLLA_KEEP_WARM") or "10").strip()
+    try:
+        return max(0, int(raw)) * 60
+    except ValueError:
+        log("FXLLA_KEEP_WARM=%r is not a whole number of minutes; "
+            "keeping backends resident" % raw)
+        return 0
+
+
+KEEP_WARM_S = _keep_warm_s()
 
 # Checked often enough that "10 minutes" is not really 15, cheap enough to
 # ignore: it walks a dict of at most a handful of entries.

@@ -29,8 +29,14 @@ _STRING, _ARRAY = 8, 9
 _CHUNK = 4 << 20
 
 # A model whose header has not ended by here is not one of ours; the cap exists
-# so a corrupt length field cannot read a 20 GB file into memory.
-_MAX_HEAD = 256 << 20
+# so a corrupt length field cannot read a 20 GB file into memory. 32 MB is well
+# past the largest real metadata block seen here (a 12 MB vocabulary) and small
+# enough that hitting the cap is quick rather than a dozen seconds of CPU.
+_MAX_HEAD = 32 << 20
+
+# Metadata pairs a real GGUF declares. The count is read from the file, so a
+# corrupt one can claim billions and send the loop nowhere useful.
+_MAX_PAIRS = 4096
 
 
 class _Reader:
@@ -66,11 +72,21 @@ class _Reader:
             self.take(self.u64())
         elif kind == _ARRAY:
             inner, count = self.u32(), self.u64()
+            if inner == _ARRAY:
+                raise ValueError("nested arrays are not read here")
+            # Refuse an array that cannot fit before stepping through it. A
+            # declared count is a number in a file, not a fact: a crafted
+            # header claiming tens of millions of zero-length strings made the
+            # per-element loop run for a dozen seconds of blocking CPU, and
+            # this parser is on the path of every /v1/models call. The
+            # smallest possible element is the 8-byte length prefix of an
+            # empty string, so the cheapest honest bound is that.
+            least = 8 if inner == _STRING else _SCALARS[inner][1]
+            if count > _MAX_HEAD // max(1, least):
+                raise ValueError("array of %d elements cannot fit a header" % count)
             if inner == _STRING:
                 for _ in range(count):
                     self.take(self.u64())
-            elif inner == _ARRAY:
-                raise ValueError("nested arrays are not read here")
             else:
                 self.take(_SCALARS[inner][1] * count)
         else:
@@ -94,6 +110,8 @@ def metadata(path, keys):
         reader.u32()          # version
         reader.u64()          # tensor count
         pairs = reader.u64()
+        if pairs > _MAX_PAIRS:
+            raise ValueError("header declares %d metadata pairs" % pairs)
         wanted, found = tuple(keys), {}
         for _ in range(pairs):
             key = reader.string()

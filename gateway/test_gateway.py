@@ -259,6 +259,57 @@ class TestReapIdle(unittest.TestCase):
         self.assertIn("a", m.backends)
         self.assertFalse(procs["a"].terminated)
 
+    def test_a_backend_with_work_in_flight_is_never_reaped(self):
+        # last_used is stamped when a request is dispatched and not again, so
+        # a generation that runs longer than the keep-warm window reads as
+        # idle - and the reaper terminated it mid-stream, cutting the answer
+        # off for a client doing nothing wrong.
+        m, procs = self._manager({"busy": 99999})
+        m.backends["busy"].inflight = 1
+        self.assertEqual(m.reap_idle(600), [])
+        self.assertFalse(procs["busy"].terminated)
+
+    def test_it_is_reaped_once_the_work_finishes(self):
+        m, _ = self._manager({"busy": 99999})
+        m.begin("busy")
+        self.assertEqual(m.reap_idle(600), [])
+        m.end("busy")
+        # end() restamps: idleness starts when the answer finishes, not when
+        # it was asked for, so the window is measured from the right moment.
+        self.assertEqual(m.reap_idle(600), [])
+        m.backends["busy"].last_used -= 700
+        self.assertEqual(m.reap_idle(600), ["busy"])
+
+    def test_concurrent_requests_each_hold_it(self):
+        m, procs = self._manager({"busy": 99999})
+        m.begin("busy"); m.begin("busy")
+        m.end("busy")
+        m.backends["busy"].last_used -= 700
+        self.assertEqual(m.reap_idle(600), [], "one release should not free it")
+        m.end("busy")
+        m.backends["busy"].last_used -= 700
+        self.assertEqual(m.reap_idle(600), ["busy"])
+
+    def test_end_on_a_vanished_backend_does_not_raise(self):
+        # It can be evicted for budget while a request is in flight.
+        m, _ = self._manager({"gone": 5})
+        m.begin("gone")
+        m.backends.clear()
+        m.end("gone")
+
+    def test_a_malformed_keep_warm_costs_the_feature_not_the_process(self):
+        # Read at import: a typo took the whole gateway down before it bound a
+        # port, while the single-model watchdog treats the same value as an
+        # ignorable nuisance and keeps serving.
+        saved = os.environ.get("FXLLA_KEEP_WARM")
+        self.addCleanup(lambda: os.environ.__setitem__("FXLLA_KEEP_WARM", saved)
+                        if saved is not None else os.environ.pop("FXLLA_KEEP_WARM", None))
+        for bad in ("10m", "", "  ", "ten", "-3"):
+            os.environ["FXLLA_KEEP_WARM"] = bad
+            self.assertGreaterEqual(gw._keep_warm_s(), 0, bad)
+        os.environ["FXLLA_KEEP_WARM"] = "7"
+        self.assertEqual(gw._keep_warm_s(), 420)
+
     def test_reaping_an_empty_gateway_is_a_noop(self):
         self.assertEqual(gw.Manager().reap_idle(600), [])
 

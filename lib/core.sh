@@ -39,7 +39,12 @@ fi
 : "${FXLLA_DEFAULT_MODEL:=qwen3-coder}"
 : "${FXLLA_SERVER_ARGS:=}"
 : "${FXLLA_KEEP_WARM:=10}"     # idle minutes before auto-stop (0 = never)
-: "${FXLLA_CTX:=8192}"         # context size for llama-server (gguf)
+# CEILING on the context window, not the window itself: each gguf model is
+# served what its own header says it was trained for, capped by this. This is
+# the value that actually wins - config.env is optional and its example is not
+# what anyone runs by default - so leaving it at the old 8192 capped a 27B
+# trained to 262k right back down to 8192, silently undoing the feature.
+: "${FXLLA_CTX:=32768}"        # ceiling for llama-server (gguf), per-model below it
 : "${FXLLA_NGL:=999}"          # layers offloaded to GPU for llama-server (gguf)
 : "${FXLLA_MEDIA_MODEL:=z-image-turbo}"  # default image model (fxlla media models)
 : "${FXLLA_MEDIA_HF_HOME:=}"   # HF cache holding diffusion weights (empty = HF default)

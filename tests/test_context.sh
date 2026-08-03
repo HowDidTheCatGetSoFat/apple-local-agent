@@ -128,6 +128,28 @@ out="$(FXLLA_CTX=12288 launch broken)"
 if [ "$(ctx_of "$out")" = 12288 ]; then pass "an unreadable header falls back to FXLLA_CTX"
 else fail "an unreadable header falls back to FXLLA_CTX (got: $(ctx_of "$out"))"; fi
 
+# --- `fxlla on` gets the same flags as the gateway's backend ----------------
+# There were two copies of this launch and they had drifted: the single-model
+# path never passed the projector, so a vision model started with `fxlla on`
+# served text-only and dropped every image, and it never got the trained
+# window, the rope override or MTP either. Same model, different behaviour
+# depending on which command started it.
+d="$(model paired)"; write_gguf "$d/weights.gguf" 1048576 262144 4.0 1
+: > "$d/mmproj-f16.gguf"
+back="$(FXLLA_CTX=262144 launch paired)"
+for flag in "-c 262144" "--rope-scaling none" "--spec-type draft-mtp" "--mmproj"; do
+  case "$back" in
+    *"$flag"*) pass "backend passes $flag";;
+    *) fail "backend passes $flag (got: $back)";;
+  esac
+done
+# shellcheck disable=SC2016  # the literal text is what is being searched for
+if [ "$(grep -cF '_llama_flags "$dest"' "$FXLLA")" -ge 2 ]; then
+  pass "both launch paths derive their flags from one place"
+else
+  fail "both launch paths derive their flags from one place"
+fi
+
 # --- the gateway reports what the backend serves ----------------------------
 # If these disagree, opencode's context meter and its auto-compaction run
 # against a window the backend is not actually serving.

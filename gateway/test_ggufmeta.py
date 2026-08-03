@@ -86,6 +86,42 @@ class TestTrainedContext(unittest.TestCase):
         path = self._model([("general.architecture", STR, _string("mystery"))])
         self.assertIsNone(ggufmeta.trained_context(path))
 
+    def test_an_impossible_array_count_is_refused_without_walking_it(self):
+        # A declared count is a number in a file, not a fact. A header claiming
+        # tens of millions of zero-length strings sent the per-element loop
+        # spinning for a dozen seconds of blocking CPU - and this parser runs
+        # on the path of every /v1/models call, so that is a denial of service
+        # from a file sitting in the model store.
+        import time
+        path = os.path.join(self.dir, "hostile.gguf")
+        body = (_string("tokenizer.ggml.tokens") + struct.pack("<I", ARR)
+                + struct.pack("<I", STR) + struct.pack("<Q", 40_000_000))
+        head = (b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 0)
+                + struct.pack("<Q", 2))
+        with open(path, "wb") as fh:
+            fh.write(head + body + b"\x00" * (1 << 20))
+        started = time.monotonic()
+        self.assertIsNone(ggufmeta.trained_context(path))
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_an_impossible_pair_count_is_refused(self):
+        path = os.path.join(self.dir, "pairs.gguf")
+        with open(path, "wb") as fh:
+            fh.write(b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 0)
+                     + struct.pack("<Q", 5_000_000_000) + b"\x00" * 4096)
+        self.assertIsNone(ggufmeta.trained_context(path))
+
+    def test_a_real_vocabulary_sized_array_still_parses(self):
+        # The bound has to reject the impossible without rejecting the large:
+        # real vocabularies run to hundreds of thousands of entries.
+        vocab = b"".join(_string("tok%d" % i) for i in range(200000))
+        path = self._model([
+            ("tokenizer.ggml.tokens", ARR,
+             struct.pack("<I", STR) + struct.pack("<Q", 200000) + vocab),
+            ("qwen35.context_length", U32, struct.pack("<I", 131072)),
+        ])
+        self.assertEqual(ggufmeta.trained_context(path), 131072)
+
     def test_a_file_that_is_not_a_gguf_answers_nothing(self):
         path = os.path.join(self.dir, "not.gguf")
         with open(path, "wb") as fh:
