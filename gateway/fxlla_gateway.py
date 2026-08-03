@@ -26,6 +26,16 @@ Config via environment:
                                 allocates the KV cache up front. Reported per
                                 model as "context" in /v1/models, from the same
                                 reader that starts the backend.
+  FXLLA_ROPE_STRETCH            1 to serve the window a model ADVERTISES rather
+                                than the one it was trained for (default 0).
+                                Only differs where rope scaling is baked in:
+                                262144 against 1048576 on a YaRN factor of 4.
+                                The stretch is what makes the larger window
+                                reachable, so it stays on there - but it costs
+                                attention quality, and the KV cache is
+                                allocated for the whole window up front. Raise
+                                FXLLA_CTX to match or the ceiling wins and you
+                                get neither.
   FXLLA_KEEP_WARM               idle minutes before a resident backend is
                                 unloaded (default 10, 0 = never). The same
                                 variable and units the single-model server
@@ -388,6 +398,13 @@ def _embed_identities():
 # window, which config.json declares.
 SERVED_GGUF_CTX = int(os.environ.get("FXLLA_CTX", "32768"))
 
+# Opt in to the window a model ADVERTISES rather than the one it was trained
+# for. Only meaningful where rope scaling is baked in - it is the difference
+# between 262144 and 1048576 on a model shipped with YaRN factor 4 - and it is
+# off by default because the stretch costs attention quality across a window
+# almost nobody fills, and the KV cache is allocated for all of it up front.
+ROPE_STRETCH = os.environ.get("FXLLA_ROPE_STRETCH", "0") not in ("", "0", "false")
+
 
 def model_context(alias):
     """The context window a request to this model actually gets, or None when
@@ -400,7 +417,7 @@ def model_context(alias):
         # what is actually served rather than a number that merely used to be
         # passed. Falls back to the cap when the header cannot be read, which
         # is what the backend falls back to as well.
-        served, _rope, _mtp = ggufmeta.serve_plan(d, SERVED_GGUF_CTX)
+        served, _rope, _mtp = ggufmeta.serve_plan(d, SERVED_GGUF_CTX, ROPE_STRETCH)
         return served or SERVED_GGUF_CTX
     try:
         with open(os.path.join(d, "config.json"), encoding="utf-8") as fh:

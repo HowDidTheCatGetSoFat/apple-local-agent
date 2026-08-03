@@ -281,6 +281,46 @@ class TestServePlan(unittest.TestCase):
         ], projector=True)
         self.assertTrue(ggufmeta.serve_plan(d, 32768)[2])
 
+    def test_stretch_opts_into_the_advertised_window(self):
+        # The window a YaRN model headlines is reachable only because the
+        # scaling is baked in, so asking for it means accepting what the
+        # scaling costs - which is why it is opt-in rather than the default.
+        d = self._model_dir("yarn2", [
+            ("a.context_length", U32, struct.pack("<I", 1048576)),
+            ("a.rope.scaling.original_context_length", U32, struct.pack("<I", 262144)),
+            ("a.rope.scaling.factor", F32, struct.pack("<f", 4.0)),
+        ])
+        served, rope_off, _ = ggufmeta.serve_plan(d, 1048576, stretch=True)
+        self.assertEqual(served, 1048576)
+        self.assertFalse(rope_off, "the stretch is the reason it is reachable")
+
+    def test_stretch_capped_below_the_trained_window_gets_neither(self):
+        # Asking for the stretch and then capping under the trained length
+        # buys nothing: the scaling is a cost with no window to show for it.
+        d = self._model_dir("yarn3", [
+            ("a.context_length", U32, struct.pack("<I", 1048576)),
+            ("a.rope.scaling.original_context_length", U32, struct.pack("<I", 262144)),
+            ("a.rope.scaling.factor", F32, struct.pack("<f", 4.0)),
+        ])
+        served, rope_off, _ = ggufmeta.serve_plan(d, 32768, stretch=True)
+        self.assertEqual(served, 32768)
+        self.assertTrue(rope_off)
+
+    def test_stretch_changes_nothing_for_a_model_without_one(self):
+        d = self._model_dir("flat", [("a.context_length", U32, struct.pack("<I", 128000))])
+        self.assertEqual(ggufmeta.serve_plan(d, 262144, stretch=True),
+                         ggufmeta.serve_plan(d, 262144))
+
+    def test_the_default_is_the_trained_window(self):
+        # Stated as a test because it is a choice, not an accident: the
+        # headline number is not what gets served unless asked for.
+        d = self._model_dir("yarn4", [
+            ("a.context_length", U32, struct.pack("<I", 1048576)),
+            ("a.rope.scaling.original_context_length", U32, struct.pack("<I", 262144)),
+            ("a.rope.scaling.factor", F32, struct.pack("<f", 4.0)),
+        ])
+        self.assertEqual(ggufmeta.serve_plan(d, 1048576)[0], 262144)
+
     def test_an_unreadable_model_leaves_the_caller_on_its_default(self):
         directory = os.path.join(self.dir, "empty")
         os.makedirs(directory, exist_ok=True)

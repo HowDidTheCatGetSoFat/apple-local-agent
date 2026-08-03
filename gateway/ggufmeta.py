@@ -149,6 +149,24 @@ def trained_context(path):
     return None
 
 
+def declared_context(path):
+    """The largest window the file advertises, stretch included.
+
+    This is what `-c 0` would give you and what the model card headlines. It is
+    reachable only because rope scaling is baked in, so asking for it means
+    accepting the attention quality that scaling costs - across a window almost
+    nobody fills, at a KV cache that grows with every token of it.
+    """
+    try:
+        meta = metadata(path, (".context_length",))
+    except (OSError, ValueError, EOFError, KeyError, struct.error):
+        return None
+    for key, value in meta.items():
+        if key.endswith(".context_length") and value:
+            return int(value)
+    return None
+
+
 def rope_is_stretched(path):
     """Whether this GGUF bakes in a rope scaling factor above 1.
 
@@ -198,7 +216,7 @@ def _entry(directory):
     return None
 
 
-def serve_plan(directory, cap):
+def serve_plan(directory, cap, stretch=False):
     """(context, turn_rope_scaling_off, use_mtp) for the model in `directory`.
 
     `cap` bounds the context because the window is paid for in RAM whether or
@@ -206,6 +224,14 @@ def serve_plan(directory, cap):
     of a million tokens costs gigabytes. Returns (None, False, False) when the
     file cannot be read, which leaves the caller on its own default rather than
     guessing.
+
+    `stretch` opts into the window the file advertises rather than the one it
+    was trained for - for a model shipped with YaRN that is the difference
+    between 262144 and 1048576. It only RAISES the ceiling; whether the scaling
+    stays on is decided by what is actually served, because below the trained
+    length the stretch is a cost with nothing bought. So asking for stretch and
+    then capping under the trained window quietly gets you neither, which is
+    the correct answer rather than a special case.
     """
     path = _entry(directory) if os.path.isdir(directory) else directory
     if not path or not os.path.isfile(path):
@@ -214,9 +240,10 @@ def serve_plan(directory, cap):
     trained = trained_context(path)
     if not trained:
         return None, False, mtp
-    served = min(trained, cap) if cap else trained
-    # Only worth disabling where the stretch is not being used. Above the
-    # trained window the scaling is the whole reason the context is reachable.
+    ceiling = (declared_context(path) or trained) if stretch else trained
+    served = min(ceiling, cap) if cap else ceiling
+    # Only disabled where the stretch is not being used. Above the trained
+    # window the scaling is the whole reason the context is reachable at all.
     return served, rope_is_stretched(path) and served <= trained, mtp
 
 
@@ -226,6 +253,7 @@ if __name__ == "__main__":
     # unreadable so the caller keeps its own default.
     directory = sys.argv[1]
     cap = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 0
-    context, rope_off, mtp = serve_plan(directory, cap)
+    stretch = len(sys.argv) > 3 and sys.argv[3] not in ("", "0", "false")
+    context, rope_off, mtp = serve_plan(directory, cap, stretch)
     if context:
         print("%d %d %d" % (context, 1 if rope_off else 0, 1 if mtp else 0))

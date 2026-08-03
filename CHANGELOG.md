@@ -28,6 +28,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   capability, and nothing here had ever asked for it - which is exactly what a
   model with its refusal direction surgically removed should be tested on.
 
+- `FXLLA_ROPE_STRETCH=1` serves the window a model advertises instead of the
+  one it was trained for. Only meaningful where rope scaling is baked into the
+  file - on a YaRN factor of 4 that is 1048576 against 262144 - and off by
+  default, because the stretch buys reach at the cost of attention quality
+  across a window almost nobody fills, and the KV cache for a 27B at 1M is
+  about 64 GB allocated up front.
+  It only raises the ceiling. Whether the scaling stays enabled is decided by
+  what is actually served: above the trained window it is the reason the
+  context exists, at or below it there is nothing bought. So asking for the
+  stretch while `FXLLA_CTX` still caps under the trained length gets neither,
+  which is the honest outcome rather than a special case.
+
 ### Changed
 - A gguf build carrying a multi-token-prediction head is served with
   `--spec-type draft-mtp`, so it drafts against itself with no second model

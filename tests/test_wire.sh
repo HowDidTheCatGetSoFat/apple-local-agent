@@ -123,7 +123,7 @@ else fail "cmd_do exports the agent env"; fi
 # that list means the user's value never arrives and the gateway silently
 # falls back to its own default, which is how FXLLA_AGENT_MODEL was lost.
 launch_block="$(grep -B 14 'nohup python3 .*fxlla_gateway.py' "$FXLLA")"
-for var in FXLLA_CTX FXLLA_KEEP_WARM FXLLA_STATS_FILE FXLLA_STORE; do
+for var in FXLLA_CTX FXLLA_KEEP_WARM FXLLA_ROPE_STRETCH FXLLA_STATS_FILE FXLLA_STORE; do
   if grep -qE "(^|[[:space:]])$var=" <<< "$launch_block"; then
     pass "serve forwards $var to the gateway"
   else
