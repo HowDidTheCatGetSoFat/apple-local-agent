@@ -32,20 +32,29 @@ a complete MLX port appeared, validated against the diffusers reference to
 twice the GPU of this machine. Quantizing barely helps, because at 5 seconds the
 linear layers are only 42% of the work and the rest is attention, which weight
 quantization does not touch. Meanwhile the answer was already on disk: this
-project measured LTX distilled at 43.3 s for 2.04 s of video and Wan 2.2 A14B at
-14.6 min for 5.25 s, in `~/Documents/github/VFX-1/docs/video_bp.md`, months ago.
+project measured Wan 2.2 A14B at 14.6 min for 5.25 s of video in
+`~/Documents/github/VFX-1/docs/video_bp.md` two months ago, and LTX distilled at
+43.3 s for 2.04 s in that repo's `tests/battery_012_ltx_bump/` six days ago.
 Normalized: 21 s of compute per second of video against 167 and about 1440. I
 spent an afternoon researching a question the notes had answered.
 
-Two corrections belong here because both were mine. I told the user no runner
-existed for H3, having searched only Hugging Face; they said to search GitHub
-and it was there, published that day. And I predicted a ComfyUI-format LoRA
-would half-load in mflux - the low-rank tensors applying, the 159 weight deltas
-ignored. It applied nothing: every adapter pattern in the Krea2 mapping ends in
-`.weight` and that format omits it. mflux raised rather than rendering something
-plausibly wrong, which is the behaviour worth having. The fix is the bare suffix
-in both directions - patching only one would apply half a LoRA and produce an
-image nobody could tell was incomplete.
+Three corrections belong here because all three were mine. I told the user no
+runner existed for H3, having searched only Hugging Face; they said to search
+GitHub and it was there, published that day. And I predicted a ComfyUI-format
+LoRA would half-load in mflux - the low-rank tensors applying, the 159 weight
+deltas ignored. It applied nothing: every adapter pattern in the Krea2 mapping
+ends in `.weight` and that format omits it. mflux raised rather than rendering
+something plausibly wrong, which is the behaviour worth having. The fix is the
+bare suffix in both directions - patching only one would apply half a LoRA and
+produce an image nobody could tell was incomplete.
+
+The third is the paragraph above this one. It first cited both video timings to
+`video_bp.md`, months ago. Only the Wan figures are there; the LTX pair was
+measured six days earlier in a test battery at another path. An entry whose
+point is that the notes already held the answer had the note wrong, which is
+worse than the afternoon it describes: a wrong citation sends the next reader to
+a file that will not contain what they were promised, and they have no reason to
+doubt it. The pre-push review caught it, not me.
 
 ## 2026-08-03: the file already knew
 

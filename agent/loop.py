@@ -562,12 +562,23 @@ def run(intent, max_steps=MAX_STEPS, max_seconds=MAX_SECONDS, out=sys.stderr):
         # For an edit, read the INPUT too. It costs one more look and it is the
         # only way to see what the edit changed besides what was asked.
         before = None
-        if chosen["action"] == "edit" and left() > 0:
+        # `left() > 30`, not `> 0`: every look here floors its timeout at 30 s,
+        # so asking with five seconds left does not spend five, it spends
+        # thirty past the budget - and the verdict look that follows floors at
+        # 30 too. Commentary must not be what overruns the time the caller set.
+        if chosen["action"] == "edit" and left() > 30:
             try:
                 before = look(chosen["image"], timeout_s=max(30, min(300, left())))
-            except (RuntimeError, ValueError) as exc:
+            except Exception as exc:            # noqa: BLE001 - see below
                 # Never let the extra look cost the render that already
-                # succeeded: this is commentary, not the verdict.
+                # succeeded: this is commentary, not the verdict. That promise
+                # has to hold for EVERY failure, not the two shapes that came
+                # to mind - narrowing this to (RuntimeError, ValueError) let an
+                # http.client.IncompleteRead from a truncated reply escape run()
+                # and main() both, killing the process after the image was on
+                # disk and before anything reported it. The one place a bare
+                # except earns its keep is where the result is optional and the
+                # alternative is discarding work that already succeeded.
                 print("[do] could not read the original: %s" % _last_line(exc),
                       file=out, flush=True)
         print("[do] rendered %s" % path, file=out, flush=True)

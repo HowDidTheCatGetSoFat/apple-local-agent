@@ -351,6 +351,34 @@ class TestDrift(unittest.TestCase):
         self.assertTrue(result["settled"])
         self.assertEqual(result["output"], "/tmp/edited.png")
 
+    def test_the_render_survives_a_failure_nobody_thought_of(self):
+        # The test above raises RuntimeError, which an `except (RuntimeError,
+        # ValueError)` catches - so it would pass against a handler that only
+        # covers the two shapes that came to mind, and prove nothing about the
+        # promise. A truncated HTTP reply is neither: IncompleteRead escaped
+        # run() AND main() and killed the process with the image already on
+        # disk. The promise is about every failure or it is not a promise.
+        import http.client
+        looked = []
+        self._stub_for_drift(looked, action="edit",
+                             raise_on_input=http.client.IncompleteRead(b"partial"))
+        result = loop.run("make it yellow", max_steps=1, out=self.quiet)
+        self.assertTrue(result["settled"])
+        self.assertEqual(result["output"], "/tmp/edited.png")
+        self.assertEqual(result["steps"][0]["before"], None)
+
+    def test_no_time_left_means_the_input_is_not_read(self):
+        # Every look floors its timeout at 30 s, so reading the input with
+        # seconds left does not spend seconds - it spends thirty past the
+        # budget, and the verdict look that follows floors at 30 as well.
+        # Commentary does not get to be what overruns the caller's limit.
+        looked = []
+        self._stub_for_drift(looked, action="edit")
+        result = loop.run("make it yellow", max_steps=1, max_seconds=20,
+                          out=self.quiet)
+        self.assertEqual(looked, ["/tmp/edited.png"], "only the result")
+        self.assertEqual(result["steps"][0]["before"], None)
+
     def _stub_for_drift(self, looked, action, raise_on_input=False):
         import tempfile
         directory = tempfile.mkdtemp()
@@ -368,6 +396,8 @@ class TestDrift(unittest.TestCase):
         def fake_look(path, timeout_s):
             looked.append(path)
             if path == png:
+                if isinstance(raise_on_input, BaseException):
+                    raise raise_on_input
                 if raise_on_input:
                     raise RuntimeError("the vision model returned nothing")
                 return "a bicycle against a blue wall on grey concrete"

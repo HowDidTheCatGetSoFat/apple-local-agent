@@ -53,6 +53,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   tokens did not arrive spread over time. Harness version bumped to 4, so
   speed numbers either side of this do not look comparable.
 
+- `fxlla do` reads the INPUT of an edit as well, and reports what the
+  description gained or lost besides what was asked. The gap it closes: the
+  first real edit turned a wall yellow as requested and the ground from
+  concrete to wooden, and nothing said so, because the check only ever asks
+  whether what was PROMISED turned up. Costs one extra look per edit, and only
+  when there is budget left for it. Reported, never acted on - two descriptions
+  differing is a fact about the descriptions, and the same eyes can word the
+  same picture differently, so the report says so rather than calling it a
+  defect.
+
 ### Changed
 - A gguf build carrying a multi-token-prediction head is served with
   `--spec-type draft-mtp`, so it drafts against itself with no second model
