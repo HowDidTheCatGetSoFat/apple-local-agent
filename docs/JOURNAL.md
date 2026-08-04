@@ -2,6 +2,51 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-03: what the clock was actually timing
+
+The eval reported 1,865,386 tokens per second. Two layers down, the streamed
+probe read in 8 KB blocks, and `read(8192)` blocks until it has that many bytes
+or the response ends. Most answers are shorter than 8 KB, so they arrived in one
+piece as far as the clock could tell: the first-token stamp landed beside the
+last, TTFT became the whole-response time, and the decode window collapsed to
+microseconds. Reading a line at a time is the granularity SSE actually has.
+
+The number that convinced me was not the median moving. It was the spread: on
+the same small model the rate across probes went from 667..892 to 609..611, and
+TTFT from 110 ms to 52. A clock that measures the same thing three times and
+returns three similar answers is measuring something. One returning 667 and 892
+was measuring the buffer. Harness bumped to v4 - every speed number before it
+was of the transport.
+
+That fix landed while answering a plain question: should the daily driver
+change? Qwythos scores 37/38 against qwen3-coder's 32/38, six discordant tasks
+to one, p = 0.125. But its prefill is 306 tokens/s against 3114, so a 16k
+context costs 47 seconds where the other costs five, and it holds 55 GB against
+17. For an agent that re-sends a large context every turn that trade is lost
+before quality is considered. No change. The eval answered a question about
+which model to run and the answer came from the columns nobody asks about.
+
+Video got the same treatment and the same shape of answer. MiniMax-H3 is real -
+a complete MLX port appeared, validated against the diffusers reference to
+4.8e-07 - and unusable: 8.8 minutes per denoising step on an M3 Ultra, which is
+twice the GPU of this machine. Quantizing barely helps, because at 5 seconds the
+linear layers are only 42% of the work and the rest is attention, which weight
+quantization does not touch. Meanwhile the answer was already on disk: this
+project measured LTX distilled at 43.3 s for 2.04 s of video and Wan 2.2 A14B at
+14.6 min for 5.25 s, in `~/Documents/github/VFX-1/docs/video_bp.md`, months ago.
+Normalized: 21 s of compute per second of video against 167 and about 1440. I
+spent an afternoon researching a question the notes had answered.
+
+Two corrections belong here because both were mine. I told the user no runner
+existed for H3, having searched only Hugging Face; they said to search GitHub
+and it was there, published that day. And I predicted a ComfyUI-format LoRA
+would half-load in mflux - the low-rank tensors applying, the 159 weight deltas
+ignored. It applied nothing: every adapter pattern in the Krea2 mapping ends in
+`.weight` and that format omits it. mflux raised rather than rendering something
+plausibly wrong, which is the behaviour worth having. The fix is the bare suffix
+in both directions - patching only one would apply half a LoRA and produce an
+image nobody could tell was incomplete.
+
 ## 2026-08-03: the file already knew
 
 A 27B trained to a quarter of a million tokens was being served at eight
