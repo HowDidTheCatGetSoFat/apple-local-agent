@@ -71,6 +71,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   same picture differently, so the report says so rather than calling it a
   defect.
 
+### Changed
+- `/v1/models` answers in 30 ms where it took 4.7 seconds, and an editor asks
+  for it at startup. The cost was never the sizes - `du` over the whole store
+  is 30 ms - it was the GGUF headers. Deriving a serve plan asked four separate
+  readers for one fact each, and each reopened the file and scanned until it
+  found ITS key; a key that is absent is only known to be absent at the END of
+  the header, so a model declaring no MTP head and no rope factor paid three
+  full walks of a 12 MB metadata block. One walk collects all four facts now,
+  which is 2.1 seconds down to 0.68 across fifteen models, and those facts are
+  remembered against the file's mtime and size, which takes the second call to
+  0.4 ms. The cache holds the FACTS and not the answer: two callers with
+  different ceilings must each get their own window, since a reported context
+  that is not the one being served is the failure this module exists to
+  prevent.
+
 ### Fixed
 - A projector whose name did not START with `mmproj` was invisible, in five
   places at once. Publishers disagree about where the word goes: one writes

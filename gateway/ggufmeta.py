@@ -125,6 +125,69 @@ def metadata(path, keys):
         return found
 
 
+# Everything serve_plan needs to know, in one tuple, so the file is walked once.
+#
+# It used to call four separate readers - one per fact - and each reopened the
+# file and scanned until it found ITS key. Most models declare no MTP head and
+# no rope factor, and a key that is absent is only known to be absent at the END
+# of the header, so those scans ran to completion every time. Three full walks
+# of a 12 MB metadata block per model, 0.28 s each on this machine, 2.1 s across
+# a store of fifteen - paid on every /v1/models call, which is what an editor
+# asks for at startup.
+_PLAN_KEYS = (".context_length", ".rope.scaling.original_context_length",
+              ".rope.scaling.factor", ".nextn_predict_layers")
+
+# Keyed by identity AND version: a path whose mtime or size changed is a
+# different file. Bounded because a long-lived gateway sees every model in the
+# store and nothing evicts on its own; at the cap it is cleared rather than
+# aged, since the working set is a handful of models and a partial cache is
+# still correct - every miss just re-reads the file it is about.
+_FACTS_CACHE = {}
+_FACTS_CACHE_MAX = 256
+
+
+def _derive(meta):
+    """(trained, declared, stretched, mtp) from one metadata dict.
+
+    The precedence lives here rather than in each reader, so "which number is
+    the trained window" has one answer that the plan and the individual
+    accessors cannot drift apart on.
+    """
+    declared = trained = None
+    stretched = False
+    mtp = False
+    for key, value in meta.items():
+        if key.endswith(".rope.scaling.original_context_length") and value:
+            trained = int(value)
+        elif key.endswith(".context_length") and value:
+            declared = int(value)
+        elif key.endswith(".rope.scaling.factor"):
+            stretched = float(value) > 1.0
+        elif key.endswith(".nextn_predict_layers"):
+            mtp = int(value) > 0
+    return (trained or declared), declared, stretched, mtp
+
+
+def _facts(path):
+    """_derive() for a file, remembered until the file changes."""
+    try:
+        st = os.stat(path)
+        key = (path, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    hit = _FACTS_CACHE.get(key)
+    if hit is not None:
+        return hit
+    try:
+        facts = _derive(metadata(path, _PLAN_KEYS))
+    except (OSError, ValueError, EOFError, KeyError, struct.error):
+        return None
+    if len(_FACTS_CACHE) >= _FACTS_CACHE_MAX:
+        _FACTS_CACHE.clear()
+    _FACTS_CACHE[key] = facts
+    return facts
+
+
 def trained_context(path):
     """The window this model was actually trained for, or None.
 
@@ -248,15 +311,17 @@ def serve_plan(directory, cap, stretch=False):
     path = _entry(directory) if os.path.isdir(directory) else directory
     if not path or not os.path.isfile(path):
         return None, False, False
-    mtp = has_mtp_head(path)
-    trained = trained_context(path)
+    facts = _facts(path)
+    if facts is None:
+        return None, False, False
+    trained, declared, stretched, mtp = facts
     if not trained:
         return None, False, mtp
-    ceiling = (declared_context(path) or trained) if stretch else trained
+    ceiling = (declared or trained) if stretch else trained
     served = min(ceiling, cap) if cap else ceiling
     # Only disabled where the stretch is not being used. Above the trained
     # window the scaling is the whole reason the context is reachable at all.
-    return served, rope_is_stretched(path) and served <= trained, mtp
+    return served, stretched and served <= trained, mtp
 
 
 if __name__ == "__main__":

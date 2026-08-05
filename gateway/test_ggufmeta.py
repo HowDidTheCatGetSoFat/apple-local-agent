@@ -305,6 +305,72 @@ class TestServePlan(unittest.TestCase):
                          "the fixture must put the projector first or it tests nothing")
         self.assertEqual(ggufmeta.serve_plan(directory, 262144)[0], 32768)
 
+    def test_a_plan_walks_the_header_once(self):
+        # The reason this is fast, and the thing a refactor would quietly undo.
+        # It used to ask four separate readers for one fact each, and a key that
+        # is ABSENT is only known to be absent at the end of the header - so a
+        # model with no MTP head and no rope factor paid three full walks of a
+        # 12 MB block. Counted rather than timed: a timing test on a warm page
+        # cache proves nothing about how many times the file was read.
+        d = self._model_dir("counted", [
+            ("a.context_length", U32, struct.pack("<I", 32768)),
+        ])
+        ggufmeta._FACTS_CACHE.clear()
+        calls = []
+        real = ggufmeta.metadata
+        ggufmeta.metadata = lambda p, k: (calls.append(p), real(p, k))[1]
+        try:
+            ggufmeta.serve_plan(d, 32768)
+        finally:
+            ggufmeta.metadata = real
+        self.assertEqual(len(calls), 1, "one walk per plan, got %d" % len(calls))
+
+    def test_a_second_plan_does_not_read_the_file_again(self):
+        d = self._model_dir("twice", [("a.context_length", U32, struct.pack("<I", 32768))])
+        ggufmeta._FACTS_CACHE.clear()
+        ggufmeta.serve_plan(d, 32768)
+        calls = []
+        real = ggufmeta.metadata
+        ggufmeta.metadata = lambda p, k: (calls.append(p), real(p, k))[1]
+        try:
+            self.assertEqual(ggufmeta.serve_plan(d, 32768)[0], 32768)
+        finally:
+            ggufmeta.metadata = real
+        self.assertEqual(calls, [], "the second plan re-read the file")
+
+    def test_the_cache_holds_facts_and_not_the_plan(self):
+        # Two callers ask about the same file with different ceilings - the
+        # gateway's FXLLA_CTX and a backend launched with another. Caching the
+        # ANSWER instead of the facts would serve the first caller's window to
+        # the second, which is the class of bug this whole module exists to
+        # prevent: a reported context that is not the one being served.
+        d = self._model_dir("two-caps", [("a.context_length", U32, struct.pack("<I", 262144))])
+        ggufmeta._FACTS_CACHE.clear()
+        self.assertEqual(ggufmeta.serve_plan(d, 8192)[0], 8192)
+        self.assertEqual(ggufmeta.serve_plan(d, 262144)[0], 262144)
+        self.assertEqual(ggufmeta.serve_plan(d, 0)[0], 262144)
+
+    def test_a_rewritten_file_is_read_again(self):
+        # Keyed on mtime and size, so replacing the weights - a re-pull, a
+        # different quant into the same directory - is a different file and not
+        # a stale answer that outlives it.
+        d = self._model_dir("replaced", [("a.context_length", U32, struct.pack("<I", 4096))])
+        ggufmeta._FACTS_CACHE.clear()
+        self.assertEqual(ggufmeta.serve_plan(d, 262144)[0], 4096)
+        entry = os.path.join(d, "weights.gguf")
+        write_gguf(entry, [("a.context_length", U32, struct.pack("<I", 131072))])
+        os.utime(entry, (0, 0))     # a different mtime, whichever way it moved
+        self.assertEqual(ggufmeta.serve_plan(d, 262144)[0], 131072)
+
+    def test_the_cache_cannot_grow_without_bound(self):
+        # A gateway lives for days and nothing evicts on its own.
+        ggufmeta._FACTS_CACHE.clear()
+        for i in range(ggufmeta._FACTS_CACHE_MAX + 5):
+            d = self._model_dir("many%d" % i,
+                                [("a.context_length", U32, struct.pack("<I", 2048))])
+            ggufmeta.serve_plan(d, 2048)
+        self.assertLessEqual(len(ggufmeta._FACTS_CACHE), ggufmeta._FACTS_CACHE_MAX)
+
     def test_a_plan_carries_the_mtp_verdict(self):
         d = self._model_dir("speculating", [
             ("a.context_length", U32, struct.pack("<I", 32768)),
