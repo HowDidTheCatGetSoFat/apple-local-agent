@@ -14,6 +14,11 @@ the offer-and-consent flow.
 1. Check first. `fxlla avail <alias>` returns JSON: `cached`, `known`,
    `engine`, `size_mb` (real size when cached, else null), and `catalog_size`
    (the download estimate). `fxlla ls --json` lists what is already cached.
+   `catalog_size` is a hand-written estimate, not a measurement, and it can
+   run UNDER: a vision repo ships one or more multimodal projectors alongside
+   the weights and the pull takes every one of them, which on one 22GB row is
+   another 1.6GB. Quote it as an estimate rather than a figure, and say "about"
+   - the number you are relaying to a user is the one they consent against.
 2. If it is cached, use it. Starting is fast.
 3. If it is not cached, do not pull silently. Tell the user the size and the
    rough time at the current bandwidth cap, and offer any cheaper cached

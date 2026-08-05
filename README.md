@@ -191,6 +191,13 @@ starts `llama-server` with what it finds:
   prompts because it is memory bound; the speculating one tracks how guessable
   the next tokens are.
 - **The multimodal projector** beside the weights, so a vision model can see.
+  Found by looking for `mmproj` anywhere in the name, in any case, because
+  publishers disagree: one ships `mmproj-Model-F16.gguf`, another
+  `Model.mmproj-Q8_0.gguf`. Matching only the first spelling meant four models
+  here were downloaded without their projector and served text-only, with
+  nothing failing to say so. A repo that ships several projectors yields all of
+  them - they are small, and which one pairs with which build is not something
+  to guess at - so a pull can land larger than the weights alone suggest.
 
 `fxlla on` and the gateway derive these through the same code, and the gateway
 reports the resulting window as `context` in `/v1/models` - if those disagreed,
@@ -621,6 +628,18 @@ about the description, not a verdict on the image - and buys one more attempt
 rather than discarding the file. The distinction is not academic: on the first
 run recorded here the describer called a red fender black while getting
 everything else right.
+
+An edit gets one more look than a render does: the INPUT is read as well, and
+the two descriptions are diffed for words that appeared or vanished besides the
+one thing that was asked for. That gap is why it exists - the first real edit
+here turned a wall yellow as requested and the ground from concrete to wooden,
+and nothing said so, because the check only ever asks whether what was PROMISED
+turned up. The result is reported and never acted on: two descriptions
+differing is a fact about the descriptions, and the same eyes can word the same
+picture differently, so the output says as much rather than calling it a
+defect. The extra look is skipped when under 30 seconds of budget remain, since
+every look floors its timeout at 30 and commentary should not be what overruns
+the limit you set.
 
 Two budgets bound it, `--max-steps` and `--max-seconds`, because one slow
 render can outlast any reasonable number of attempts on its own. `--json`

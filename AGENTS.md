@@ -53,7 +53,7 @@ this before opening a pull request.
   comment on the pull request (`@coderabbitai review`).
 - CI runs shell lint (shellcheck and `bash -n`) plus every `tests/test_*.sh`
   suite, and the Python unit tests (`rag`, `graph`, `gateway`, `media`,
-  `evals`) on changes to `bin/`, `lib/`, shell scripts, or the `rag/`,
+  `evals`, `agent`) on changes to `bin/`, `lib/`, shell scripts, or the `rag/`,
   `graph/`, `gateway/`, or `media/` directories. A separate App workflow
   compiles the Swift app on changes to `app/`. CodeQL analyzes the Python
   sources and the workflow files on pushes to main and pull requests that
@@ -63,6 +63,10 @@ this before opening a pull request.
 
 - `bash -n bin/fxlla lib/core.sh tests/*.sh` for syntax.
 - Run the shell suites: `for t in tests/test_*.sh; do bash "$t" || exit 1; done`.
-- Run the Python suites: `FXLLA_STORE=/tmp python3 -m unittest rag.test_rag graph.test_graph gateway.test_gateway gateway.test_metrics gateway.test_gateway_e2e media.test_media evals.test_evals`.
+- Run the Python suites, the same list CI gates on - copy it from
+  `.github/workflows/ci.yml` rather than from memory, because this line drifted
+  behind it once and a shorter command still passes, which is how the drift
+  goes unnoticed:
+  `FXLLA_STORE=/tmp python3 -m unittest rag.test_rag graph.test_graph gateway.test_gateway gateway.test_metrics gateway.test_gateway_e2e media.test_media evals.test_evals agent.test_loop gateway.test_ggufmeta`.
 - Smoke test the read-only commands: `fxlla models`, `fxlla config`, `fxlla ram`.
 - For runtime changes, validate with the `tiny` model end to end.
