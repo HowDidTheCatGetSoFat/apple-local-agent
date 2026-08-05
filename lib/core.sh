@@ -213,9 +213,47 @@ _media_field() {
   return 1
 }
 
-# The Hugging Face cache the media toolchains read. Empty means the HF default
-# (~/.cache/huggingface); media/generate.py applies the same rule, so a pull and a
-# render always agree on where weights live.
+# The Hugging Face caches the media toolchains read, one per line.
+#
+# FXLLA_MEDIA_HF_HOME may name SEVERAL, separated by ':' the way PATH is,
+# because weights outgrow a disk long before anyone plans for it: one volume
+# here holds 1.0 TB of them and is 98% full, so the next 32 GB model has to
+# land somewhere else without the ones already fetched turning into "missing".
+#
+# Each entry is a cache ROOT - the directory that CONTAINS `hub/`, not `hub/`
+# itself. Empty means the HF default. media/weights.py applies the same rule,
+# so a pull and a render always agree on where weights live.
+#
+# The FIRST root is where new downloads go; every root is searched when asking
+# whether something is already here.
+media_hf_roots() {
+  local raw="${FXLLA_MEDIA_HF_HOME:-}" parts=() p
+  if [ -z "$raw" ]; then printf '%s\n' "$HOME/.cache/huggingface"; return 0; fi
+  # IFS=':' only, so a path with spaces in it survives - and there is one:
+  # "/Volumes/verga - Data/...". Splitting on whitespace would shred it.
+  local IFS_SAVE="$IFS"; IFS=':'
+  read -r -a parts <<< "$raw"
+  IFS="$IFS_SAVE"
+  for p in ${parts[@]+"${parts[@]}"}; do
+    [ -n "$p" ] || continue
+    printf '%s\n' "$p"
+  done
+}
+
+# Where a new download goes: the first root named.
+media_hf_write_root() {
+  local r first=""
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    [ -z "$first" ] && first="$r"
+  done <<EOF
+$(media_hf_roots)
+EOF
+  [ -n "$first" ] || first="$HOME/.cache/huggingface"
+  printf '%s' "$first"
+}
+
+# Kept for callers that just want something to print.
 media_hf_home() { printf '%s' "${FXLLA_MEDIA_HF_HOME:-}"; }
 
 # Is a repo present in that cache? A repo directory can exist with only metadata
@@ -225,17 +263,36 @@ media_hf_home() { printf '%s' "${FXLLA_MEDIA_HF_HOME:-}"; }
 # add trees/, and both keep the real bytes under the repo directory.
 # -print -quit stops at the first hit without a pipe into head, which under
 # `set -o pipefail` would SIGPIPE find and report a false negative.
-media_repo_cached() {
-  local repo="$1" home dir hit
-  home="$(media_hf_home)"
-  [ -n "$home" ] || home="$HOME/.cache/huggingface"
-  # models--<org>--<name>: slashes become double dashes, existing dashes are kept
-  # (verified against a real cache, e.g. models--black-forest-labs--FLUX.1-dev).
-  dir="$home/hub/models--$(printf '%s' "$repo" | sed 's|/|--|g')"
-  [ -d "$dir" ] || return 1
-  hit="$(find "$dir" -type f -size +1M -print -quit 2>/dev/null || true)"
-  [ -n "$hit" ]
+# Which root holds a repo, or nothing. Prints the root and returns 0 on a hit.
+# This is the question a render has to answer too: HF_HOME takes ONE path, so
+# knowing "it is cached somewhere" is not enough - the toolchain has to be
+# pointed at the root that actually has it.
+media_repo_root() {
+  local repo="$1" root dir hit
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    # models--<org>--<name>: slashes become double dashes, existing dashes are
+    # kept (verified against a real cache, e.g.
+    # models--black-forest-labs--FLUX.1-dev).
+    dir="$root/hub/models--$(printf '%s' "$repo" | sed 's|/|--|g')"
+    [ -d "$dir" ] || continue
+    hit="$(find "$dir" -type f -size +1M -print -quit 2>/dev/null || true)"
+    [ -n "$hit" ] || continue
+    printf '%s' "$root"
+    return 0
+  done <<EOF
+$(media_hf_roots)
+EOF
+  return 1
 }
+
+# Is a repo present in any of the caches? A repo directory can exist with only
+# metadata (an interrupted fetch, or a listing that never downloaded), so
+# media_repo_root looks for actual weight-sized content rather than trusting
+# the directory. That also keeps this working across cache layouts: plain
+# downloads fill blobs/, xet-backed ones add trees/, and both keep the real
+# bytes under the repo directory.
+media_repo_cached() { media_repo_root "$1" >/dev/null; }
 
 resolve_repo() {
   local q="$1"; [ -z "$q" ] && return 1

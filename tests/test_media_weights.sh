@@ -84,5 +84,67 @@ out="$(run __complete media)"
 if grep -qx weights <<< "$out"; then pass "completions list 'weights'"
 else fail "completions list 'weights'"; fi
 
+# --- several cache roots ---------------------------------------------------
+# Weights outgrow a disk, so FXLLA_MEDIA_HF_HOME takes a ':' separated list.
+# The first root is where new downloads go; every root is searched for what is
+# already here. A path with a space in it has to survive that split - the real
+# one on the author's machine is "/Volumes/verga - Data/...".
+# shellcheck disable=SC2034  # read by lib/core.sh on the same line
+REPO_ROOT="$ROOT"
+# shellcheck disable=SC1091
+. "$ROOT/lib/core.sh"
+
+ROOT_A="$(mktemp -d)/first cache"
+ROOT_B="$(mktemp -d)/second cache"
+mkdir -p "$ROOT_A" "$ROOT_B"
+trap 'rm -rf "$HFH" "$(dirname "$ROOT_A")" "$(dirname "$ROOT_B")"' EXIT
+
+# A repo with real weight-sized bytes, in the SECOND root only.
+FAR="$ROOT_B/hub/models--someorg--Far-Model/snapshots/abc"
+mkdir -p "$FAR"
+dd if=/dev/zero of="$FAR/model.safetensors" bs=1024 count=2048 >/dev/null 2>&1
+
+export FXLLA_MEDIA_HF_HOME="$ROOT_A:$ROOT_B"
+
+got="$(media_hf_roots | wc -l | tr -d ' ')"
+if [ "$got" = 2 ]; then pass "a ':' list yields both roots"
+else fail "a ':' list yields both roots (got $got)"; fi
+
+if [ "$(media_hf_write_root)" = "$ROOT_A" ]; then
+  pass "new downloads go to the first root"
+else fail "new downloads go to the first root"; fi
+
+# The point of the whole thing: cached in a root that is NOT the write root.
+if media_repo_cached "someorg/Far-Model"; then
+  pass "a repo cached in a later root is found"
+else fail "a repo cached in a later root is reported missing"; fi
+
+if [ "$(media_repo_root "someorg/Far-Model")" = "$ROOT_B" ]; then
+  pass "the root holding a repo is named, not just 'somewhere'"
+else fail "media_repo_root named the wrong root"; fi
+
+if media_repo_cached "someorg/Nowhere"; then
+  fail "a repo in no root was reported cached"
+else pass "a repo in no root is not cached"; fi
+
+# Spaces: both roots have one. If the split used whitespace these would be four
+# broken paths and every check above would be meaningless.
+case "$(media_repo_root "someorg/Far-Model")" in
+  *"second cache") pass "a root path containing a space survives the split" ;;
+  *) fail "a root path containing a space was shredded by the split" ;;
+esac
+
+# Metadata alone is not a cached model, in any root.
+THIN="$ROOT_A/hub/models--someorg--Thin-Model/snapshots/abc"
+mkdir -p "$THIN"; printf '{}' > "$THIN/config.json"
+if media_repo_cached "someorg/Thin-Model"; then
+  fail "a metadata-only directory counted as cached"
+else pass "a metadata-only directory is not cached"; fi
+
+unset FXLLA_MEDIA_HF_HOME
+if [ "$(media_hf_roots)" = "$HOME/.cache/huggingface" ]; then
+  pass "unset falls back to the single HF default"
+else fail "unset falls back to the single HF default"; fi
+
 if [ "$fails" -ne 0 ]; then printf '\n%d test(s) failed\n' "$fails"; exit 1; fi
 printf '\nall media weight tests passed\n'

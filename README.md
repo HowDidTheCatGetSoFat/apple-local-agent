@@ -551,6 +551,24 @@ them by repository id - the cache layout is what they look for. That also means
 the Hugging Face CLI does the transfer, so **the bandwidth cap does not apply to
 media pulls**. `fxlla doctor` reports how many catalog entries are ready.
 
+These caches get big enough to outrun a disk, so `FXLLA_MEDIA_HF_HOME` takes
+several, colon separated like `PATH`:
+
+```sh
+FXLLA_MEDIA_HF_HOME=/Volumes/roomy/huggingface:/Volumes/full/huggingface
+```
+
+The first is where new downloads land; all of them are searched when asking
+whether something is already here. The subtlety is that `HF_HOME`, which is
+what the render toolchains read, accepts exactly one path - so fxlla resolves
+it per job and hands each render the root that actually holds the model it
+needs. Getting that wrong is not a visible failure: the toolchain concludes the
+weights are missing and fetches them again. When one job needs weights that are
+split across roots, fxlla picks the root holding the most **bytes** of them -
+not the most repos, because two small extras must not outrank the base model -
+and names the ones it cannot reach rather than letting a surprise download
+explain it. A `--lora` given as a repository id counts as one of those needs.
+
 Pre-fetching is optional. Skipping it is fine: the toolchain then downloads only
 the files it actually needs on first render, which for some repositories is much
 less than the whole thing.

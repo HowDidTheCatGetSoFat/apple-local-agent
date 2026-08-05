@@ -64,8 +64,11 @@ interpreter must have `mlx-audio` installed (a project venv is the usual home).
 - `FXLLA_VOICE_PYTHON` - interpreter with `mlx-audio` installed (a project venv).
 - `FXLLA_VOICE_REF` - reference voice wav for speech (sets the timbre).
 - `FXLLA_VOICE_MODEL` / `FXLLA_VOICE_LANG` - TTS model and default language.
-- `FXLLA_MEDIA_HF_HOME` - Hugging Face cache holding the diffusion/audio weights
-  (exported as `HF_HOME` for the child process).
+- `FXLLA_MEDIA_HF_HOME` - Hugging Face cache holding the diffusion/audio weights.
+  Colon separated for several caches: the first takes new downloads, all are
+  searched. `HF_HOME` accepts only one path, so each render is handed the root
+  that actually holds the model it needs - pointing it at the wrong one does
+  not fail, it silently downloads tens of gigabytes again.
 - `FXLLA_MEDIA_MODEL` - default image model (default `z-image-turbo`).
 - `FXLLA_MEDIA_OUT` - output directory (default `<FXLLA_STORE>/media`).
 - `FXLLA_MEDIA_SKIP_QUALITY` - set to 1 to accept output that fails the content

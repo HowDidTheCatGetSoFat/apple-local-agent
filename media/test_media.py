@@ -2584,5 +2584,227 @@ class TestValidateWavOutput(unittest.TestCase):
             media.validate_wav_output(path)  # must not raise
 
 
+class _StopHere(Exception):
+    """Sentinel: stop a generator once it has revealed what we are checking."""
+
+
+class TestSeveralCacheRoots(unittest.TestCase):
+    """FXLLA_MEDIA_HF_HOME may name several caches, ':' separated.
+
+    Weights outgrow a disk. The first root takes new downloads; every root is
+    searched for what is already there. The part that is easy to get wrong is
+    the render: HF_HOME accepts ONE path, so pointing a job at the wrong root
+    does not fail loudly - the toolchain decides the weights are missing and
+    downloads tens of gigabytes again.
+    """
+
+    def setUp(self):
+        import weights as w
+        self.w = w
+        self.saved = os.environ.get("FXLLA_MEDIA_HF_HOME")
+        # Spaces on purpose: the real cache here is "/Volumes/verga - Data/...".
+        self.a = os.path.join(tempfile.mkdtemp(), "first cache")
+        self.b = os.path.join(tempfile.mkdtemp(), "second cache")
+        os.makedirs(self.a)
+        os.makedirs(self.b)
+
+    def tearDown(self):
+        if self.saved is None:
+            os.environ.pop("FXLLA_MEDIA_HF_HOME", None)
+        else:
+            os.environ["FXLLA_MEDIA_HF_HOME"] = self.saved
+        for d in (self.a, self.b):
+            shutil.rmtree(os.path.dirname(d), ignore_errors=True)
+
+    def _place(self, root, repo, size=2 * 1024 * 1024):
+        snap = os.path.join(root, "hub", "models--" + repo.replace("/", "--"),
+                            "snapshots", "abc")
+        os.makedirs(snap, exist_ok=True)
+        with open(os.path.join(snap, "model.safetensors"), "wb") as fh:
+            fh.write(b"\0" * size)
+
+    def test_roots_split_on_colon_and_keep_spaces(self):
+        os.environ["FXLLA_MEDIA_HF_HOME"] = self.a + ":" + self.b
+        self.assertEqual(self.w.cache_roots(), [self.a, self.b])
+        self.assertEqual(self.w.write_root(), self.a)
+
+    def test_unset_is_the_single_default(self):
+        os.environ.pop("FXLLA_MEDIA_HF_HOME", None)
+        self.assertEqual(self.w.cache_roots(),
+                         [os.path.expanduser("~/.cache/huggingface")])
+
+    def test_a_repo_in_a_later_root_is_found_and_named(self):
+        self._place(self.b, "someorg/Far-Model")
+        os.environ["FXLLA_MEDIA_HF_HOME"] = self.a + ":" + self.b
+        self.assertTrue(self.w._cached("someorg/Far-Model"))
+        self.assertEqual(self.w.repo_root("someorg/Far-Model"), self.b)
+        self.assertIsNone(self.w.repo_root("someorg/Nowhere"))
+
+    def test_metadata_only_is_not_cached_in_any_root(self):
+        snap = os.path.join(self.b, "hub", "models--someorg--Thin",
+                            "snapshots", "abc")
+        os.makedirs(snap)
+        with open(os.path.join(snap, "config.json"), "w") as fh:
+            fh.write("{}")
+        os.environ["FXLLA_MEDIA_HF_HOME"] = self.a + ":" + self.b
+        self.assertFalse(self.w._cached("someorg/Thin"))
+
+    def test_render_is_pointed_at_the_root_that_has_the_weights(self):
+        # 'voice' resolves through FIXED_ALIAS to the chatterbox row, so this
+        # uses whatever repos the shipped catalog names for it - no fixture
+        # catalog that could drift away from the real one.
+        repos = self.w._repos_for("voice")
+        self.assertTrue(repos, "the catalog has no repos for voice")
+        for repo in repos:
+            self._place(self.b, repo)
+        os.environ["FXLLA_MEDIA_HF_HOME"] = self.a + ":" + self.b
+        root, unreachable = self.w.hf_home_for("voice")
+        # The write root is self.a; the weights are in self.b. Handing back the
+        # write root here is the silent re-download this exists to prevent.
+        self.assertEqual(root, self.b)
+        self.assertEqual(unreachable, [])
+
+    def test_weights_nowhere_yet_resolve_to_the_write_root(self):
+        os.environ["FXLLA_MEDIA_HF_HOME"] = self.a + ":" + self.b
+        root, unreachable = self.w.hf_home_for("voice")
+        self.assertEqual(root, self.a)
+        self.assertEqual(unreachable, [],
+                         "not downloaded yet is not the same as unreachable")
+
+    def test_env_never_forwards_the_list_as_a_path(self):
+        os.environ["FXLLA_MEDIA_HF_HOME"] = self.a + ":" + self.b
+        env = media._env("voice")
+        self.assertIn(env["HF_HOME"], (self.a, self.b))
+        self.assertNotIn(":", env["HF_HOME"].replace(self.a, "").replace(self.b, ""))
+
+    def test_the_big_model_beats_a_pile_of_small_extras(self):
+        """Ranking roots by repo COUNT sent renders to the wrong disk.
+
+        With --pid-decode the two extras (a decoder and a caption encoder) are
+        two repos; the base model is one. Counting repos made the root holding
+        the extras win, and the base model - the big one, the whole reason not
+        to re-download - got fetched again.
+        """
+        base = self.w._repos_for("image", "z-image-turbo")
+        extras = self.w._repos_for(None, None, ("pid",))
+        self.assertTrue(base, "no repos for z-image-turbo in the catalog")
+        self.assertGreater(len(extras), len(base),
+                           "fixture assumes the extras outnumber the base repo")
+        for repo in extras:                       # many, small
+            self._place(self.a, repo, 2 * 1024 * 1024)
+        for repo in base:                         # one, large
+            self._place(self.b, repo, 24 * 1024 * 1024)
+        os.environ["FXLLA_MEDIA_HF_HOME"] = self.a + ":" + self.b
+        root, unreachable = self.w.hf_home_for("image", "z-image-turbo", ("pid",))
+        self.assertEqual(root, self.b, "picked the root with more repos, not more bytes")
+        self.assertEqual(unreachable, extras)
+
+    def test_a_lora_named_as_a_repo_id_is_counted(self):
+        """A --lora repo id is a real dependency that no catalog row names."""
+        base = self.w._repos_for("image", "z-image-turbo")
+        for repo in base:
+            self._place(self.a, repo, 2 * 1024 * 1024)
+        self._place(self.b, "someorg/CoolLora", 24 * 1024 * 1024)
+        os.environ["FXLLA_MEDIA_HF_HOME"] = self.a + ":" + self.b
+        # Blind to the LoRA, this picks self.a and reports nothing wrong.
+        root, unreachable = self.w.hf_home_for(
+            "image", "z-image-turbo", (), ["someorg/CoolLora"])
+        self.assertEqual(root, self.b)
+        self.assertEqual(unreachable, base)
+
+    def test_generate_image_actually_forwards_the_lora_repo_ids(self):
+        """The wiring, not just the helper.
+
+        The first version of this test called hf_home_for() directly with the
+        ids and passed even with generate_image's argument deleted - it proved
+        the function worked and nothing about whether anyone called it. So
+        drive generate_image and record what _env was really given.
+        """
+        seen = {}
+
+        def fake_env(kind=None, model=None, extras=(), repos=()):
+            seen["kind"] = kind
+            seen["model"] = model
+            seen["extras"] = tuple(extras)
+            seen["repos"] = list(repos)
+            raise _StopHere()
+
+        # build_command validates a local LoRA path, so it has to be a real
+        # file - the point of including one is that it must NOT be treated as
+        # a repo id.
+        local = os.path.join(self.a, "local.safetensors")
+        with open(local, "wb") as fh:
+            fh.write(b"\0" * 1024)
+
+        real_env = media._env
+        media._env = fake_env
+        try:
+            with self.assertRaises(_StopHere):
+                media.generate_image(
+                    "a cat", model="z-image-turbo",
+                    loras=["someorg/CoolLora,0.8", local],
+                    output=os.path.join(self.a, "out.png"))
+        finally:
+            media._env = real_env
+
+        self.assertEqual(seen["kind"], "image")
+        self.assertEqual(seen["model"], "z-image-turbo")
+        self.assertEqual(seen["repos"], ["someorg/CoolLora"],
+                         "the repo-id LoRA must reach the cache-root choice, "
+                         "and the local file must not")
+
+    def test_lora_repo_ids_are_told_apart_from_paths(self):
+        self.assertEqual(media._lora_repo_ids(["someorg/CoolLora"]),
+                         ["someorg/CoolLora"])
+        # The scale rides on a COMMA, not a space - argparse nargs="+" would
+        # otherwise swallow the prompt. See split_ref.
+        self.assertEqual(media._lora_repo_ids(["someorg/CoolLora,0.8"]),
+                         ["someorg/CoolLora"])
+        self.assertEqual(media._lora_repo_ids([["someorg/CoolLora", "0.8"]]),
+                         ["someorg/CoolLora"])
+        for path in ["/abs/x.safetensors", "./rel/x.safetensors",
+                     "~/x.safetensors", "plain.safetensors", "bare-name"]:
+            self.assertEqual(media._lora_repo_ids([path]), [],
+                             "%s is a file, not a repo id" % path)
+
+    def test_bytes_are_not_double_counted_through_snapshot_symlinks(self):
+        """A HF cache keeps bytes in blobs/ and links to them from snapshots/.
+
+        Following both would count every file twice and could flip the choice
+        of root, so the size walk skips links.
+        """
+        repo = os.path.join(self.a, "hub", "models--org--Linked")
+        blobs = os.path.join(repo, "blobs")
+        snaps = os.path.join(repo, "snapshots", "abc")
+        os.makedirs(blobs)
+        os.makedirs(snaps)
+        blob = os.path.join(blobs, "deadbeef")
+        with open(blob, "wb") as fh:
+            fh.write(b"\0" * (4 * 1024 * 1024))
+        os.symlink(blob, os.path.join(snaps, "model.safetensors"))
+        self.assertEqual(self.w._weight_bytes(repo), 4 * 1024 * 1024)
+
+    def test_loras_are_collected_from_every_root_once(self):
+        def write(root, name, keys):
+            snap = os.path.join(root, "hub", name, "snapshots", "abc")
+            os.makedirs(snap, exist_ok=True)
+            hdr = {k: {"dtype": "F16", "shape": [1], "data_offsets": [0, 2]}
+                   for k in keys}
+            blob = json.dumps(hdr).encode()
+            with open(os.path.join(snap, "w.safetensors"), "wb") as fh:
+                fh.write(struct.pack("<Q", len(blob)) + blob + b"\x00\x00")
+
+        write(self.a, "models--org--LoRA-A", ["b.0.lora_A.weight"])
+        write(self.b, "models--org--LoRA-B", ["b.0.lora_A.weight"])
+        # The same repo in BOTH roots must be offered once, not twice.
+        write(self.a, "models--org--LoRA-Dup", ["b.0.lora_A.weight"])
+        write(self.b, "models--org--LoRA-Dup", ["b.0.lora_A.weight"])
+        os.environ["FXLLA_MEDIA_HF_HOME"] = self.a + ":" + self.b
+        names = [r[0] for r in media._hf_cache_loras()]
+        self.assertIn("org/LoRA-A", names)
+        self.assertIn("org/LoRA-B", names)
+        self.assertEqual(names.count("org/LoRA-Dup"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

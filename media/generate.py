@@ -7,7 +7,10 @@ ltx-2-mlx (LTX-2.3). Both write under <FXLLA_STORE>/media by default and the
 produced file is validated, since a zero exit code is not proof of a real render.
 
 Config via environment:
-  FXLLA_MEDIA_HF_HOME   HF cache for the image diffusion weights (exported as HF_HOME)
+  FXLLA_MEDIA_HF_HOME   HF cache(s) for the diffusion weights, ':' separated.
+                        The first takes new downloads, all are searched, and
+                        each render is exported the one holding what it needs
+                        (HF_HOME accepts a single path).
   FXLLA_MEDIA_MODEL     default image model (default z-image-turbo)
   FXLLA_MEDIA_OUT       output directory (default <FXLLA_STORE>/media)
   FXLLA_VIDEO_BIN       path to the ltx-2-mlx binary (default: ltx-2-mlx on PATH)
@@ -386,11 +389,49 @@ VOICE_BACKEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voice_
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
-def _env():
+def _lora_repo_ids(loras):
+    """The --lora values that name a Hugging Face repo rather than a file.
+
+    Same test build_command uses: something that names a file (extension,
+    absolute, or explicitly relative) is a path; anything else with a slash is
+    a repo id that mflux will resolve out of the cache.
+    """
+    ids = []
+    for ref in loras or []:
+        parts = split_ref(ref)
+        if not parts:
+            continue
+        path = parts[0]
+        if (path.endswith((".safetensors", ".ckpt"))
+                or os.path.isabs(path)
+                or path.startswith(("./", "../", "~"))):
+            continue
+        if "/" in path:
+            ids.append(path)
+    return ids
+
+
+def _env(kind=None, model=None, extras=(), repos=()):
+    """Environment for a backend, with HF_HOME resolved to ONE cache root.
+
+    FXLLA_MEDIA_HF_HOME may list several roots. Forwarding the list verbatim
+    would set HF_HOME to a path that does not exist, and the toolchain would
+    quietly re-download everything; so resolve it to the root that holds what
+    this render needs. Callers that know their kind and model say so - the
+    default is the first root, which is where new downloads go anyway.
+    """
     env = dict(os.environ)
-    hf = os.environ.get("FXLLA_MEDIA_HF_HOME")
-    if hf:
-        env["HF_HOME"] = hf
+    if not os.environ.get("FXLLA_MEDIA_HF_HOME"):
+        return env
+    root, unreachable = weights.hf_home_for(kind, model, extras, repos)
+    env["HF_HOME"] = root
+    if unreachable:
+        # Say it rather than let a surprise re-download of tens of GB be the
+        # first sign. See `fxlla doctor` for the same warning at rest.
+        sys.stderr.write(
+            "warning: these weights are cached under a different "
+            "FXLLA_MEDIA_HF_HOME root than the one this render uses (%s), so "
+            "they will be fetched again: %s\n" % (root, ", ".join(unreachable)))
     return env
 
 
@@ -860,7 +901,15 @@ def generate_image(prompt, model=None, steps=None, seed=None, width=None,
                         preset=preset, strength=strength,
                         pid_decode=pid_decode,
                         pid_degrade_sigma=pid_degrade_sigma)
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
+    # The extras mirror what weights.require() was asked for above, so the
+    # cache root picked here covers the same repos the consent gate counted.
+    # A --lora given as a repo id is a dependency too, and no catalog row
+    # names it - without this the root choice is blind to where it lives and
+    # mflux quietly fetches it again.
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          env=_env("image", model,
+                                   ("pid",) if pid_decode else (),
+                                   _lora_repo_ids(loras)))
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "%s failed" % spec["cli"])[-800:])
     _report_warnings(proc.stderr)
@@ -962,7 +1011,8 @@ def generate_video(prompt, stage=DEFAULT_STAGE, frames=None,
                               images=images, steps=steps,
                               stage1_steps=stage1_steps,
                               stage2_steps=stage2_steps)
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          env=_env("video", model))
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "video generation failed")[-800:])
     _report_warnings(proc.stderr)
@@ -1006,7 +1056,8 @@ def generate_speech(text, ref=None, lang=None, model=None, speed=1.0,
     free_gpu("voice", keep_models)
     cmd = build_voice_command(text, output, ref or VOICE_REF, model=model,
                               lang=lang, speed=speed)
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          env=_env("voice", model))
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "voice generation failed")[-800:])
     _report_warnings(proc.stderr)
@@ -1045,7 +1096,7 @@ def generate_edit(prompt, image, seed=None, quantize=8, output=None,
     output = resolve_output(output, "edit", "png")
     free_gpu("edit", keep_models)
     cmd = build_edit_command(prompt, image, output, seed=seed, quantize=quantize)
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=_env("edit"))
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "image edit failed")[-800:])
     _report_warnings(proc.stderr)
@@ -1077,7 +1128,8 @@ def generate_upscale(image, scale=None, output=None, keep_models=False):
     output = resolve_output(output, "upscale", "png")
     free_gpu("upscale", keep_models)
     cmd = build_upscale_command(image, output, scale=scale)
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=_env())
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          env=_env("upscale"))
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr.strip() or "image upscale failed")[-800:])
     _report_warnings(proc.stderr)
@@ -1569,9 +1621,24 @@ def _hf_cache_loras():
     name (lora, dora, lightning) rather than by size: every base model is a
     pile of .safetensors too, and guessing by size would list all of them.
     """
-    root = os.environ.get("FXLLA_MEDIA_HF_HOME") or os.path.expanduser(
-        "~/.cache/huggingface")
-    hub = os.path.join(root, "hub")
+    found, seen = [], set()
+    for root in weights.cache_roots():
+        for entry in _hf_cache_loras_in(os.path.join(root, "hub")):
+            # The same repo can sit in two caches; offer it once. The first
+            # root wins, which is the one a render would reach for anyway.
+            if entry[0] in seen:
+                continue
+            seen.add(entry[0])
+            found.append(entry)
+    return found
+
+
+def _hf_cache_loras_in(hub):
+    """One cache's worth of the above. Split out so several can be scanned.
+
+    Note the local name below is `files`, not `weights`: this module imports a
+    module called weights, and shadowing it here would break the caller.
+    """
     if not os.path.isdir(hub):
         return []
     found = []
@@ -1579,18 +1646,18 @@ def _hf_cache_loras():
         if not name.startswith("models--"):
             continue
         repo = name[len("models--"):].replace("--", "/")
-        weights = glob.glob(os.path.join(hub, name, "snapshots", "*", "*.safetensors"))
-        if not weights:
+        files = glob.glob(os.path.join(hub, name, "snapshots", "*", "*.safetensors"))
+        if not files:
             continue
         # Every weight file must be an adapter. Some base-model repos ship an
         # example LoRA beside the model (SDXL base does), and offering that
         # repo id as --lora would hand mflux the base model instead.
-        verdicts = [lora_base_model(os.path.realpath(w)) for w in weights]
+        verdicts = [lora_base_model(os.path.realpath(w)) for w in files]
         if not verdicts or any(v is None for v in verdicts):
             continue
         base = next((v for v in verdicts if v), "")
         total = 0
-        for w in weights:
+        for w in files:
             try:
                 total += os.path.getsize(os.path.realpath(w))
             except OSError:

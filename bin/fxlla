@@ -260,9 +260,21 @@ _pull_media() {
   size="$(_media_field "$alias" 3 || true)"
   kind="$(_media_field "$alias" 4 || true)"
   include="$(_media_field "$alias" 5 || true)"
-  local home; home="$(media_hf_home)"
+  local home; home="$(media_hf_write_root)"
   info "Media:    $alias ($kind), about $size"
-  info "Cache:    ${home:-the Hugging Face default (~/.cache/huggingface)}"
+  if [ -n "$(media_hf_home)" ]; then
+    info "Cache:    $home (new downloads)"
+    local _r _n=0
+    while IFS= read -r _r; do
+      [ -n "$_r" ] || continue
+      _n=$((_n+1))
+      [ "$_n" -gt 1 ] && info "          $_r (searched)"
+    done <<EOF
+$(media_hf_roots)
+EOF
+  else
+    info "Cache:    the Hugging Face default (~/.cache/huggingface)"
+  fi
   info "Transfer: Hugging Face CLI (no bandwidth cap)"
   local repo inc=() tok=() pat
   [ -n "${HF_TOKEN:-}" ] && tok=(--token "$HF_TOKEN")
@@ -294,7 +306,7 @@ _pull_media() {
     # Only a real transfer needs uv, so a fully cached alias works without it.
     need uv
     info "Downloading $repo ..."
-    HF_HOME="${home:-$HOME/.cache/huggingface}" \
+    HF_HOME="$home" \
       uvx --from "huggingface_hub[hf_xet]" hf download "$repo" \
       ${inc[@]+"${inc[@]}"} ${tok[@]+"${tok[@]}"} \
       || die "hf download failed for $repo (gated without HF_TOKEN? typo?)"
@@ -1620,10 +1632,37 @@ EOF
   fi
   if [ -z "$FXLLA_MEDIA_HF_HOME" ]; then
     _chk warn "FXLLA_MEDIA_HF_HOME unset (using the default HF cache; set it to verify a path)"
-  elif [ -d "$FXLLA_MEDIA_HF_HOME" ]; then
-    _chk ok "media weight cache: $FXLLA_MEDIA_HF_HOME"
   else
-    _chk warn "media weight cache not found: $FXLLA_MEDIA_HF_HOME (is the disk mounted?)"
+    # Several roots are allowed, ':' separated. Report each one on its own:
+    # a list that is right except for one unmounted disk still loses every
+    # model on that disk, and saying "media weight cache: <the whole list>"
+    # would hide exactly that.
+    local _root _first=1 _seen=0
+    while IFS= read -r _root; do
+      [ -n "$_root" ] || continue
+      _seen=$((_seen + 1))
+      local _label="searched"
+      [ "$_first" = 1 ] && { _label="new downloads"; _first=0; }
+      if [ -d "$_root" ]; then
+        _chk ok "media weight cache ($_label): $_root"
+      else
+        # One message for both reasons it can be absent. Telling them apart by
+        # whether the PARENT exists does not work: for a root that is itself a
+        # volume mount point, the parent is /Volumes, which exists whether or
+        # not the disk is attached - so an unmounted disk got reported as a
+        # healthy empty cache, which is the worst of the three answers.
+        _chk warn "media weight cache does not exist ($_label): $_root (created on the first download - if it lives on a disk, check that it is mounted)"
+      fi
+    done <<EOF
+$(media_hf_roots)
+EOF
+    # Set, but nothing usable parsed out of it (a stray ':' on its own, or a
+    # value built from an unset variable). Without this the loop above runs
+    # zero times and the whole check disappears from the report, which reads
+    # exactly like a check that passed.
+    if [ "$_seen" -eq 0 ]; then
+      _chk warn "FXLLA_MEDIA_HF_HOME is set but names no usable path: '$FXLLA_MEDIA_HF_HOME'"
+    fi
   fi
   # Which catalog entries are ready, so a missing render dependency is visible
   # here instead of surfacing as a surprise download mid-job.
