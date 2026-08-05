@@ -4,6 +4,10 @@
 # `fxlla config`. Precedence must be: environment > config.env > defaults.
 #
 # Run: bash tests/test_config.sh
+#
+# Some checks grep app/package-dmg.sh for literal shell source, so the `$` in
+# those patterns must NOT expand - single quotes are the point, not an oversight.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -61,8 +61,18 @@ this before opening a pull request.
 
 ## Testing
 
-- `bash -n bin/fxlla lib/core.sh tests/*.sh` for syntax.
-- Run the shell suites: `for t in tests/test_*.sh; do bash "$t" || exit 1; done`.
+- `bash tests/run.sh` is the whole shell check: shellcheck first, then every
+  suite. Three things it does that a hand-rolled loop does not, each because
+  the loop once let something through:
+  - It lints at the severity CI uses (`-S warning`). A local run at a stricter
+    severity reported clean while CI failed on `note`s for three commits, so
+    run it here rather than inventing a shellcheck command per session.
+  - It discovers `tests/test_*.sh` by glob, so a new suite runs as soon as it
+    exists. The suites used to be named by hand in two places in `ci.yml`.
+  - It fails any suite that exits 0 without asserting anything. A suite that
+    dies before its first check - an unbound variable while sourcing
+    `lib/core.sh` will do it - is otherwise indistinguishable from a pass.
+- `bash -n bin/fxlla lib/core.sh tests/*.sh` for syntax on its own.
 - Run the Python suites, the same list CI gates on - copy it from
   `.github/workflows/ci.yml` rather than from memory, because this line drifted
   behind it once and a shorter command still passes, which is how the drift

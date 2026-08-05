@@ -4,6 +4,10 @@
 # and the usage message.
 #
 # Run: bash tests/test_pull.sh
+#
+# Several checks grep bin/fxlla for literal shell source, so the `$` in those
+# patterns must NOT expand - single quotes are the point, not an oversight.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
