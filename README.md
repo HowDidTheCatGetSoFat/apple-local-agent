@@ -292,14 +292,17 @@ load, and a GPU RAM toggle. It is a thin front end over the CLI. See
 
 ```sh
 app/build.sh && open app/fxlla.app          # unsigned local build
-app/package-dmg.sh --check                   # verify signing prerequisites
-app/package-dmg.sh --notarize <profile>      # signed, notarized, stapled .dmg
+app/package-dmg.sh --check                   # signing prereqs + notary profile
+app/package-dmg.sh --notarize                # signed, notarized, stapled .dmg
 ```
 
-Distribution builds are signed with a Developer ID and notarized. Create the
-`notarytool` keychain profile once (with an app-specific password or an App
-Store Connect API key); `app/package-dmg.sh` reads it from the keychain and
-never from the repo. See `app/package-dmg.sh` for the exact commands.
+Distribution builds are signed with a Developer ID and notarized, which are two
+separate credentials: the certificate signs, and notarizing uploads to Apple
+with a `notarytool` keychain profile created once (from an app-specific
+password or an App Store Connect API key). The secret stays in the keychain and
+is never read from the repo; only the profile NAME comes from config, via
+`FXLLA_NOTARY_PROFILE`, so `--notarize` needs no argument. `--check` prints that
+name and whether it authenticates. Maintainers: see MAINTAINERS.md.
 
 The app ships the CLI inside its bundle, so installing the `.dmg` alone gives a
 working `fxlla`. To use it from a terminal, click **Install the fxlla command**

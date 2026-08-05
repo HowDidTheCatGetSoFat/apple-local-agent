@@ -31,8 +31,14 @@ app/build.sh --release --sign
 
 Signing uses the `Developer ID Application` identity; override with
 `FXLLA_SIGN_ID`. A signed `.dmg` is built by `app/package-dmg.sh`, which can also
-notarize and staple it (`app/package-dmg.sh --notarize <profile>`; `--check`
-verifies the signing prerequisites).
+notarize and staple it (`app/package-dmg.sh --notarize`; `--check` verifies the
+signing prerequisites and reports whether the notary profile authenticates).
+
+Notarizing does not use the signing certificate - it needs a separate notarytool
+keychain profile, and `--notarize` takes its name from `FXLLA_NOTARY_PROFILE`
+when you do not pass one. See MAINTAINERS.md, including how to check whether a
+build was ever notarized (ask Apple with `notarytool history`, not the
+keychain).
 
 ## Requirements
 

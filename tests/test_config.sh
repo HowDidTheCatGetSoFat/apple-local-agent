@@ -65,6 +65,44 @@ assert_contains "env overrides config.env (port)" "127.0.0.1:1234" \
 assert_contains "default applies with no env and no config" "$DEFAULT_STORE" \
   env -u FXLLA_STORE XDG_CONFIG_HOME="$CFG/none" bash "$FXLLA" config
 
+# --- the notary profile is not something to remember ------------------------
+# app/package-dmg.sh used to REQUIRE the profile name as an argument, and the
+# name lived in a config file nothing loads. Asked whether this project had
+# ever notarized, the keychain was searched with the wrong command, nothing was
+# found, and the answer given was "there are no credentials" - while three
+# submissions sat Accepted in Apple's history.
+#
+# SOURCE-level, and weaker than running it: the real path needs an Apple
+# Developer identity and a keychain profile, neither of which exists on a CI
+# runner, so `--notarize` cannot be exercised here at all. What this pins is
+# the shape - the argument is optional and the config name is consulted - which
+# is what a careless edit would undo.
+PKG="$ROOT/app/package-dmg.sh"
+if grep -q 'PROFILE="${2:-${FXLLA_NOTARY_PROFILE:-}}"' "$PKG"; then
+  pass "--notarize falls back to FXLLA_NOTARY_PROFILE"
+else
+  fail "--notarize falls back to FXLLA_NOTARY_PROFILE"
+fi
+if grep -q '\${2:?usage' "$PKG"; then
+  fail "the profile argument is no longer mandatory"
+else
+  pass "the profile argument is no longer mandatory"
+fi
+# Both config locations, because they are two different files: lib/core.sh
+# loads ~/.config/fxlla/config.env, while the release settings live in the
+# repo's own git-ignored config/config.env. Reading only one is how the name
+# went missing.
+if grep -q '\.\./config/config\.env' "$PKG"; then
+  pass "package-dmg reads the repo's config/config.env"
+else
+  fail "package-dmg reads the repo's config/config.env"
+fi
+if grep -q 'XDG_CONFIG_HOME' "$PKG"; then
+  pass "package-dmg reads the user's config.env too"
+else
+  fail "package-dmg reads the user's config.env too"
+fi
+
 if [ "$fails" -ne 0 ]; then
   printf '\n%d test(s) failed\n' "$fails"
   exit 1
