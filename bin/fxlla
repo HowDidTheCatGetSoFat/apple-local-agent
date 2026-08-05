@@ -1049,10 +1049,16 @@ _llama_flags() {
   # orderings over one directory is two answers to "which file is the model".
   while IFS= read -r p; do
     [ -n "$p" ] || continue
-    case "$(printf '%s' "$p" | tr 'A-Z' 'a-z')" in *f16*) [ -z "$f16" ] && f16="$p" ;; esac
+    case "$(printf '%s' "$p" | LC_ALL=C tr '[:upper:]' '[:lower:]')" in *f16*) [ -z "$f16" ] && f16="$p" ;; esac
     [ -z "$mm" ] && mm="$p"
   done <<EOF
-$(ls -1 "$dest" 2>/dev/null | LC_ALL=C sort | grep -i '\.gguf$' | grep -i 'mmproj' || true)
+$(
+  # shellcheck disable=SC2012  # ls, not find: the point is LC_ALL=C sort, one
+  # fixed order over this directory. Bash glob order is locale-collated and
+  # python's sorted() is codepoint order, and when those two disagreed about
+  # the same directory the launcher and the gateway picked different files.
+  ls -1 "$dest" 2>/dev/null | LC_ALL=C sort | grep -i '\.gguf$' | grep -i 'mmproj' || true
+)
 EOF
   # f16 wins where a repo ships both: the projector is small and it is better.
   [ -n "$f16" ] && mm="$f16"
@@ -1095,6 +1101,7 @@ cmd_backend() {
     # reject, and gateway/ggufmeta.py reads the same directory with Python's
     # sorted(). One directory has to have one answer.
     if [ -z "$entry" ]; then
+      # shellcheck disable=SC2012  # ls for the LC_ALL=C ordering, see above.
       entry="$(ls -1 "$dest" 2>/dev/null | LC_ALL=C sort \
                | grep -i '\.gguf$' | grep -iv 'mmproj' | head -1 || true)"
     fi
@@ -1530,6 +1537,27 @@ cmd_doctor() {
     _chk ok "store mounted: $FXLLA_STORE (${free:-?} GB free, $(( n>0 ? n-1 : 0 )) models)"
   else
     _chk fail "store not found: $FXLLA_STORE (set FXLLA_STORE in ~/.config/fxlla/config.env)"
+  fi
+  local stray; stray="$(stray_model_dirs || true)"
+  if [ -z "$stray" ]; then
+    _chk ok "every downloaded model answers to its catalog alias"
+  else
+    local sdir salias
+    while IFS="$(printf '\t')" read -r sdir salias; do
+      [ -n "$sdir" ] || continue
+      if [ -d "$MODELS_DIR/$salias" ]; then
+        # Both names exist, so the same weights were fetched twice. `mv` here
+        # would move one INSIDE the other rather than rename it, which is why
+        # this case gets told apart instead of getting the same advice.
+        _chk warn "'$salias' exists under both names - '$sdir' and '$salias' are two copies of the same model. Keep whichever is complete and delete the other:"
+        printf "         du -sh %s %s\n" "$(shq "$MODELS_DIR/$sdir")" "$(shq "$MODELS_DIR/$salias")"
+      else
+        _chk warn "'$salias' is downloaded but named '$sdir', so the alias reports it missing. Rename it (nothing is re-downloaded):"
+        printf "         mv %s %s\n" "$(shq "$MODELS_DIR/$sdir")" "$(shq "$MODELS_DIR/$salias")"
+      fi
+    done <<EOF
+$stray
+EOF
   fi
 
   info "GPU memory"

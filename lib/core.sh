@@ -241,7 +241,10 @@ resolve_repo() {
   local q="$1"; [ -z "$q" ] && return 1
   local repo; repo="$(_catalog_field "$q" 2 || true)"
   if [ -n "$repo" ]; then echo "$repo"; return 0; fi
-  case "$q" in */*) echo "$q"; return 0;; esac
+  # A trailing slash comes free with a repo path pasted out of a URL. Drop it
+  # here, because this value is what gets written to .source and pasted into an
+  # HF API path, and both want the repo without it.
+  case "$q" in */*) _strip_slashes "$q"; printf '\n'; return 0;; esac
   return 1
 }
 
@@ -251,8 +254,89 @@ resolve_engine() {
   echo "${e:-}"
 }
 
-# local folder name for an alias/repo
-local_name() { case "$1" in */*) basename "$1";; *) echo "$1";; esac; }
+# Normalize an org/repo the way both sides of a comparison must see it: trailing
+# slashes off (a repo path pasted from a URL carries one, and `basename` would
+# then quietly hand back a different folder name than the alias), and case
+# folded, because HF resolves repo names that way. LC_ALL=C keeps the fold to
+# ASCII regardless of the caller's locale.
+# Quote a string so it survives being pasted into a shell. Advice printed with
+# a bare %s is only correct while no path holds a space, and FXLLA_STORE is a
+# user-set path - an external volume or a home directory with a space in the
+# account name is enough to turn a printed `mv A B` into a four-argument move
+# that does something else entirely.
+shq() {
+  local s="$1" q="'"
+  s="${s//$q/$q\\$q$q}"
+  printf '%s%s%s' "$q" "$s" "$q"
+}
+
+_strip_slashes() {
+  local s="$1"
+  while [ "${s%/}" != "$s" ]; do s="${s%/}"; done
+  printf '%s' "$s"
+}
+
+_norm_repo() {
+  # Case is folded only for COMPARING. The repo string that reaches an HF URL
+  # keeps its own case, which that API is picky about.
+  _strip_slashes "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]'
+}
+
+# HF repo -> catalog alias. Empty when the repo is not in the catalog.
+_catalog_alias_for_repo() {
+  local q line repo
+  # No catalog, no answer - and say nothing on stderr about it. Without this
+  # guard the `done < "$CATALOG"` below prints a raw bash redirection error on
+  # every call, once per model in `fxlla doctor`. _media_field guards its
+  # catalog the same way.
+  [ -f "$CATALOG" ] || return 1
+  q="$(_norm_repo "$1")"
+  [ -n "$q" ] || return 1
+  while IFS= read -r line; do
+    case "$line" in \#*|'') continue;; esac
+    repo="$(trim "$(echo "$line" | cut -d'|' -f2)")"
+    [ "$(_norm_repo "$repo")" = "$q" ] || continue
+    trim "$(echo "$line" | cut -d'|' -f1)"
+    printf '\n'
+    return 0
+  done < "$CATALOG"
+  return 1
+}
+
+# Local folder name for an alias/repo. A repo the catalog knows resolves to its
+# alias, so `pull qwen3.5-9b` and `pull mradermacher/Qwen3.5-9B-GGUF` name one
+# directory instead of downloading the same weights twice under two names - and
+# so the alias in the catalog can still find what the repo spelling fetched.
+local_name() {
+  local a
+  case "$1" in
+    */*) ;;
+    *)   printf '%s\n' "$1"; return 0 ;;
+  esac
+  a="$(_catalog_alias_for_repo "$1" || true)"
+  if [ -n "$a" ]; then printf '%s\n' "$a"; else basename "$1"; fi
+}
+
+# Model directories holding a catalog model under a name the catalog cannot
+# find. Pulling by org/repo used to name the directory after the repo, so the
+# same weights had two identities and the alias reported them missing. The
+# directory name is derived; .source is what was actually fetched, so ask it.
+# Prints "dir<TAB>alias" per stray directory.
+stray_model_dirs() {
+  local d name src alias
+  [ -d "$MODELS_DIR" ] || return 0
+  for d in "$MODELS_DIR"/*/; do
+    [ -d "$d" ] || continue
+    [ -f "$d/.source" ] || continue
+    name="$(basename "$d")"
+    src="$(trim "$(cat "$d/.source" 2>/dev/null || true)")"
+    [ -n "$src" ] || continue
+    alias="$(_catalog_alias_for_repo "$src" || true)"
+    [ -n "$alias" ] || continue
+    [ "$alias" = "$name" ] && continue
+    printf '%s\t%s\n' "$name" "$alias"
+  done
+}
 
 # list files in an HF repo: prints "size<TAB>path" per file
 _hf_list() {
