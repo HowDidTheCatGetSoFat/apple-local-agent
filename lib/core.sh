@@ -363,8 +363,25 @@ while url:
 PY
 }
 
+# A pid file is a claim, not a fact. Pids get reused, and `kill -0` answers for
+# whoever holds the number now - pid 1 answers it all day, and this state
+# directory has held a pid file for a week pointing at a process that was long
+# gone. So confirm the process is still the one we started: a stale file that
+# happens to name a live pid otherwise makes `fxlla on` and `fxlla serve` refuse
+# to start, pointing at a gateway that is not there.
+# -ww asks for the untruncated command line; the gateway's marker is at the end
+# of a long interpreter path, so a truncated one would never match.
+_pid_is() {
+  local p="$1" pat="$2"
+  [ -n "$p" ] || return 1
+  kill -0 "$p" 2>/dev/null || return 1
+  ps -ww -o command= -p "$p" 2>/dev/null | grep -qE -- "$pat"
+}
+
 server_pid()   { [ -f "$PID_FILE" ] && cat "$PID_FILE" 2>/dev/null || true; }
-server_alive() { local p; p="$(server_pid)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+# Either engine can be behind this pid: gguf models run llama-server, MLX ones
+# mlx_lm.server.
+server_alive() { _pid_is "$(server_pid)" 'llama-server|mlx_lm\.server'; }
 
 gateway_pid()   { [ -f "$GATEWAY_PID" ] && cat "$GATEWAY_PID" 2>/dev/null || true; }
-gateway_alive() { local p; p="$(gateway_pid)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+gateway_alive() { _pid_is "$(gateway_pid)" 'fxlla_gateway\.py'; }
