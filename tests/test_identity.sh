@@ -187,13 +187,30 @@ else
     fail "the printed rename does not survive a store path with a space: $cmd"
   fi
   rm -rf "$(dirname "$SPACED")"
+
+  # The stray check sits right after the free-space line, so anything that
+  # aborts there takes it with it. `df -g` did exactly that on any system whose
+  # df rejects the flag - doctor printed "Store" and stopped, silently, having
+  # diagnosed nothing. A diagnostic must survive its own probes failing.
+  BROKEN="$(mktemp -d)"
+  mkdir -p "$BROKEN/bin" "$BROKEN/store/models/$REAL_DIR"
+  printf '%s\n' "$REAL_REPO" > "$BROKEN/store/models/$REAL_DIR/.source"
+  printf '#!/bin/sh\nexit 1\n' > "$BROKEN/bin/df"
+  chmod +x "$BROKEN/bin/df"
+  out_df="$(PATH="$BROKEN/bin:$PATH" FXLLA_STORE="$BROKEN/store" bash "$FXLLA" doctor 2>&1 || true)"
+  rm -rf "$BROKEN"
+  if printf '%s\n' "$out_df" | grep -q "mv .*/$REAL_DIR'"; then
+    pass "doctor keeps diagnosing when df fails outright"
+  else
+    fail "a failing df stopped doctor before the store checks"
+  fi
 fi
 
 printf '\n%s\n' "-----"
 # A file that asserted nothing must not report success. This one already exited
 # 0 in silence once, when sourcing core.sh died on an unbound variable before
 # the first assertion - the failure looked exactly like a pass.
-EXPECTED=16
+EXPECTED=17
 if [ "$ran" -ne "$EXPECTED" ]; then
   printf 'FAIL - ran %d assertions, expected %d (the file did not finish)\n' "$ran" "$EXPECTED"
   exit 1

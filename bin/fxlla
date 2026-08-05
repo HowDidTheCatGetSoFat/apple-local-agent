@@ -1532,7 +1532,14 @@ cmd_doctor() {
 
   info "Store"
   if [ -d "$FXLLA_STORE" ]; then
-    local free; free="$(df -g "$FXLLA_STORE" 2>/dev/null | awk 'NR==2{print $4}')"
+    # `df -Pk` rather than `df -g`: -g is a BSD spelling that GNU df rejects,
+    # and rejecting it here does not degrade to "free space unknown" - the
+    # pipeline fails, `set -e` fires on the assignment, and the whole doctor
+    # exits mid-section having reported nothing. A diagnostic command is the
+    # last place that should abort over a flag. `|| true` keeps it that way
+    # even if some df disagrees about -P too.
+    local free; free="$(df -Pk "$FXLLA_STORE" 2>/dev/null \
+      | awk 'NR==2{printf "%d", $4/1048576}' || true)"
     local n; n="$(find "$MODELS_DIR" -maxdepth 1 -type d 2>/dev/null | grep -c . || true)"
     _chk ok "store mounted: $FXLLA_STORE (${free:-?} GB free, $(( n>0 ? n-1 : 0 )) models)"
   else
