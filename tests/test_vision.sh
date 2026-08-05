@@ -82,6 +82,58 @@ case "$out2" in
   *) pass "no --mmproj without a projector";;
 esac
 
+# --- the OTHER publisher's naming ------------------------------------------
+# Two conventions in the wild, and only one was ever handled. empero-ai writes
+# `mmproj-Qwythos-27B-F16.gguf`; mradermacher writes `Model.mmproj-Q8_0.gguf`,
+# the model name first. Every glob and grep here was anchored at the front, so
+# the second kind was invisible: the pull left the projector in the repo, and
+# had it been on disk the launcher would not have found it. Three vision models
+# on this machine were fetched blind that way.
+SEER2="$STORE/models/seer2"
+mkdir -p "$SEER2"
+: > "$SEER2/Qwen3.5-9B.Q6_K.gguf"
+: > "$SEER2/Qwen3.5-9B.mmproj-Q8_0.gguf"
+: > "$SEER2/Qwen3.5-9B.mmproj-f16.gguf"
+echo gguf > "$SEER2/.engine"
+out3="$(PATH="$BIN:$PATH" FXLLA_STORE="$STORE" bash "$FXLLA" _backend seer2 9999)"
+case "$out3" in
+  *--mmproj*) pass "a projector named <model>.mmproj-* is found too";;
+  *) fail "a projector named <model>.mmproj-* is found too (got: $out3)";;
+esac
+# No .entry on purpose: this exercises the fallback that scans the directory,
+# where sorted() puts `Qwen3.5-9B.mmproj-Q8_0.gguf` BEFORE `Qwen3.5-9B.Q6_K.gguf`
+# - so an anchored test there serves the projector as the model.
+model_arg3="$(sed -n 's/.*--model \([^ ]*\).*/\1/p' <<< "$out3")"
+case "$model_arg3" in
+  *mmproj*) fail "the weights win over an alphabetically earlier projector (got: $model_arg3)";;
+  *Qwen3.5-9B.Q6_K.gguf) pass "the weights win over an alphabetically earlier projector";;
+  *) fail "the weights win over an alphabetically earlier projector (got: $model_arg3)";;
+esac
+
+# --- and the same word in another case --------------------------------------
+# The pull side matches with `grep -i`, so it will happily download a projector
+# spelled `MMProj`. Everything downstream matched case-SENSITIVELY: a glob, a
+# `case` pattern and a Python `in`. So that file arrived, sat next to the
+# weights, and was never passed - the identical text-only failure as never
+# downloading it, reached from the other side. Worse, the entry fallback did
+# not recognise it either, so it could be served AS the model.
+SEER3="$STORE/models/seer3"
+mkdir -p "$SEER3"
+: > "$SEER3/Qwen3.5-9B.Q6_K.gguf"
+: > "$SEER3/Qwen3.5-9B.MMProj-F16.gguf"
+echo gguf > "$SEER3/.engine"
+out4="$(PATH="$BIN:$PATH" FXLLA_STORE="$STORE" bash "$FXLLA" _backend seer3 9999)"
+case "$out4" in
+  *--mmproj*MMProj-F16.gguf*) pass "a projector spelled MMProj is found too";;
+  *) fail "a projector spelled MMProj is found too (got: $out4)";;
+esac
+model_arg4="$(sed -n 's/.*--model \([^ ]*\).*/\1/p' <<< "$out4")"
+case "$model_arg4" in
+  *MMProj*) fail "an uppercase projector is not served as the model (got: $model_arg4)";;
+  *Qwen3.5-9B.Q6_K.gguf) pass "an uppercase projector is not served as the model";;
+  *) fail "an uppercase projector is not served as the model (got: $model_arg4)";;
+esac
+
 # --- the catalog declares one ------------------------------------------------
 # Nothing else in fxlla can see, so losing this row is losing the capability.
 if grep -qE '^\s*vision\s*\|' "$ROOT/config/models.conf"; then

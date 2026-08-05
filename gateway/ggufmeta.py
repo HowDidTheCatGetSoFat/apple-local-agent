@@ -211,7 +211,19 @@ def _entry(directory):
     except OSError:
         pass
     for name in sorted(os.listdir(directory)):
-        if name.endswith(".gguf") and not name.startswith("mmproj"):
+        # "mmproj" anywhere and in any case. One publisher writes
+        # `mmproj-Model-F16.gguf`, another `Model.mmproj-Q8_0.gguf`; anchored,
+        # the second reads as an ordinary weights file. Case-folded because the
+        # pull side matches with `grep -i` and will happily fetch a `MMProj`
+        # spelling that a case-sensitive test here would then hand to
+        # llama-server as the model - a projector is not one and cannot load.
+        #
+        # sorted() is codepoint order, which is why bin/fxlla sorts its own
+        # fallback under LC_ALL=C. Under a UTF-8 collation the two disagree
+        # about which file comes first, and this function exists so that
+        # "which file is the model" has exactly one answer.
+        low = name.lower()
+        if low.endswith(".gguf") and "mmproj" not in low:
             return os.path.join(directory, name)
     return None
 

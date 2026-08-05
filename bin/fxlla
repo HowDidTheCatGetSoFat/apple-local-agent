@@ -165,11 +165,11 @@ cmd_models() {
   local line alias size role engine note
   while IFS= read -r line; do
     case "$line" in \#*|'') continue;; esac
-    alias="$(echo "$line"  | cut -d'|' -f1 | xargs)"; [ -z "$alias" ] && continue
-    size="$(echo "$line"   | cut -d'|' -f3 | xargs)"
-    role="$(echo "$line"   | cut -d'|' -f4 | xargs)"
-    engine="$(echo "$line" | cut -d'|' -f5 | xargs)"
-    note="$(echo "$line"   | cut -d'|' -f6 | xargs)"
+    alias="$(trim "$(echo "$line"  | cut -d'|' -f1)")"; [ -z "$alias" ] && continue
+    size="$(trim "$(echo "$line"   | cut -d'|' -f3)")"
+    role="$(trim "$(echo "$line"   | cut -d'|' -f4)")"
+    engine="$(trim "$(echo "$line" | cut -d'|' -f5)")"
+    note="$(trim "$(echo "$line"   | cut -d'|' -f6)")"
     printf "%-18s %-8s %-8s %-6s %s\n" "$alias" "$size" "$role" "${engine:-mlx}" "$note"
   done < "$CATALOG"
 }
@@ -308,10 +308,10 @@ _media_weights() {
   printf '%-14s %-8s %-6s %s\n' ALIAS KIND SIZE STATE
   while IFS= read -r line; do
     case "$line" in \#*|'') continue;; esac
-    alias="$(echo "$line" | cut -d'|' -f1 | xargs)"
-    repos="$(echo "$line" | cut -d'|' -f2 | xargs)"
-    size="$(echo "$line" | cut -d'|' -f3 | xargs)"
-    kind="$(echo "$line" | cut -d'|' -f4 | xargs)"
+    alias="$(trim "$(echo "$line" | cut -d'|' -f1)")"
+    repos="$(trim "$(echo "$line" | cut -d'|' -f2)")"
+    size="$(trim "$(echo "$line" | cut -d'|' -f3)")"
+    kind="$(trim "$(echo "$line" | cut -d'|' -f4)")"
     state=cached
     IFS=',' read -r -a _rl <<< "$repos"
     for repo in "${_rl[@]}"; do
@@ -366,25 +366,58 @@ cmd_pull() {
   if [ "$engine" = gguf ]; then
     local ggufs; ggufs="$(echo "$listing" | awk -F'\t' '$2 ~ /\.gguf$/ {print $2}')"
     [ -z "$ggufs" ] && die "No .gguf files in $repo"
+    # Count and offer the WEIGHTS, never the projector. A projector is not a
+    # quant to choose between: it carries its own quant tag and it ships
+    # alongside whichever build you pick. Counting every .gguf made a repo with
+    # one build and one projector look like a repo with two builds, so
+    # `fxlla pull gemma-4-12b-qat` refused a model that has nothing to choose,
+    # and offered `mmproj-...` as one of the options - a file that is not a
+    # model and cannot be served as one.
+    local builds; builds="$(echo "$ggufs" | grep -iv 'mmproj' || true)"
+    [ -z "$builds" ] && die "No weights in $repo, only a projector"
     if [ -n "$quant" ]; then
       sel="$(echo "$ggufs" | grep -i -- "$quant" || true)"
-      [ -z "$sel" ] && { warn "No quant '$quant'. Available:"; echo "$ggufs" | while IFS= read -r l; do echo "  $l"; done >&2; exit 1; }
-    elif [ "$(echo "$ggufs" | grep -c .)" -eq 1 ]; then
-      sel="$ggufs"
+      [ -z "$sel" ] && { warn "No quant '$quant'. Available:"; echo "$builds" | while IFS= read -r l; do echo "  $l"; done >&2; exit 1; }
+      # A quant that matches ONLY a projector selects no model at all, and the
+      # emptiness surfaced nowhere: `--quant mmproj` downloaded the projector,
+      # wrote a blank .entry, and printed "Done" plus how to start a directory
+      # with nothing to start. Non-empty is not the same as usable.
+      if [ -z "$(echo "$sel" | grep -iv 'mmproj' || true)" ]; then
+        warn "'--quant $quant' matches only a projector, which is not a model. Builds:"
+        echo "$builds" | while IFS= read -r l; do echo "  $l"; done >&2
+        die "Name one of those instead."
+      fi
+    elif [ "$(echo "$builds" | grep -c .)" -eq 1 ]; then
+      sel="$builds"
     else
       warn "This repo has several quants. Choose with --quant <substr>, for example:"
-      echo "$ggufs" | while IFS= read -r l; do echo "  $l"; done >&2
+      echo "$builds" | while IFS= read -r l; do echo "  $l"; done >&2
       die "Recommended for this RAM: Q4_K_M (balanced) or Q5_K_M / Q6_K (higher quality)."
     fi
     # A vision model is two files: the weights and a multimodal projector,
-    # named mmproj-* and carrying their OWN quant tag. Selecting by --quant
-    # alone leaves the projector behind and the model cannot see; it is under
-    # 1.5 GB, so take every one the repo has rather than guess which pairs.
-    local mmproj; mmproj="$(echo "$ggufs" | grep -i '^mmproj' || true)"
+    # carrying its OWN quant tag. Selecting by --quant alone leaves the
+    # projector behind and the model cannot see; it is under 1.5 GB, so take
+    # every one the repo has rather than guess which pairs.
+    #
+    # Matched ANYWHERE in the name, not anchored. Publishers disagree about
+    # where the word goes: empero-ai ships `mmproj-Qwythos-27B-F16.gguf`, and
+    # mradermacher ships `Qwen3.5-9B.mmproj-Q8_0.gguf` - the model name first.
+    # An anchored `^mmproj` sees only the first kind, so every vision model
+    # from the second publisher arrived with no projector at all and served
+    # text-only, with nothing failing to say so. Four models on this machine
+    # were pulled that way - both 27B builds and both 4B builds - counted by
+    # asking each repo what it ships and comparing against the directory,
+    # rather than from memory, which had it as three.
+    #
+    # "Every one the repo has" is literal: a repo shipping an f16 and a Q8_0
+    # projector yields both, so a 7.4 GB weights pull lands as 8.9 GB.
+    local mmproj; mmproj="$(echo "$ggufs" | grep -i 'mmproj' || true)"
     [ -n "$mmproj" ] && sel="$(printf '%s\n%s\n' "$sel" "$mmproj" | sort -u | grep .)"
     # The entry is the model, never the projector: with --quant Q8_0 both match
-    # and a plain head -1 could launch llama-server on the projector.
-    local weights; weights="$(echo "$sel" | grep -iv '^mmproj' || true)"
+    # and a plain head -1 could launch llama-server on the projector. Same
+    # unanchored test, for the same reason - anchoring here would let
+    # `X.mmproj-Q6_K.gguf` be picked as the weights under `--quant Q6_K`.
+    local weights; weights="$(echo "$sel" | grep -iv 'mmproj' || true)"
     local entry; entry="$(echo "$weights" | grep -- '-00001-of-' | head -1 || true)"
     if [ -z "$entry" ]; then
       # An ambiguous --quant is a substring, and a substring matches more than
@@ -1002,10 +1035,28 @@ cmd_unserve() {
 # window, the rope-scaling override or MTP speculation either. Echoes a flag
 # string; the caller word-splits it deliberately.
 _llama_flags() {
-  local dest="$1" mm="" f ctx="$FXLLA_CTX" rope_off=0 mtp=0 derived
-  for f in "$dest"/mmproj*f16*.gguf "$dest"/mmproj*.gguf; do
-    [ -e "$f" ] && { mm="$f"; break; }
-  done
+  local dest="$1" mm="" f16="" p ctx="$FXLLA_CTX" rope_off=0 mtp=0 derived
+  # Unanchored AND case-insensitive, because the pull side is both and the two
+  # have to agree about what a projector is. Publishers disagree about where
+  # the word goes - empero-ai ships `mmproj-Qwythos-27B-F16.gguf`, mradermacher
+  # ships `Qwen3.5-9B.mmproj-Q8_0.gguf` - and a glob is case-SENSITIVE, so a
+  # `MMProj` spelling that `grep -i` downloaded happily would never be found
+  # here. Downloading a projector and then never passing it is the same silent
+  # text-only failure as not downloading it, arrived at from the other side.
+  #
+  # C collation on purpose: gateway/ggufmeta.py picks the weights out of the
+  # same directory with Python's sorted(), which is codepoint order. Two
+  # orderings over one directory is two answers to "which file is the model".
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$(printf '%s' "$p" | tr 'A-Z' 'a-z')" in *f16*) [ -z "$f16" ] && f16="$p" ;; esac
+    [ -z "$mm" ] && mm="$p"
+  done <<EOF
+$(ls -1 "$dest" 2>/dev/null | LC_ALL=C sort | grep -i '\.gguf$' | grep -i 'mmproj' || true)
+EOF
+  # f16 wins where a repo ships both: the projector is small and it is better.
+  [ -n "$f16" ] && mm="$f16"
+  [ -n "$mm" ] && mm="$dest/$mm"
   derived="$(python3 "$REPO_ROOT/gateway/ggufmeta.py" "$dest" "${FXLLA_CTX:-0}" "${FXLLA_ROPE_STRETCH:-0}" 2>/dev/null || true)"
   if [ -n "$derived" ]; then
     # shellcheck disable=SC2086  # three fields, read positionally
@@ -1033,7 +1084,20 @@ cmd_backend() {
   local engine=mlx; [ -f "$dest/.engine" ] && engine="$(cat "$dest/.engine")"
   if [ "$engine" = gguf ]; then
     local entry; entry="$(cat "$dest/.entry" 2>/dev/null || true)"
-    if [ -z "$entry" ]; then local f; for f in "$dest"/*.gguf; do [ -e "$f" ] && { entry="$(basename "$f")"; break; }; done; fi
+    # The fallback for a directory with no .entry took the first .gguf in glob
+    # order and excluded nothing, so a projector could be served AS the model.
+    # It needs the exclusion the pull-side selection has: under a UTF-8 locale
+    # `Qwen3.5-9B.mmproj-f16.gguf` collates before `Qwen3.5-9B.Q6_K.gguf`, so
+    # this is the ordinary case for that publisher, not a corner of one.
+    #
+    # Case-insensitive and C-collated, for the two reasons _llama_flags gives:
+    # `grep -i` on the pull side will accept a `MMProj` spelling this must also
+    # reject, and gateway/ggufmeta.py reads the same directory with Python's
+    # sorted(). One directory has to have one answer.
+    if [ -z "$entry" ]; then
+      entry="$(ls -1 "$dest" 2>/dev/null | LC_ALL=C sort \
+               | grep -i '\.gguf$' | grep -iv 'mmproj' | head -1 || true)"
+    fi
     [ -z "$entry" ] && die "No .gguf found in $dest"
     # A multimodal projector beside the weights makes this a vision model, and
     # llama-server needs it named: without --mmproj the same weights serve as
@@ -1126,8 +1190,8 @@ except Exception:
         # came from may be. Identify by .source so 'fxlla eval nomic-.../...'
         # cannot slip an embedding model past the role check.
         local src crole=""
-        src="$(cat "$dest/.source" 2>/dev/null | xargs || true)"
-        [ -n "$src" ] && crole="$(grep -F "$src" "$CATALOG" 2>/dev/null | grep -v '^#' | head -1 | cut -d'|' -f4 | xargs || true)"
+        src="$(trim "$(cat "$dest/.source" 2>/dev/null || true)")"
+        [ -n "$src" ] && crole="$(trim "$(grep -F "$src" "$CATALOG" 2>/dev/null | grep -v '^#' | head -1 | cut -d'|' -f4 || true)")"
         [ -n "$crole" ] && role="$crole"
       fi
       [ "$role" = embed ] && die "'$alias' is an embedding model; 'fxlla kb eval' scores those."
@@ -1141,8 +1205,8 @@ except Exception:
   else
     while IFS= read -r line; do
       case "$line" in \#*|'') continue ;; esac
-      alias="$(echo "$line" | cut -d'|' -f1 | xargs)"
-      role="$(echo "$line" | cut -d'|' -f4 | xargs)"
+      alias="$(trim "$(echo "$line" | cut -d'|' -f1)")"
+      role="$(trim "$(echo "$line" | cut -d'|' -f4)")"
       case "$role" in dev|agentic|max) ;; *) continue ;; esac
       dest="$MODELS_DIR/$alias"
       [ -f "$dest/.source" ] || continue
@@ -1532,7 +1596,7 @@ cmd_doctor() {
     local mline mrepos mrepo mtotal=0 mcached=0
     while IFS= read -r mline; do
       case "$mline" in \#*|'') continue;; esac
-      mrepos="$(echo "$mline" | cut -d'|' -f2 | xargs)"
+      mrepos="$(trim "$(echo "$mline" | cut -d'|' -f2)")"
       mtotal=$((mtotal + 1))
       local ok_alias=1
       IFS=',' read -r -a _dl <<< "$mrepos"

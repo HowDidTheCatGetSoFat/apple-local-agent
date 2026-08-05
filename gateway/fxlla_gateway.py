@@ -161,9 +161,23 @@ def _has_projector(alias):
     """True when a multimodal projector sits next to this model's weights.
 
     This answers whether llama-server CAN be handed an image: bin/fxlla passes
-    --mmproj when it finds one, and without it the image goes nowhere."""
-    import glob
-    return bool(glob.glob(os.path.join(MODELS_DIR, alias, "mmproj*.gguf")))
+    --mmproj when it finds one, and without it the image goes nowhere.
+
+    Unanchored and case-folded, matching what bin/fxlla actually looks for.
+    Anchored at the front it agreed with bin/fxlla only for publishers who put
+    the word first, and disagreed silently for the rest - this said "cannot
+    see" about a model bin/fxlla would have handed the projector, had bin/fxlla
+    found it either. Two wrongs that agreed are still two wrongs.
+
+    The case folding is here for the same reason and must stay in step: a glob
+    is case-sensitive, bin/fxlla's own lookup is not, and this answering "no"
+    about a projector the launcher WILL pass is how a model that can see gets
+    told it cannot."""
+    try:
+        names = os.listdir(os.path.join(MODELS_DIR, alias))
+    except OSError:
+        return False
+    return any(n.lower().endswith(".gguf") and "mmproj" in n.lower() for n in names)
 
 
 def _can_see(alias):

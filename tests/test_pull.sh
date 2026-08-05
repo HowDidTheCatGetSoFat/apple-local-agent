@@ -27,6 +27,47 @@ else
   pass "bare pull errors"
 fi
 
+# --- a projector is not a quant to choose between ---------------------------
+# google/gemma-4-12B-it-qat-q4_0-gguf ships one build and one projector. Both
+# end in .gguf, so counting every .gguf made a repo with nothing to choose look
+# ambiguous: the pull refused, and listed `mmproj-...` as one of the builds to
+# pick from - a file that is not a model and cannot be served as one.
+#
+# This is a SOURCE-level check, and it is weaker than running the thing: the
+# file list comes from the network, so the real path cannot run offline. It
+# pins the shape of the fix - the count and the offered list both read a
+# projector-filtered variable - which is exactly what a careless edit would
+# undo. The behaviour itself is verified by pulling the model.
+if grep -q 'builds="\$(echo "\$ggufs" | grep -iv .mmproj' "$FXLLA"; then
+  pass "the quant list is filtered of projectors"
+else
+  fail "the quant list is filtered of projectors"
+fi
+if grep -q 'elif \[ "\$(echo "\$builds" | grep -c \.)" -eq 1 \]' "$FXLLA"; then
+  pass "ambiguity is counted over builds, not over every .gguf"
+else
+  fail "ambiguity is counted over builds, not over every .gguf"
+fi
+# Stated as an absence, not a count. The first version of this asserted
+# "exactly 2 listings read $builds" and broke the moment a third, correct
+# listing was added - a test that fails when the code gets better is worse than
+# no test. What must hold is that NO listing offers the unfiltered set.
+unfiltered="$(grep -c 'echo "\$ggufs" | while IFS= read -r l' "$FXLLA" || true)"
+if [ "${unfiltered:-0}" -eq 0 ]; then
+  pass "no 'Available' listing offers the unfiltered .gguf set"
+else
+  fail "no 'Available' listing offers the unfiltered .gguf set (found $unfiltered)"
+fi
+
+# A --quant that matches only a projector selects no model. Non-empty was being
+# read as usable: it downloaded the projector, wrote a blank entry marker, and
+# printed "Done" plus how to start a directory with nothing in it to start.
+if grep -q 'matches only a projector, which is not a model' "$FXLLA"; then
+  pass "a quant matching only a projector is refused"
+else
+  fail "a quant matching only a projector is refused"
+fi
+
 # --- every aria2 invocation carries the stall guard -------------------------
 # aria2 defaults --lowest-speed-limit to 0, which means it never abandons a
 # connection that has stopped delivering - and a socket that stays OPEN while

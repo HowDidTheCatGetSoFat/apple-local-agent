@@ -54,5 +54,33 @@ else
   pass "on is fail-fast without --pull"
 fi
 
+# --- every catalog row reaches the listing ----------------------------------
+# `fxlla models` is the whole discovery surface: a model missing from it does
+# not exist as far as anyone can tell. The fields were trimmed with xargs,
+# which parses as well as trims, so an apostrophe in a note ("Google's own
+# build") read as an unterminated quote and ended the listing there. Two rows
+# had been invisible for weeks, announced only by a stray xargs error under the
+# table. Counting is the test: any row that stops the loop makes these differ.
+# `|| true` on every count, and it is not defensive noise. This file runs under
+# `set -e`, and a broken listing makes grep -c return 0 with exit 1 - which
+# aborted the whole script BEFORE these checks could report, so the run looked
+# clean and simply stopped early. A regression test that kills its own runner
+# announces nothing; it has to survive the failure in order to name it.
+rows_in_catalog="$(grep -cE '^[a-z0-9][^|]*\|' "$ROOT/config/models.conf" || true)"
+rows_listed="$(run models 2>/dev/null | grep -cE '^[a-z0-9]' || true)"
+if [ "$rows_in_catalog" = "$rows_listed" ]; then
+  pass "every catalog row is listed ($rows_listed)"
+else
+  fail "every catalog row is listed (catalog $rows_in_catalog, listed $rows_listed)"
+fi
+
+# The apostrophe itself, so the cause cannot come back under another trimmer.
+apostrophe_note="$(run models 2>/dev/null | grep -c "publisher's" || true)"
+if [ "${apostrophe_note:-0}" -ge 1 ]; then
+  pass "a note containing an apostrophe survives to the listing"
+else
+  fail "a note containing an apostrophe survives to the listing"
+fi
+
 if [ "$fails" -ne 0 ]; then printf '\n%d test(s) failed\n' "$fails"; exit 1; fi
 printf '\nall availability tests passed\n'

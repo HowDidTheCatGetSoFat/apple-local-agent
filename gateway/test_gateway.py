@@ -553,6 +553,28 @@ class TestVisionForModelsThatCannotSee(unittest.TestCase):
         self.assertFalse(gw._has_projector("no-eyes"))
         self.assertTrue(gw._has_projector("has-eyes"))
 
+    def test_a_projector_named_the_other_way_round_is_found(self):
+        # Two conventions in the wild: `mmproj-Model-F16.gguf` (empero-ai) and
+        # `Model.mmproj-Q8_0.gguf` (mradermacher). This globbed `mmproj*.gguf`,
+        # so it said "cannot see" about the second - agreeing with bin/fxlla
+        # only because bin/fxlla was anchored too and had already left the file
+        # in the repo. Both were wrong; agreeing did not make either right.
+        path = os.path.join(_MODELS, "late-eyes")
+        os.makedirs(path, exist_ok=True)
+        open(os.path.join(path, "Qwen3.5-9B.Q6_K.gguf"), "wb").close()
+        open(os.path.join(path, "Qwen3.5-9B.mmproj-f16.gguf"), "wb").close()
+        self.assertTrue(gw._has_projector("late-eyes"))
+
+    def test_the_projector_test_matches_case_insensitively_like_the_launcher(self):
+        # This must answer the same question bin/fxlla answers, and bin/fxlla
+        # matches case-insensitively. Saying "cannot see" about a projector the
+        # launcher WILL pass is how a model that can see gets told it cannot.
+        path = os.path.join(_MODELS, "shouty-eyes")
+        os.makedirs(path, exist_ok=True)
+        open(os.path.join(path, "Model.Q6_K.gguf"), "wb").close()
+        open(os.path.join(path, "Model.MMProj-F16.gguf"), "wb").close()
+        self.assertTrue(gw._has_projector("shouty-eyes"))
+
     def test_an_undeclared_projector_does_not_make_a_model_trusted(self):
         # The regression this exists for: a model that ships a vision tower it
         # inherited and never tuned. The file is there, so it COULD be handed

@@ -265,6 +265,46 @@ class TestServePlan(unittest.TestCase):
         os.unlink(os.path.join(d, ".entry"))
         self.assertEqual(ggufmeta.serve_plan(d, 262144)[0], 8192)
 
+    def test_a_projector_named_after_the_model_is_still_skipped(self):
+        # `<model>.mmproj-Q8_0.gguf` is one publisher's spelling, so the word is
+        # not at the front and an anchored startswith test does not see it.
+        #
+        # The quant tag is lowercase here on purpose, and that is the whole
+        # test. With mradermacher's actual uppercase names the old check got
+        # the right answer by luck: sorted() compares "Q" (0x51) against "m"
+        # (0x6D), so the weights came first and were returned before the
+        # projector was ever reached. Lowercase "q" is 0x71, the projector
+        # sorts first, and the anchored check then returns it as the weights -
+        # a file carrying no context_length, so the window comes back None and
+        # the caller silently falls back to a default for a model that
+        # declared one.
+        directory = os.path.join(self.dir, "late-projector")
+        os.makedirs(directory, exist_ok=True)
+        write_gguf(os.path.join(directory, "model.q6_k.gguf"),
+                   [("a.context_length", U32, struct.pack("<I", 32768))])
+        write_gguf(os.path.join(directory, "model.mmproj-f16.gguf"),
+                   [("clip.has_vision_encoder", U32, struct.pack("<I", 1))])
+        self.assertEqual(sorted(os.listdir(directory))[0], "model.mmproj-f16.gguf",
+                         "the fixture must put the projector first or it tests nothing")
+        self.assertEqual(ggufmeta.serve_plan(directory, 262144)[0], 32768)
+
+    def test_a_projector_spelled_in_another_case_is_skipped_as_well(self):
+        # The pull side matches with `grep -i`, so a `MMProj` spelling gets
+        # downloaded. A case-sensitive test here then reads it as the weights
+        # and answers about a file with no context_length in it - and because
+        # the answer is None, the caller quietly serves a default window for a
+        # model that declared one. Filename sorts first so the wrong file is
+        # genuinely reachable, not merely possible.
+        directory = os.path.join(self.dir, "shouty-projector")
+        os.makedirs(directory, exist_ok=True)
+        write_gguf(os.path.join(directory, "model.q6_k.gguf"),
+                   [("a.context_length", U32, struct.pack("<I", 32768))])
+        write_gguf(os.path.join(directory, "model.MMProj-f16.gguf"),
+                   [("clip.has_vision_encoder", U32, struct.pack("<I", 1))])
+        self.assertEqual(sorted(os.listdir(directory))[0], "model.MMProj-f16.gguf",
+                         "the fixture must put the projector first or it tests nothing")
+        self.assertEqual(ggufmeta.serve_plan(directory, 262144)[0], 32768)
+
     def test_a_plan_carries_the_mtp_verdict(self):
         d = self._model_dir("speculating", [
             ("a.context_length", U32, struct.pack("<I", 32768)),

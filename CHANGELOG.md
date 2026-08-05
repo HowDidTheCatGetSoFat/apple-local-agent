@@ -6,6 +6,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 ## [Unreleased]
 
 ### Added
+- `qwen3.5-9b` and `gemma-4-12b-qat` in the catalog. The 9B is stock Qwen3.5,
+  taken at Q6_K from the same publisher as the 4B and 27B already here, so the
+  three sizes differ in size and nothing else - which is the only reason an
+  abliterated-versus-base comparison across them means anything. The Gemma is
+  Google's own QAT build: the 4-bit weights are what it was tuned to end up at
+  rather than what it was rounded to afterwards. Google also ships that QAT in
+  compressed-tensors, which llama.cpp cannot read; this is the GGUF one.
+
 - Two 27B models on Qwen3.5 in the catalog, chosen because together they are an
   experiment. `qwythos` was trained without alignment; `abliterated-27b` is the
   same base with the refusal direction orthogonalized out. Same family, opposite
@@ -62,6 +70,40 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
   differing is a fact about the descriptions, and the same eyes can word the
   same picture differently, so the report says so rather than calling it a
   defect.
+
+### Fixed
+- A projector whose name did not START with `mmproj` was invisible, in five
+  places at once. Publishers disagree about where the word goes: one writes
+  `mmproj-Model-F16.gguf`, another `Model.mmproj-Q8_0.gguf`. Every glob and
+  grep was anchored at the front, so for the second convention the pull left
+  the projector in the repo, the launcher would not have passed it, and the
+  gateway reported the model could not see - three components agreeing on the
+  wrong answer because they shared one wrong assumption. Four models on this
+  machine had been fetched blind, counted by asking each repo what it ships
+  rather than from memory, which had it as three. The entry-file fallback was
+  worse than invisible: it excluded nothing at all, so under a UTF-8 locale it
+  could serve the projector AS the model.
+  All five sites now match case-insensitively as well, because the pull side
+  always did: `grep -i` will fetch a `MMProj` spelling that a glob or a Python
+  `in` would not find afterwards, which is the same silent text-only failure
+  reached from the other direction. The two that scan a directory for the
+  weights sort under C collation on both sides, so bash and Python cannot
+  disagree about which file is the model.
+- `--quant` matching only a projector was accepted. It downloaded that file,
+  wrote a blank entry marker, and printed "Done" with instructions for starting
+  a directory that has nothing to start. Non-empty was being read as usable.
+- A repo with one build and one projector was refused as ambiguous. Both end in
+  `.gguf`, and the ambiguity count read every `.gguf`, so `fxlla pull
+  gemma-4-12b-qat` demanded a `--quant` choice between a model and a file that
+  is not one. Counted over builds now, and the "Available" list offers builds
+  only.
+- `fxlla models` stopped listing at the first note containing an apostrophe.
+  Fields were trimmed with `xargs`, which trims but also PARSES: "Google's own
+  build" is an unterminated quote, xargs exits non-zero, and under `set -e` the
+  listing ended there. Four of twenty-three rows were invisible, announced only
+  by a stray `xargs: unterminated quote` under the table - including the two
+  models added in this release. Trimming is now parameter expansion, which has
+  no opinion about the text it trims.
 
 ### Changed
 - A gguf build carrying a multi-token-prediction head is served with

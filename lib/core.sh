@@ -169,14 +169,29 @@ require_store() {
   mkdir -p "$MODELS_DIR"
 }
 
+# Strip leading and trailing whitespace. This was `xargs` everywhere, which
+# trims but is not a trimmer: xargs also PARSES, so one apostrophe in a catalog
+# note ("Google's own build") is an unterminated quote and it exits non-zero.
+# That killed `fxlla models` at the offending row - every model below it simply
+# was not listed, with the only sign a stray "xargs: unterminated quote" after
+# the table. Two rows had been invisible for weeks. A trimmer must not have an
+# opinion about the text it trims.
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
 # read a catalog field for a given alias:  _catalog_field <alias> <n>
 _catalog_field() {
   local q="$1" n="$2" alias line
   while IFS= read -r line; do
     case "$line" in \#*|'') continue;; esac
-    alias="$(echo "$line" | cut -d'|' -f1 | xargs)"
+    alias="$(trim "$(echo "$line" | cut -d'|' -f1)")"
     [ "$alias" = "$q" ] || continue
-    echo "$line" | cut -d'|' -f"$n" | xargs
+    trim "$(echo "$line" | cut -d'|' -f"$n")"
+    printf '\n'
     return 0
   done < "$CATALOG"
   return 1
@@ -189,9 +204,10 @@ _media_field() {
   [ -f "$MEDIA_CATALOG" ] || return 1
   while IFS= read -r line; do
     case "$line" in \#*|'') continue;; esac
-    alias="$(echo "$line" | cut -d'|' -f1 | xargs)"
+    alias="$(trim "$(echo "$line" | cut -d'|' -f1)")"
     [ "$alias" = "$q" ] || continue
-    echo "$line" | cut -d'|' -f"$n" | xargs
+    trim "$(echo "$line" | cut -d'|' -f"$n")"
+    printf '\n'
     return 0
   done < "$MEDIA_CATALOG"
   return 1
