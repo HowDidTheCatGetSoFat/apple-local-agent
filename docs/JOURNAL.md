@@ -2,6 +2,78 @@
 
 Engineering log of decisions and findings. Newest entry on top.
 
+## 2026-08-05: four assumptions that agreed with each other
+
+Adding two models to the catalog turned up three bugs, and the shape they share
+is worth more than any of them: each was a single assumption held in several
+places at once, so every component confirmed the others and nothing looked
+wrong.
+
+A multimodal projector was matched as `mmproj*`, anchored at the front. One
+publisher writes `mmproj-Model-F16.gguf` and another `Model.mmproj-Q8_0.gguf`,
+so for the second the pull left the projector in the repo, the launcher would
+not have passed it, and the gateway reported that the model could not see.
+Three components, one wrong idea, perfect agreement. Four models here had been
+downloaded blind - counted by asking each repo what it ships and diffing
+against the directory, because from memory I had it as three.
+
+The pre-push review then found the other half, which I had not: the pull side
+matches with `grep -i`, so a `MMProj` spelling downloads fine, and every site
+downstream compared case-sensitively. Same silent text-only failure, arrived at
+from the opposite direction. One skeptic defended the gateway's case-sensitive
+glob on the grounds that the launcher was case-sensitive too - and was right,
+which is exactly why fixing one without the other would have split them.
+
+`fxlla models` had been truncating its own output for weeks. Fields were
+trimmed with `xargs`, which trims but also PARSES: an apostrophe in a note is
+an unterminated quote, xargs exits non-zero, and under `set -e` the listing
+ends there. Four of twenty-three rows invisible, including two models that had
+been in the catalog for days, announced only by a stray `xargs` error under the
+table. A trimmer must have no opinion about the text it trims.
+
+Then `/v1/models`, at 4.7 seconds for something an editor asks for at startup.
+The guess was the sizes; `du` across the whole store is 30 ms. The cost was
+that deriving a serve plan asked four readers for one fact each, and each
+reopened the file and scanned until it found ITS key - and a key that is absent
+is only known to be absent at the END of the header. Most models declare no MTP
+head and no rope factor, so those scans ran to completion every time: three
+full walks of a 12 MB metadata block per model. One walk took 2.1 s to 0.68,
+and remembering the facts against mtime and size took the second call to 0.4
+ms. End to end, 4.74 s to 0.03. The cache holds facts and not the answer: a
+plan depends on the ceiling asked for, and serving one caller's window to
+another is the precise failure this module was written to prevent.
+
+The 27B abliteration experiment finally ran, and the first result was about the
+harness rather than the models. Base 34/38 against 32/38 looked like a small
+capability cost until every one of the ten failures turned out to be
+`truncated: true` with an empty reply, at 102-106 seconds where every passing
+task finished under 92. The token floor was deciding, not the model. At 8192 it
+came back 38/38 against 37/38, one discordant pair, and that pair truncated
+too. So: no measurable cost to abliteration - but now for a worse reason than
+before. The eval is saturated at this size. Two models at the ceiling cannot be
+ordered, and that is a fact about the task set, not about the weights.
+
+Three tests I wrote today proved nothing until I mutated the code to check.
+One passed by luck, because Python's sort order happens to favour the weights
+for the real filenames. One killed its own runner under `set -e` instead of
+reporting, so the suite looked clean and simply stopped early. And one asserted
+an exact count of correct listings, then failed when a third correct listing
+was added - a test that breaks when the code improves is worse than no test.
+Running a new test against the unfixed code is not a formality.
+
+The worst mistake of the day was mine and had nothing to do with code. Asked
+whether we had ever notarized a build, I searched the keychain, found no
+notarytool profile, and said there were no credentials. There were: the profile
+had existed for ten days, Apple's history held three Accepted submissions, and
+the name was in the repo's git-ignored `config/config.env` - which is not the
+same file as the `~/.config/fxlla/config.env` that `lib/core.sh` loads, so the
+one a reader would open was the one without them. I had already overwritten a
+notarized `.dmg` with an unnotarized build; it was git-ignored, so that was
+recoverable only because the credentials I had just declared missing existed.
+`--notarize` now defaults its profile from config and `--check` reports whether
+that profile authenticates, because the fix for a fact nobody can reconstruct
+is to stop requiring anyone to.
+
 ## 2026-08-03: what the clock was actually timing
 
 The eval reported 1,865,386 tokens per second. Two layers down, the streamed
