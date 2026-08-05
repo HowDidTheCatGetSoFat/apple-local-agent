@@ -20,13 +20,17 @@ ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 suites=0 failed=0 total=0
 names=""
 
-# Lint first, with exactly the flags CI uses - no severity filter. This check
-# lived only in CI once, and a local run that filtered severity reported clean
-# while CI failed on notes for three commits. One command, one answer.
-# SC2086 and friends are only `info`, so filtering by severity would drop the
-# unquoted-expansion check; deliberate findings get an inline disable instead.
+# Lint first, the way CI actually lints. Two details that are the whole point:
+#
+#   * No severity filter. SC2086 - unquoted expansion, in a codebase that is
+#     largely path assembly - is only `info`, so `-S warning` would drop exactly
+#     the class worth catching. Deliberate findings get an inline disable.
+#   * ONE FILE PER INVOCATION. Passing them all at once lets shellcheck follow
+#     `source` between them and conclude that a variable set in one and read in
+#     another is used; the action lints each file alone and cannot. That gap is
+#     not theoretical - it is how two SC2034s reached CI green from here.
 lint() {
-  local files=() f
+  local files=() f rc=0
   while IFS= read -r f; do files+=("$f"); done < <(
     find "$ROOT" -path "$ROOT/app/fxlla.app" -prune -o -type f -name '*.sh' -print
   )
@@ -37,7 +41,10 @@ lint() {
     printf 'shellcheck SKIPPED - not installed (CI still enforces it)\n\n'
     return 0
   fi
-  if shellcheck -e SC1090 -e SC1091 "${files[@]}"; then
+  for f in "${files[@]}"; do
+    shellcheck -e SC1090 -e SC1091 "$f" || rc=1
+  done
+  if [ "$rc" -eq 0 ]; then
     printf '%-28s %3d files       ok\n\n' "shellcheck" "${#files[@]}"
     return 0
   fi

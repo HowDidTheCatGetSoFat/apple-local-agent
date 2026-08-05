@@ -15,6 +15,7 @@ ran=0
 pass() { ran=$((ran + 1)); printf 'ok   - %s\n' "$1"; }
 fail() { ran=$((ran + 1)); printf 'FAIL - %s\n' "$1"; fails=$((fails + 1)); }
 
+# shellcheck disable=SC2034  # read by lib/core.sh when it is sourced below
 REPO_ROOT="$ROOT"
 # No `|| true`: under `set -u` a failed source ends the file before its first
 # check, and silence reads exactly like success.

@@ -38,6 +38,7 @@ mkdir -p "$MODELS_DIR"
 # WITHOUT `|| true`: under `set -u` an unbound variable kills the shell outright,
 # so a tolerated failure here ends the file with zero assertions and exit 0 -
 # a green run that tested nothing. Let it fail loudly instead.
+# shellcheck disable=SC2034  # read by lib/core.sh when it is sourced below
 REPO_ROOT="$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/lib/core.sh"
