@@ -158,5 +158,27 @@ for key in reasoning_content reasoning; do
   fi
 done
 
+# --- serve identifies the responder, not just "something answered" ---------
+# A 200 on /health means something is listening, not that it is ours.
+# llama-server answers /health too, so a stale single-model server holding the
+# port made the gateway die on bind while `fxlla serve` read the squatter's
+# reply and announced "Gateway up", listing the intruder's one model.
+# Reproduced with a foreign listener on 8080 before the fix.
+#
+# budget_mb is a field only the gateway puts in /health, so requiring it in the
+# readiness check is what tells the two apart. Asserted as the absence of the
+# bare check: naming the exact good line breaks on any harmless rewrite.
+# shellcheck disable=SC2016  # greps bin/fxlla for literal source; $ must not expand
+if grep -qE 'curl -sf "http://\$FXLLA_HOST:\$FXLLA_PORT/health" >/dev/null' "$FXLLA"; then
+  fail "serve treats any /health 200 as its own gateway"
+else
+  pass "serve does not treat a bare /health 200 as its own gateway"
+fi
+if grep -q 'budget_mb' "$FXLLA"; then
+  pass "serve identifies the responder by a field only the gateway emits"
+else
+  fail "serve has no way to tell its gateway from another listener"
+fi
+
 if [ "$fails" -ne 0 ]; then printf '\n%d test(s) failed\n' "$fails"; exit 1; fi
 printf '\nall wire tests passed\n'

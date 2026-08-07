@@ -1004,9 +1004,28 @@ cmd_serve() {
     FXLLA_BIN="$SELF" \
     nohup python3 "$REPO_ROOT/gateway/fxlla_gateway.py" > "$GATEWAY_LOG" 2>&1 &
   echo $! > "$GATEWAY_PID"
-  local _ ids
+  local _ ids health
   for _ in $(seq 1 30); do
-    if curl -sf "http://$FXLLA_HOST:$FXLLA_PORT/health" >/dev/null 2>&1; then
+    # An answer on /health says something is listening, NOT that it is ours.
+    # llama-server answers /health too, so a stale single-model server squatting
+    # the port made the gateway die on bind while this loop read the squatter's
+    # reply and announced "Gateway up", listing the intruder's one model.
+    #
+    # Checking our own pid first is not enough on its own - the child is still
+    # alive for the moment between spawn and its bind failing, which is inside
+    # this loop's first pass. So identify the RESPONDER: budget_mb is a field
+    # only this gateway puts in /health. Both checks stay, because they catch
+    # different things - a foreign listener, and our own process dying later.
+    gateway_alive || {
+      warn "Gateway died on start:"; tail -n 20 "$GATEWAY_LOG" >&2
+      rm -f "$GATEWAY_PID"; return 1
+    }
+    health="$(curl -sf "http://$FXLLA_HOST:$FXLLA_PORT/health" 2>/dev/null || true)"
+    case "$health" in
+      *'"budget_mb"'*) ;;   # ours
+      *) health="" ;;       # someone else's, or nothing yet
+    esac
+    if [ -n "$health" ]; then
       # One fetch feeds both the banner and the opencode registration, so what
       # the user reads is exactly what got registered. Lines are "id<TAB>ctx";
       # the context travels so opencode's meter runs on the real window.
@@ -1020,7 +1039,6 @@ for m in json.load(sys.stdin)["data"]:
       ok "In opencode: provider 'local', pick any model. The first request loads it."
       return 0
     fi
-    gateway_alive || { warn "Gateway died on start:"; tail -n 20 "$GATEWAY_LOG" >&2; rm -f "$GATEWAY_PID"; return 1; }
     sleep 1
   done
   warn "Gateway not ready in time. Check: tail -f $GATEWAY_LOG"; return 1
