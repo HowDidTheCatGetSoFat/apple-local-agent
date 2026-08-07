@@ -1,6 +1,8 @@
 # fxlla
 
 [![CI](https://github.com/HowDidTheCatGetSoFat/fxlla/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/HowDidTheCatGetSoFat/fxlla/actions/workflows/ci.yml?query=branch%3Amain)
+[![CodeQL](https://github.com/HowDidTheCatGetSoFat/fxlla/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/HowDidTheCatGetSoFat/fxlla/actions/workflows/codeql.yml?query=branch%3Amain)
+[![App](https://github.com/HowDidTheCatGetSoFat/fxlla/actions/workflows/app.yml/badge.svg?branch=main)](https://github.com/HowDidTheCatGetSoFat/fxlla/actions/workflows/app.yml?query=branch%3Amain)
 
 Run the best open-weights models locally on Apple Silicon, and plug them into
 the tools you already use.
