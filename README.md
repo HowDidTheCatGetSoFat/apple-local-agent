@@ -1,5 +1,7 @@
 # fxlla
 
+[![CI](https://github.com/HowDidTheCatGetSoFat/fxlla/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/HowDidTheCatGetSoFat/fxlla/actions/workflows/ci.yml?query=branch%3Amain)
+
 Run the best open-weights models locally on Apple Silicon, and plug them into
 the tools you already use.
 
