@@ -1192,6 +1192,28 @@ def _rec(alias, results, usage_exact=True, **extra):
     return rec
 
 
+class TestHarnessVersion(unittest.TestCase):
+    """The version is half the comparability rule, so pin it to a literal.
+
+    Every other reference reads run.EVAL_HARNESS_VERSION dynamically, which
+    means a forgotten bump - or a bump to the wrong number - changes nothing
+    that any test can see, while silently making old and new speed numbers
+    look comparable. Bumping this literal is the deliberate act; if this test
+    fails, decide whether the change really alters what a number means, then
+    update the literal AND the changelog note in run.py.
+    """
+
+    def test_version_is_pinned(self):
+        self.assertEqual(run.EVAL_HARNESS_VERSION, 5)
+
+    def test_every_version_has_a_written_reason(self):
+        src = open(run.__file__, encoding="utf-8").read()
+        head = src.split("EVAL_HARNESS_VERSION")[0]
+        for n in range(2, run.EVAL_HARNESS_VERSION + 1):
+            self.assertIn("# v%d:" % n, head,
+                          "v%d bumped with no note saying what it changed" % n)
+
+
 class TestReport(unittest.TestCase):
     def test_contract_fields_present(self):
         results = [{"id": "a", "dim": "code", "pass": True},

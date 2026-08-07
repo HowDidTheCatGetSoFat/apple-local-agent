@@ -1414,8 +1414,15 @@ try:
         if data == "[DONE]": break
         try: obj = json.loads(data)
         except Exception: continue
-        delta = (obj.get("choices") or [{}])[0].get("delta", {}).get("content")
-        if delta:
+        # Count what the model GENERATED, not what a reader sees. A reasoning
+        # model spends this whole 48-token budget thinking and emits no visible
+        # content at all, so counting only `content` made this report a perfect
+        # `0 0` - a plausible-looking zero that then lands in stats.jsonl and
+        # gets charted. Servers disagree on the field: llama.cpp streams
+        # `reasoning_content`, mlx_lm streams `reasoning`. gateway/metrics.py
+        # carries the same list for the same reason; change both together.
+        d = (obj.get("choices") or [{}])[0].get("delta", {}) or {}
+        if any(d.get(k) for k in ("content", "reasoning_content", "reasoning")):
             if tfirst is None: tfirst = time.time()
             n += 1
     tend = time.time()

@@ -42,6 +42,66 @@ class TestStreamMetrics(unittest.TestCase):
         self.assertIsNotNone(ttft_ms)
         self.assertEqual(tps, 2.0)
 
+    def test_thinking_starts_the_clock_llama_cpp_shape(self):
+        """A reasoning model's thinking is generated tokens too.
+
+        completion_tokens counts it, so a clock started at the first VISIBLE
+        token divides every token by only the time the answer took. Measured on
+        Gemma 4 26B-A4B through llama.cpp: 563 reasoning deltas before 165
+        content ones, reported as 518 tok/s from a model doing 114.
+        """
+        m = metrics.StreamMetrics(start=0.0)
+        m.feed(_sse({"choices": [{"delta": {"reasoning_content": "thin"}}]}))
+        first_thought = m.first
+        self.assertIsNotNone(first_thought, "thinking did not start the clock")
+        m.feed(_sse({"choices": [{"delta": {"content": "answer"}}]}))
+        self.assertEqual(m.first, first_thought,
+                         "the clock restarted at the visible token")
+        _ttft, tps, tokens = m.result(end=m.first + 2.0)
+        self.assertEqual(tokens, 2)
+        self.assertEqual(tps, 1.0)
+
+    def test_thinking_starts_the_clock_mlx_shape(self):
+        """Same bug, other spelling: mlx_lm streams `reasoning`, not
+        `reasoning_content`. Reading only one of the two names fixes one engine
+        and leaves the other reporting 550 tok/s from a model doing 98."""
+        m = metrics.StreamMetrics(start=0.0)
+        m.feed(_sse({"choices": [{"delta": {"role": "assistant",
+                                            "reasoning": "thin"}}]}))
+        self.assertIsNotNone(m.first, "mlx_lm thinking did not start the clock")
+        m.feed(_sse({"choices": [{"delta": {"content": "answer"}}]}))
+        _ttft, tps, tokens = m.result(end=m.first + 2.0)
+        self.assertEqual(tokens, 2)
+        self.assertEqual(tps, 1.0)
+
+    def test_a_tool_call_starts_the_clock_too(self):
+        """A model can emit a whole tool call before any prose. Those are
+        generated tokens the server counts, so ignoring them repeats the
+        reasoning bug through a different field."""
+        m = metrics.StreamMetrics(start=0.0)
+        m.feed(_sse({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"name": "get_weather",
+                                      "arguments": '{"city":'}}]}}]}))
+        self.assertIsNotNone(m.first, "a tool call did not start the clock")
+        m.feed(_sse({"choices": [{"delta": {"content": "done"}}]}))
+        _ttft, tps, tokens = m.result(end=m.first + 2.0)
+        self.assertEqual(tokens, 2)
+        self.assertEqual(tps, 1.0)
+
+    def test_a_delta_with_no_generated_text_still_does_not_count(self):
+        """The widening must not swallow role-only or empty chunks - those
+        carry no tokens and would start the clock early, which is the same
+        error pointed the other way."""
+        m = metrics.StreamMetrics(start=0.0)
+        m.feed(_sse(
+            {"choices": [{"delta": {"role": "assistant"}}]},
+            {"choices": [{"delta": {"content": ""}}]},
+            {"choices": [{"delta": {"reasoning": ""}}]},
+            {"choices": [{"delta": {}}]},
+        ))
+        self.assertIsNone(m.first)
+        self.assertEqual(m.deltas, 0)
+
     def test_legacy_completion_text(self):
         m = metrics.StreamMetrics(start=0.0)
         m.feed(_sse({"choices": [{"text": "a"}]}, {"choices": [{"text": "b"}]}))

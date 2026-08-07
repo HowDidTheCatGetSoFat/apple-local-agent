@@ -135,5 +135,28 @@ out="$(FXLLA_STORE=/tmp XDG_CONFIG_HOME="$CFG" bash "$FXLLA" 'do' --help 2>&1 ||
 if grep -qi "max-steps" <<< "$out"; then pass "do is wired to the loop"
 else fail "do is wired to the loop (got: $(tail -1 <<< "$out"))"; fi
 
+# --- the stats probe counts generated tokens, not visible ones -------------
+# _probe() is Python embedded in bin/fxlla, so no Python suite reaches it, and
+# it is a SECOND implementation of what gateway/metrics.py does. It once
+# counted only `content` deltas over a 48-token budget - and a reasoning model
+# spends all 48 thinking, emits no visible content, and made the probe report
+# a flat `ttft=0 tps=0` into stats.jsonl, which the menu bar then charts.
+# Measured on gemma-4-26b-qat: 0 before, 124.5-124.8 tok/s after.
+#
+# Asserted as the ABSENCE of the content-only test rather than a count of the
+# right keys: a count breaks the day a fourth server spelling is added.
+if grep -qE '^\s*if d\.get\("content"\):\s*$' "$FXLLA"; then
+  fail "_probe is back to counting only visible content (reasoning models report 0)"
+else
+  pass "_probe does not test for visible content alone"
+fi
+for key in reasoning_content reasoning; do
+  if grep -q "\"$key\"" "$FXLLA"; then
+    pass "_probe knows the '$key' spelling"
+  else
+    fail "_probe does not know the '$key' spelling, so one engine reports 0"
+  fi
+done
+
 if [ "$fails" -ne 0 ]; then printf '\n%d test(s) failed\n' "$fails"; exit 1; fi
 printf '\nall wire tests passed\n'

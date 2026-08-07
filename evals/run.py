@@ -62,7 +62,17 @@ import sandbox
 #     after: ttft 110 ms -> 52 ms, and the rate spread across probes went from
 #     667..892 to 609..611. Speed numbers from v3 and earlier are not
 #     comparable with these.
-EVAL_HARNESS_VERSION = 4
+# v5: the decode clock started at the first VISIBLE token while the token count
+#     came from the server's completion_tokens, which counts the thinking too.
+#     Reasoning models therefore had every generated token divided by only the
+#     time the answer took. No two servers name that field the same way -
+#     llama.cpp streams `reasoning_content`, mlx_lm streams `reasoning` - and
+#     metrics.py read neither, so this hit both engines and by different
+#     amounts, which means it did not even preserve the ranking. Measured
+#     against the servers' own clocks on three models: reported 403.1 / 267.9 /
+#     170.2 tok/s where the truth was 98.3 / 113.8 / 53.9 - and the top two
+#     swap. Speed numbers from v4 and earlier are not comparable with these.
+EVAL_HARNESS_VERSION = 5
 
 EVAL_PORT = int(os.environ.get("FXLLA_EVAL_PORT", "8097"))
 FXLLA_BIN = os.environ.get("FXLLA_BIN", os.path.join(REPO_ROOT, "bin", "fxlla"))
