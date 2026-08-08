@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import json
 import os
 import sys
@@ -73,6 +74,122 @@ class TestDownloadedModels(unittest.TestCase):
             self.assertIsNone(gw.model_context("m-bare"))
         finally:
             gw.MODELS_DIR = saved
+
+    def _ctx(self, window):
+        """Patch model_context so these tests state their own window."""
+        saved = gw.model_context
+        gw.model_context = lambda alias: window
+        self.addCleanup(lambda: setattr(gw, "model_context", saved))
+
+    def test_a_conversation_past_the_window_is_refused_with_the_number(self):
+        """The failure this prevents is a silence, not an error.
+
+        Measured against a real backend: a request ~1.18x over the window ran
+        180 s and returned nothing at all - no error, no rejection. An opencode
+        session here reached ~728k tokens against a 262k window and read as a
+        hung chat. The refusal has to carry the numbers, because "too big"
+        sends someone to restart things while "728k against 262k" sends them
+        to start a new session, which is the only cure.
+        """
+        self._ctx(262144)
+        body = {"messages": [{"role": "user", "content": "x" * 2548664}]}
+        msg = gw.oversized_prompt(body, "m")
+        self.assertIsNotNone(msg)
+        self.assertIn("728", msg)
+        self.assertIn("262144", msg)
+        self.assertIn("new session", msg)
+        # Compacting is the obvious move and the one that cannot work, so the
+        # message has to say so or it will be tried first.
+        self.assertIn("compacting", msg.lower())
+
+    def test_a_conversation_that_fits_is_not_refused(self):
+        """The case the rule must not catch. A request near the limit still
+        goes to the backend, which is the only thing that knows for sure."""
+        self._ctx(262144)
+        for chars in (100, 100_000, 800_000):
+            body = {"messages": [{"role": "user", "content": "x" * chars}]}
+            self.assertIsNone(gw.oversized_prompt(body, "m"),
+                              "%d chars was refused but fits" % chars)
+
+    def test_max_tokens_counts_against_the_window(self):
+        """Room to answer is part of what has to fit."""
+        self._ctx(1000)
+        body = {"messages": [{"role": "user", "content": "x" * 3400}]}   # ~971
+        self.assertIsNone(gw.oversized_prompt(body, "m"))
+        body["max_tokens"] = 500
+        self.assertIsNotNone(gw.oversized_prompt(body, "m"))
+
+    def test_an_unknown_window_refuses_nothing(self):
+        """No window is not a small window. A model whose limit cannot be read
+        must keep working exactly as before rather than have one invented."""
+        self._ctx(None)
+        body = {"messages": [{"role": "user", "content": "x" * 9_000_000}]}
+        self.assertIsNone(gw.oversized_prompt(body, "m"))
+
+    def test_tool_schemas_count(self):
+        """They ride in the prompt. Counting only message strings under-reads
+        a tool-heavy agent session, which is exactly the shape that overflows."""
+        self._ctx(1000)
+        body = {"messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"function": {"name": "f", "description": "d" * 8000}}]}
+        self.assertIsNotNone(gw.oversized_prompt(body, "m"))
+
+    def test_an_attached_photo_is_not_an_overflow(self):
+        """An image is not its base64 length.
+
+        The first version of this guard counted the data: URL as prompt text,
+        so one ordinary phone photo - ~300KB, ~400k base64 characters - looked
+        like a 114k-token prompt and was refused. A model that cannot see has
+        that image replaced by a short description before the check runs, and
+        one that can see spends a bounded number of tokens on it. Either way
+        the encoding length is the wrong number.
+        """
+        self._ctx(32768)
+        photo = "data:image/jpeg;base64," + "A" * 400_000
+        body = {"messages": [{"role": "user", "content": [
+            {"type": "text", "text": "what is in this photo?"},
+            {"type": "image_url", "image_url": {"url": photo}}]}]}
+        self.assertIsNone(gw.oversized_prompt(body, "m"))
+        # Four of them - the vision path's own default cap - still fit.
+        body["messages"][0]["content"] += [
+            {"type": "image_url", "image_url": {"url": photo}} for _ in range(3)]
+        self.assertIsNone(gw.oversized_prompt(body, "m"))
+        # But real text beside the photo is still counted.
+        body["messages"].append({"role": "user", "content": "y" * 200_000})
+        self.assertIsNotNone(gw.oversized_prompt(body, "m"))
+
+    def test_the_overflow_check_runs_after_add_vision(self):
+        """The order IS the fix, and nothing else here tests order.
+
+        oversized_prompt measures the body it is given. Ahead of add_vision it
+        measures a body still carrying base64, and an ordinary photo is refused
+        as a 114k-token overflow. The functions are both correct in isolation;
+        only their sequence in do_POST decides whether a photo works, so assert
+        the sequence rather than trust the comment beside it.
+        """
+        src = inspect.getsource(gw.Handler.do_POST)
+        vision = src.find("add_vision(")
+        overflow = src.find("oversized_prompt(")
+        self.assertNotEqual(vision, -1, "add_vision no longer called in do_POST")
+        self.assertNotEqual(overflow, -1, "oversized_prompt no longer called in do_POST")
+        self.assertLess(vision, overflow,
+                        "the overflow check moved ahead of add_vision, so an "
+                        "attached photo is measured as base64 and refused")
+
+    def test_a_legacy_completions_prompt_is_measured(self):
+        """/v1/completions carries its input at the top level, through the same
+        proxy. Measuring only `messages` left that path unguarded."""
+        self._ctx(1000)
+        self.assertIsNone(gw.oversized_prompt({"prompt": "x" * 100}, "m"))
+        self.assertIsNotNone(gw.oversized_prompt({"prompt": "x" * 20_000}, "m"))
+
+    def test_a_malformed_body_is_not_refused_here(self):
+        """Shape validation belongs to the backend; guessing here would turn a
+        clear downstream error into a wrong one."""
+        self._ctx(1000)
+        for body in ({}, {"messages": "nope"}, {"messages": []},
+                     {"messages": [{"role": "user"}]}):
+            self.assertIsNone(gw.oversized_prompt(body, "m"))
 
     def test_model_context_of_a_multimodal_config(self):
         """A multimodal model nests the text settings.

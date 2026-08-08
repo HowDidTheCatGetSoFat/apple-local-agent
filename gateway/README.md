@@ -41,3 +41,17 @@ proxied response. Embeddings and non-generative endpoints are not timed.
   usage chunk. RAM is the backend process RSS at the moment the request ends.
 - Cold start: the first request to an unloaded model pays the load time;
   resident hot models avoid it.
+- A conversation larger than the model's window is refused with HTTP 400 and
+  `type: context_overflow`, before the model is loaded. This exists because the
+  alternative was measured and is worse than an error: a backend handed a
+  request past its window accepts it and never answers - 180 seconds with no
+  reply, no error, nothing. A session that grew that way reads as a hung chat
+  rather than a full one, and compacting cannot rescue it, since compacting
+  sends the whole conversation. The refusal names the two numbers so the reply
+  points at the only cure, which is a new session.
+
+  The token count is estimated from characters, so it is a check on the
+  impossible rather than on the marginal: a request merely near the limit is
+  still sent to the backend, which is the only thing that knows for certain. A
+  model whose window cannot be read is never refused - no window is not a
+  small window.

@@ -452,6 +452,108 @@ def model_context(alias):
         return None
 
 
+# Characters per token, used only to notice a request that cannot possibly
+# fit. Deliberately generous: English prose runs about 4 and code lower, so
+# dividing by 3.5 OVER-estimates the token count for prose and lands near the
+# truth for code. The rule this feeds needs both its names - the failure it
+# catches and the case it must not.
+#
+# Catches: a conversation that has grown past the window. Measured, that fails
+# in the worst possible way - the backend simply never answers. 180 seconds
+# with no error, no rejection, nothing. An opencode session here reached about
+# 728k tokens against a 262k window and read as a hung chat rather than a full
+# one, and `/compact` could not rescue it because compacting sends the whole
+# conversation, which is precisely the thing that does not fit.
+#
+# Must not catch: a request merely near the limit. Hence a comparison against
+# the window itself rather than some fraction of it, and an estimate that errs
+# high only for prose. A wrongly refused request is visible and costs seconds;
+# a silent stall costs a session.
+_CHARS_PER_TOKEN = 3.5
+
+
+def _text_chars(value):
+    """Characters of prompt text in one content value, images excluded.
+
+    An image is NOT its base64 length. A vision model spends a bounded number
+    of tokens on a picture - hundreds, not the hundred thousand characters the
+    encoding takes - and a model that cannot see has the image replaced by a
+    short description before this ever runs. Counting the data: URL made an
+    ordinary phone photo look like a 114k-token prompt, which is a refusal
+    aimed at exactly the wrong request. How many images may ride along is
+    already bounded elsewhere (FXLLA_VISION_MAX_IMAGES)."""
+    if isinstance(value, str):
+        return 0 if value.startswith("data:") else len(value)
+    if isinstance(value, dict):
+        return sum(_text_chars(v) for v in value.values())
+    if isinstance(value, list):
+        return sum(_text_chars(v) for v in value)
+    return 0
+
+
+def _prompt_chars(body):
+    """Characters the model will actually be asked to read, or None.
+
+    Counts message text and any tool schemas, since those ride along in the
+    prompt. Returns None when there is nothing recognizable to measure - that
+    means "no opinion", and the backend still gets the request."""
+    total = 0
+    seen = False
+    messages = body.get("messages")
+    if isinstance(messages, list):
+        seen = True
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            total += _text_chars(msg.get("content"))
+            for key in ("reasoning_content", "reasoning", "name"):
+                piece = msg.get(key)
+                if isinstance(piece, str):
+                    total += len(piece)
+            calls = msg.get("tool_calls")
+            if isinstance(calls, list):
+                total += len(json.dumps(calls))
+    # /v1/completions carries its input at the top level instead, and the same
+    # proxy serves it. Measuring only `messages` left that path unguarded.
+    prompt = body.get("prompt")
+    if isinstance(prompt, (str, list)):
+        seen = True
+        total += _text_chars(prompt)
+    if not seen:
+        return None
+    tools = body.get("tools")
+    if tools:
+        total += len(json.dumps(tools))
+    return total
+
+
+def oversized_prompt(body, alias):
+    """A message explaining why this request cannot fit, or None.
+
+    Returning a message rather than a bool because the number is the whole
+    point: "too big" sends someone to restart things, "about 728k against
+    262k" sends them to start a new session, which is the only cure."""
+    window = model_context(alias)
+    if not window:
+        return None
+    chars = _prompt_chars(body)
+    if not chars:
+        return None
+    estimate = int(chars / _CHARS_PER_TOKEN)
+    reserve = body.get("max_tokens")
+    if not isinstance(reserve, int) or reserve < 0:
+        reserve = 0
+    if estimate + reserve <= window:
+        return None
+    return (
+        "this conversation is about %d tokens and '%s' has a %d token window, "
+        "so it cannot be processed - the backend would accept it and never "
+        "answer. Start a new session; compacting will not help, because "
+        "compacting sends the whole conversation. (Token count is estimated "
+        "from %d characters at %.1f characters per token.)"
+        % (estimate + reserve, alias, window, chars, _CHARS_PER_TOKEN))
+
+
 def downloaded_models():
     """Map alias -> {size_mb} for CHAT models with a completion marker.
 
@@ -822,6 +924,22 @@ class Handler(BaseHTTPRequestHandler):
             self._json(502, {"error": {
                 "message": "could not read the image in this request: %s" % e,
                 "type": "vision_failed"}})
+            return
+
+        # AFTER add_vision, and that order is the whole correctness of it: this
+        # measures the body that will actually be sent. Measured before it, a
+        # single ordinary photo attached to a text-only model was refused as a
+        # 114k-token overflow, because the base64 was counted as prompt text -
+        # while add_vision was about to replace that image with a 116-character
+        # description that fits anything. A rejection rule has to name the
+        # legitimate case it must not catch, and that was it.
+        #
+        # Still before MANAGER.ensure, so a request that genuinely cannot fit
+        # does not first cost 16 GB of weights coming off disk.
+        overflow = oversized_prompt(body, alias)
+        if overflow:
+            self._json(400, {"error": {"message": overflow,
+                                       "type": "context_overflow"}})
             return
 
         try:
