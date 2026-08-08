@@ -435,7 +435,18 @@ def model_context(alias):
         return served or SERVED_GGUF_CTX
     try:
         with open(os.path.join(d, "config.json"), encoding="utf-8") as fh:
-            value = json.load(fh).get("max_position_embeddings")
+            cfg = json.load(fh)
+        # A multimodal model nests its text settings: Gemma 4 keeps
+        # max_position_embeddings under text_config, beside vision_config and
+        # audio_config, and declares nothing at the top level. Reading only the
+        # top level reported no window for it at all - and per the docstring
+        # above, "no window" is exactly when opencode's meter and its
+        # auto-compaction start running on a number nobody supplied.
+        value = cfg.get("max_position_embeddings")
+        if not value:
+            nested = cfg.get("text_config")
+            if isinstance(nested, dict):
+                value = nested.get("max_position_embeddings")
         return int(value) if value else None
     except (OSError, ValueError, TypeError):
         return None

@@ -74,6 +74,31 @@ class TestDownloadedModels(unittest.TestCase):
         finally:
             gw.MODELS_DIR = saved
 
+    def test_model_context_of_a_multimodal_config(self):
+        """A multimodal model nests the text settings.
+
+        Gemma 4 keeps max_position_embeddings under text_config, beside
+        vision_config, and declares nothing at the top level. Reading only the
+        top level reported no window at all for it - and no window is exactly
+        when opencode's context meter and auto-compaction start working from a
+        number nobody supplied. Measured: gemma-4-26b was the one model of
+        fifteen with a null context in /v1/models.
+        """
+        store = self._store({"m-mm": "org/a", "m-empty-text": "org/b"})
+        with open(os.path.join(store, "m-mm", "config.json"), "w") as fh:
+            fh.write('{"model_type": "gemma4", "vision_config": {"x": 1},'
+                     ' "text_config": {"max_position_embeddings": 131072}}')
+        # A nested block that says nothing is still no answer, not a zero.
+        with open(os.path.join(store, "m-empty-text", "config.json"), "w") as fh:
+            fh.write('{"text_config": {"hidden_size": 8}}')
+        saved = gw.MODELS_DIR
+        gw.MODELS_DIR = store
+        try:
+            self.assertEqual(gw.model_context("m-mm"), 131072)
+            self.assertIsNone(gw.model_context("m-empty-text"))
+        finally:
+            gw.MODELS_DIR = saved
+
     def test_a_missing_catalog_excludes_nothing(self):
         # A stranger's checkout with a moved catalog must not hide their
         # models; the filter fails open to the old behavior.
