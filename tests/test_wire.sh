@@ -180,5 +180,36 @@ else
   fail "serve has no way to tell its gateway from another listener"
 fi
 
+# --- every setting the gateway reads is one `fxlla serve` forwards -----------
+# config.env is sourced into plain shell variables and never exported, and the
+# launch line passes an explicit allowlist. A setting the gateway reads that
+# nobody forwards is therefore ignored in silence - the knob exists, the docs
+# describe it, and setting it does nothing. Four were in that state:
+# FXLLA_LOOP_LIMIT and the three vision knobs. Measured: FXLLA_LOOP_LIMIT=3 in
+# config.env left the gateway still refusing at 8.
+#
+# Derived from the two files rather than from a list kept by hand, because a
+# hand-kept list is the thing that drifted in the first place.
+GW="$ROOT/gateway/fxlla_gateway.py"
+reads="$(grep -ohE 'os\.environ\.get\("FXLLA_[A-Z_]+"' "$GW" \
+         | sed 's/.*"\(FXLLA_[A-Z_]*\)".*/\1/' | sort -u)"
+# Comments are stripped first. Without that, the comment ABOVE the forwarding
+# loop - which names the very variables it is explaining - satisfied this check
+# on its own, and removing a real forward left the test green.
+forwards="$(sed -n '/^cmd_serve()/,/^}/p' "$FXLLA" | sed 's/#.*//' \
+            | grep -ohE 'FXLLA_[A-Z_]+' | sort -u)"
+missing=""
+while IFS= read -r var; do
+  [ -n "$var" ] || continue
+  printf '%s\n' "$forwards" | grep -qx "$var" || missing="$missing $var"
+done <<EOF
+$reads
+EOF
+if [ -z "$missing" ]; then
+  pass "every FXLLA_* the gateway reads is forwarded by 'fxlla serve'"
+else
+  fail "the gateway reads these but 'fxlla serve' never forwards them, so setting them in config.env does nothing:$missing"
+fi
+
 if [ "$fails" -ne 0 ]; then printf '\n%d test(s) failed\n' "$fails"; exit 1; fi
 printf '\nall wire tests passed\n'

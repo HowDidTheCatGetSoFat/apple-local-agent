@@ -994,6 +994,22 @@ cmd_serve() {
   server_alive && die "A single-model server is running on $FXLLA_PORT. Run 'fxlla off' first."
   if gateway_alive; then warn "Gateway already running (pid $(gateway_pid))."; return 1; fi
   info "Starting gateway at $BASE_URL (multi-model, on-demand load + LRU eviction)..."
+  # Settings the gateway reads but that are NOT in the assignment list below.
+  # config.env is sourced into plain shell variables, never exported, and the
+  # launch line passes an explicit allowlist - so a setting the gateway reads
+  # and this list forgets is silently ignored. Four were: FXLLA_LOOP_LIMIT and
+  # the three vision knobs. Measured, not assumed: FXLLA_LOOP_LIMIT=3 in
+  # config.env left the gateway refusing at 8.
+  #
+  # Exported only when actually set, because empty is not the same as absent
+  # here - FXLLA_VISION_ROUTING="" reads as OFF, so passing it unconditionally
+  # would have disabled image routing for everyone.
+  # `tests/test_wire.sh` asserts this list against what the gateway reads.
+  local _v
+  for _v in FXLLA_LOOP_LIMIT FXLLA_VISION_ROUTING FXLLA_VISION_MODEL \
+            FXLLA_VISION_MAX_IMAGES; do
+    [ -n "${!_v:-}" ] && export "${_v?}"
+  done
   FXLLA_HOST="$FXLLA_HOST" FXLLA_PORT="$FXLLA_PORT" FXLLA_STORE="$FXLLA_STORE" \
     FXLLA_BACKEND_PORT_BASE="${FXLLA_BACKEND_PORT_BASE:-8100}" \
     FXLLA_GATEWAY_BUDGET_MB="${FXLLA_GATEWAY_BUDGET_MB:-}" \
