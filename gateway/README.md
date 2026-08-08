@@ -50,6 +50,25 @@ proxied response. Embeddings and non-generative endpoints are not timed.
   sends the whole conversation. The refusal names the two numbers so the reply
   points at the only cure, which is a new session.
 
+- The same tool call returning the same result `FXLLA_LOOP_LIMIT` times in a
+  row (default 8, 0 disables) is refused with `type: tool_loop`, naming the
+  call. A local model here ran one command 240 times over 8.5 hours: it started
+  a server in the foreground, so the command could never exit and the result
+  was identical every time. A model with no new information retrying is not a
+  malfunction, it is the only move it has, so the stop has to come from
+  outside it - and from here rather than from any one client, because the loop
+  is a property of the conversation and every client sends the conversation
+  here.
+
+  The result is part of what is compared, not just the call. The same command
+  with a CHANGING result is progress - polling a build, watching a file grow -
+  and must never be mistaken for a loop. Only a run ending at the newest
+  exchange counts, so a model that tried something else in between is left
+  alone. This fires around the eighth attempt rather than the 240th, and
+  before the conversation has grown large enough to trip the size check below,
+  which is why it is checked first: told about its size, someone starts a new
+  session and loops again; told about the repetition, they look at the call.
+
   The token count is estimated from characters, so it is a check on the
   impossible rather than on the marginal: a request merely near the limit is
   still sent to the backend, which is the only thing that knows for certain. A

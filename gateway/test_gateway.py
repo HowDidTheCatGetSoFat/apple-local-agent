@@ -176,6 +176,169 @@ class TestDownloadedModels(unittest.TestCase):
                         "the overflow check moved ahead of add_vision, so an "
                         "attached photo is measured as base64 and refused")
 
+    def _exchange(self, i, command, result):
+        return [{"role": "assistant", "tool_calls": [
+                    {"id": "c%d" % i, "function": {
+                        "name": "bash",
+                        "arguments": json.dumps({"command": command})}}]},
+                {"role": "tool", "tool_call_id": "c%d" % i, "content": result}]
+
+    def _convo(self, n, command, result=lambda i: "same"):
+        msgs = []
+        for i in range(n):
+            msgs += self._exchange(i, command, result(i))
+        return {"messages": msgs}
+
+    def test_the_same_call_with_the_same_result_is_a_loop(self):
+        """The failure this exists for.
+
+        A local model ran one command 240 times over 8.5 hours. The command
+        started a server in the foreground, so it could never exit and the
+        result was identical every time. A model with no new information
+        retrying is not a malfunction - it is the only move it has - so the
+        stop has to come from outside it.
+        """
+        msg = gw.looping_tool_calls(self._convo(12, "timeout 120 python3 -m src.server"))
+        self.assertIsNotNone(msg)
+        self.assertIn("12 times", msg)
+        # Naming the call is the point: "you are looping" sends someone to
+        # restart, the command sends them to the cause.
+        self.assertIn("src.server", msg)
+
+    def test_the_same_call_with_a_changing_result_is_progress(self):
+        """The case the rule must not catch. Polling a build, watching a file
+        grow, waiting on a queue - all of these repeat one command forever and
+        are all legitimate. The result changing is what tells them apart."""
+        convo = self._convo(40, "curl localhost/build",
+                            result=lambda i: "progress %d%%" % i)
+        self.assertIsNone(gw.looping_tool_calls(convo))
+
+    def test_ordinary_repetition_is_left_alone(self):
+        """Running a test suite a few times while editing is a workflow."""
+        for n in range(1, gw.LOOP_LIMIT):
+            self.assertIsNone(gw.looping_tool_calls(self._convo(n, "pytest")),
+                              "%d repeats was called a loop" % n)
+
+    def test_a_run_that_was_broken_by_a_different_call_is_not_a_loop(self):
+        """Only a run ENDING at the last exchange counts. A model that tried
+        something else in between is exploring, however badly.
+
+        Both shapes are needed, and the first one alone proves nothing: with a
+        DIFFERENT call last, counting occurrences anywhere would also find one
+        and pass. The second shape - the repeated call is last, but the run was
+        interrupted - is the one that separates "consecutive" from "how many in
+        total", which is the actual rule.
+        """
+        convo = self._convo(20, "pytest")
+        convo["messages"] += self._exchange(99, "ls", "a b c")
+        self.assertIsNone(gw.looping_tool_calls(convo))
+
+        interrupted = self._convo(gw.LOOP_LIMIT + 4, "pytest")
+        interrupted["messages"] += self._exchange(98, "ls", "a b c")
+        interrupted["messages"] += self._exchange(97, "pytest", "same")
+        self.assertIsNone(gw.looping_tool_calls(interrupted),
+                          "counted total occurrences instead of the final run")
+
+    def test_an_unanswered_call_is_not_counted(self):
+        """A call still in flight has no result to compare, and counting it
+        would let an unlucky retry look like a settled loop.
+
+        Stated as behaviour - calls with no result after them - rather than by
+        breaking tool_call_id, which is how the first version of this test was
+        written. That version encoded the id-matching MECHANISM, so it passed
+        for a reason unrelated to its name and broke the moment matching became
+        order-based, even though the behaviour it claims to check never
+        changed.
+        """
+        # Every call issued, none answered.
+        msgs = [{"role": "assistant", "tool_calls": [
+                    {"id": "c%d" % i, "function": {
+                        "name": "bash",
+                        "arguments": json.dumps({"command": "pytest"})}}]}
+                for i in range(20)]
+        self.assertIsNone(gw.looping_tool_calls({"messages": msgs}))
+
+        # And a settled run whose newest call is still open stays a run of the
+        # ANSWERED ones, so an open call cannot pad the count.
+        convo = self._convo(gw.LOOP_LIMIT - 1, "pytest")
+        convo["messages"] += [{"role": "assistant", "tool_calls": [
+            {"id": "open", "function": {
+                "name": "bash",
+                "arguments": json.dumps({"command": "pytest"})}}]}]
+        self.assertIsNone(gw.looping_tool_calls(convo))
+
+    def test_polling_survives_a_client_that_reuses_call_ids(self):
+        """Matching results to calls by id, not by order, broke this.
+
+        A client that reuses tool_call_id - a fixed string, or a counter that
+        restarts each turn, which small local-model harnesses really do - had
+        every historical call rewritten to the newest result for that id. A
+        build polled twenty times with twenty different answers then looked
+        like twenty identical ones. That is the exact case the rule promises
+        to let through, defeated by a plausible client rather than a hostile
+        one.
+        """
+        msgs = []
+        for i in range(20):
+            msgs += [
+                {"role": "assistant", "tool_calls": [
+                    {"id": "call_1", "function": {                # same id, always
+                        "name": "bash",
+                        "arguments": json.dumps({"command": "curl localhost/build"})}}]},
+                {"role": "tool", "tool_call_id": "call_1",
+                 "content": "progress %d%%" % (i * 5)}]
+        self.assertIsNone(gw.looping_tool_calls({"messages": msgs}))
+
+    def test_a_hostile_body_is_not_an_exception(self):
+        """An id can be any JSON. Keyed by id, a list id raised TypeError out
+        of the handler and the client got no reply at all - worse than the
+        check simply not firing."""
+        bodies = [
+            {"messages": [{"role": "assistant", "tool_calls": [
+                {"id": ["not", "a", "string"],
+                 "function": {"name": "f", "arguments": "{}"}}]},
+                {"role": "tool", "tool_call_id": "abc", "content": "r"}]},
+            {"messages": [{"role": "assistant", "tool_calls": "nope"}]},
+            {"messages": [{"role": "assistant", "tool_calls": [None, 7, "x"]}]},
+            {"messages": [{"role": "assistant", "tool_calls": [{"function": "no"}]}]},
+            {"messages": [{"role": "tool", "content": {"nested": ["x"]}}]},
+        ]
+        for body in bodies:
+            gw.looping_tool_calls(body)   # must not raise
+
+    def test_the_limit_is_the_boundary_it_names(self):
+        """Exactly LOOP_LIMIT identical answers is a loop; one fewer is not."""
+        self.assertIsNone(gw.looping_tool_calls(self._convo(gw.LOOP_LIMIT - 1, "pytest")))
+        self.assertIsNotNone(gw.looping_tool_calls(self._convo(gw.LOOP_LIMIT, "pytest")))
+
+    def test_a_bad_loop_limit_does_not_stop_the_gateway(self):
+        """The refusal says 'set FXLLA_LOOP_LIMIT=0 to disable', which invites
+        FXLLA_LOOP_LIMIT=off. A bare int() there turned a wrong guess about one
+        check into a gateway that would not import."""
+        saved = os.environ.get("FXLLA_LOOP_LIMIT")
+        try:
+            for raw in ("off", "", "8.5", "disable"):
+                os.environ["FXLLA_LOOP_LIMIT"] = raw
+                self.assertEqual(gw._loop_limit(), 8, "%r took the gateway down" % raw)
+            os.environ["FXLLA_LOOP_LIMIT"] = "0"
+            self.assertEqual(gw._loop_limit(), 0)
+        finally:
+            if saved is None:
+                os.environ.pop("FXLLA_LOOP_LIMIT", None)
+            else:
+                os.environ["FXLLA_LOOP_LIMIT"] = saved
+
+    def test_the_check_can_be_turned_off(self):
+        saved = gw.LOOP_LIMIT
+        gw.LOOP_LIMIT = 0
+        self.addCleanup(lambda: setattr(gw, "LOOP_LIMIT", saved))
+        self.assertIsNone(gw.looping_tool_calls(self._convo(500, "pytest")))
+
+    def test_a_conversation_with_no_tools_is_untouched(self):
+        for body in ({}, {"messages": "nope"},
+                     {"messages": [{"role": "user", "content": "hi"}]}):
+            self.assertIsNone(gw.looping_tool_calls(body))
+
     def test_a_legacy_completions_prompt_is_measured(self):
         """/v1/completions carries its input at the top level, through the same
         proxy. Measuring only `messages` left that path unguarded."""

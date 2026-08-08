@@ -554,6 +554,112 @@ def oversized_prompt(body, alias):
         % (estimate + reserve, alias, window, chars, _CHARS_PER_TOKEN))
 
 
+# How many times the same tool call may return the same answer before this is
+# called a loop. 0 disables the check.
+#
+# The number that motivated it: a local model ran one command 240 times over
+# 8.5 hours, each attempt blocking for its full 120 s timeout. The command
+# started a server in the foreground, so it could never exit and the result was
+# byte-identical every time. That is the whole mechanism - a model with no new
+# information retrying is not a malfunction, it is the only thing it can do.
+#
+# 8 is chosen to sit well above deliberate repetition. Re-running a test suite
+# three or four times while editing is ordinary; eight identical results in a
+# row is not a workflow.
+# Parsed defensively, unlike its neighbours, for a specific reason: the refusal
+# this feeds tells the reader to "set FXLLA_LOOP_LIMIT=0 to disable", which
+# invites FXLLA_LOOP_LIMIT=off. A bare int() there turns a wrong guess about
+# one check into a gateway that will not import at all.
+def _loop_limit():
+    raw = os.environ.get("FXLLA_LOOP_LIMIT", "8")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        print("[gateway] FXLLA_LOOP_LIMIT=%r is not a whole number; "
+              "using 8 (0 disables the check)" % raw, flush=True)
+        return 8
+
+
+LOOP_LIMIT = _loop_limit()
+
+
+def _exchange_signatures(messages):
+    """One signature per tool call/result pair, in conversation order.
+
+    The signature deliberately includes the RESULT, not just the call. Same
+    call with a CHANGING result is progress - polling a build, watching a file
+    grow - and must never be mistaken for a loop. Same call with the same
+    result is the model learning nothing, which is the thing worth stopping.
+
+    Pairs are matched by ORDER, not by tool_call_id, and that is not a
+    simplification. Keyed by id, a client that reuses ids - a fixed string, or
+    a counter restarting each turn, which small local-model harnesses really do
+    - had every historical call rewritten to the newest result for that id. A
+    build polled twenty times with twenty different answers then looked like
+    twenty identical ones and got refused: precisely the case this must let
+    through. Order also means the id is never used as a dict key, so an id that
+    is a list or a dict cannot raise on the way in.
+    """
+    pending, signatures = [], []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        calls = msg.get("tool_calls")
+        if isinstance(calls, list):
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                fn = call.get("function")
+                if not isinstance(fn, dict):
+                    continue
+                pending.append((str(fn.get("name")), str(fn.get("arguments"))))
+        # A result answers the oldest call still waiting. Several calls issued
+        # in one assistant turn are answered in the order they were made.
+        if msg.get("role") == "tool" and pending:
+            name, arguments = pending.pop(0)
+            signatures.append(
+                (name, arguments, _text_chars_repr(msg.get("content"))))
+    return signatures
+
+
+def _text_chars_repr(content):
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, sort_keys=True, default=str)
+
+
+def looping_tool_calls(body):
+    """A message naming the repetition, or None.
+
+    Checked at the gateway rather than in any one client, because the loop is a
+    property of the conversation and every client sends the conversation here.
+    """
+    if LOOP_LIMIT <= 0:
+        return None
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return None
+    signatures = _exchange_signatures(messages)
+    if len(signatures) < LOOP_LIMIT:
+        return None
+    last = signatures[-1]
+    run = 0
+    for sig in reversed(signatures):
+        if sig != last:
+            break
+        run += 1
+    if run < LOOP_LIMIT:
+        return None
+    name, arguments, _outcome = last
+    shown = arguments if len(arguments) <= 200 else arguments[:200] + "..."
+    return (
+        "this conversation has called '%s' %d times in a row with the same "
+        "arguments AND the same result, so the model is not learning anything "
+        "new and will keep going. Look at that call rather than retrying: %s "
+        "(set FXLLA_LOOP_LIMIT=0 to disable this check)"
+        % (name, run, shown))
+
+
 def downloaded_models():
     """Map alias -> {size_mb} for CHAT models with a completion marker.
 
@@ -936,6 +1042,21 @@ class Handler(BaseHTTPRequestHandler):
         #
         # Still before MANAGER.ensure, so a request that genuinely cannot fit
         # does not first cost 16 GB of weights coming off disk.
+        # Before the size check, because a looping conversation eventually
+        # becomes an oversized one and the loop is the cause. Told about its
+        # size, someone starts a new session and loops again; told about the
+        # repetition, they look at the call.
+        # Wrapped like its neighbours. A guard is not worth a request: if this
+        # cannot read a conversation it has no opinion about it, and the
+        # backend still gets its chance.
+        try:
+            loop = looping_tool_calls(body)
+        except Exception:  # noqa: BLE001
+            loop = None
+        if loop:
+            self._json(400, {"error": {"message": loop, "type": "tool_loop"}})
+            return
+
         overflow = oversized_prompt(body, alias)
         if overflow:
             self._json(400, {"error": {"message": overflow,
