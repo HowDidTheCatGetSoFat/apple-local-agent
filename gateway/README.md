@@ -50,6 +50,25 @@ proxied response. Embeddings and non-generative endpoints are not timed.
   sends the whole conversation. The refusal names the two numbers so the reply
   points at the only cure, which is a new session.
 
+
+- A tool call that reached the TEXT channel is promoted to a real one. mlx_lm's
+  parser for this family anchors its closing tag to the end of the string
+  (`<function=(.*?)</function>$`), and qwen3-coder sometimes closes a
+  Llama-shaped call with a Hermes-shaped `</tool_call>`; the anchor then fails
+  and the whole call arrives as prose. No client reads the text channel, so
+  from the outside the model simply did not call anything. Measured at
+  temperature 0, this is about wording rather than luck: "Run the shell
+  command: echo hi" parsed 3/3 and "Use the bash tool to run: echo hi" parsed
+  0/3. `evals/README.md` already names this class and says the remedy belongs
+  to the serving layer.
+
+  Only attempted when the request declared tools and the recovered name is one
+  of them - a reply that merely discusses `<function=...>` is prose, and
+  turning prose into a call is worse than missing one. Streams are repaired
+  without buffering the answer: everything flows through as it arrives and only
+  `data: [DONE]` is held, so the recovered call lands before the client stops
+  reading and a normal reply keeps its incremental output.
+
 - The same tool call returning the same result `FXLLA_LOOP_LIMIT` times in a
   row (default 8, 0 disables) is refused with `type: tool_loop`, naming the
   call. A local model here ran one command 240 times over 8.5 hours: it started

@@ -728,6 +728,94 @@ class TestRss(unittest.TestCase):
     def test_bogus_pid_is_zero(self):
         self.assertEqual(gw.rss_mb(-1), 0)
 
+class TestTextChannelToolCalls(unittest.TestCase):
+    """A tool call the backend's own parser dropped into the text channel.
+
+    mlx_lm anchors its closing tag to the end of the string
+    (`<function=(.*?)</function>$`), and qwen3-coder sometimes closes a
+    Llama-shaped call with a Hermes-shaped `</tool_call>`. The anchor then
+    fails and the whole call arrives as prose, which no client can act on.
+    Measured at temperature 0: "Run the shell command: echo hi" parsed 3/3 and
+    "Use the bash tool to run: echo hi" parsed 0/3 - about the wording, not
+    luck. evals/README.md already calls this a serving-layer problem.
+    """
+
+    TOOLS = [{"type": "function", "function": {
+        "name": "bash",
+        "parameters": {"type": "object", "properties": {
+            "command": {"type": "string"}, "timeout": {"type": "integer"}}}}}]
+
+    # Exactly what the model emitted, trailing stray tag included.
+    EMITTED = ("<function=bash>\n<parameter=command>\necho hi\n</parameter>\n"
+               "</function>\n</tool_call>")
+
+    def test_the_real_emission_is_recovered(self):
+        calls = gw.text_tool_calls(self.EMITTED, self.TOOLS)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["name"], "bash")
+        self.assertEqual(json.loads(calls[0]["function"]["arguments"]),
+                         {"command": "echo hi"})
+        self.assertTrue(calls[0]["id"])
+
+    def test_declared_types_are_honoured(self):
+        text = ("<function=bash><parameter=command>ls</parameter>"
+                "<parameter=timeout>30</parameter></function>")
+        args = json.loads(gw.text_tool_calls(text, self.TOOLS)[0]["function"]["arguments"])
+        self.assertEqual(args["timeout"], 30)      # int, not "30"
+        self.assertIsInstance(args["timeout"], int)
+
+    def test_prose_about_the_syntax_is_left_alone(self):
+        """Turning prose into a call is worse than missing one."""
+        for text in ("You could write <function=bash> but I will not",
+                     "no tags here at all", ""):
+            self.assertIsNone(gw.text_tool_calls(text, self.TOOLS))
+
+    def test_a_tool_the_request_never_offered_is_refused(self):
+        text = "<function=rm><parameter=path>/</parameter></function>"
+        self.assertIsNone(gw.text_tool_calls(text, self.TOOLS))
+
+    def test_nothing_happens_without_declared_tools(self):
+        self.assertIsNone(gw.text_tool_calls(self.EMITTED, None))
+        self.assertIsNone(gw.text_tool_calls(self.EMITTED, []))
+
+    def test_a_stream_is_repaired_before_done(self):
+        """The client stops at [DONE], so a recovered call has to land before
+        it. The line is held rather than the whole answer buffered, which is
+        what keeps a normal reply incremental."""
+        r = gw._StreamRescue(self.TOOLS)
+        out = bytearray()
+        for piece in self.EMITTED.split("\n"):
+            chunk = json.dumps({"model": "m", "choices": [
+                {"delta": {"content": piece + "\n"}}]}).encode()
+            got, rest = r.consume(b"data: " + chunk + b"\n")
+            out += got
+            self.assertEqual(rest, b"")
+        got, rest = r.consume(b"data: [DONE]\n")
+        out += got
+        self.assertNotIn(b"[DONE]", bytes(out), "[DONE] was forwarded too early")
+        out += r.finish(rest)
+        body = bytes(out).decode()
+        self.assertIn("tool_calls", body)
+        self.assertLess(body.index("tool_calls"), body.index("[DONE]"))
+
+    def test_a_stream_that_already_called_a_tool_is_untouched(self):
+        r = gw._StreamRescue(self.TOOLS)
+        chunk = json.dumps({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"name": "bash", "arguments": "{}"}}]}}]}).encode()
+        r.consume(b"data: " + chunk + b"\n")
+        r.consume(b"data: [DONE]\n")
+        tail = r.finish(b"").decode()
+        self.assertNotIn("<function=", tail)
+        self.assertNotIn("tool_calls", tail, "a real call was duplicated")
+
+    def test_a_stream_with_nothing_to_repair_ends_normally(self):
+        r = gw._StreamRescue(self.TOOLS)
+        chunk = json.dumps({"choices": [{"delta": {"content": "just prose"}}]}).encode()
+        out, rest = r.consume(b"data: " + chunk + b"\ndata: [DONE]\n")
+        self.assertIn(b"just prose", out)
+        self.assertIn(b"[DONE]", r.finish(rest))
+
+
 class TestVisionForModelsThatCannotSee(unittest.TestCase):
     """An image reaching a text model used to be a crash.
 

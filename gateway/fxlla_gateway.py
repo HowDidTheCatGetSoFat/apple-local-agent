@@ -64,6 +64,7 @@ Config via environment:
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -711,6 +712,148 @@ def looping_tool_calls(body):
         % (where, name, run, shown))
 
 
+# A tool call that reached the text channel instead of the tool channel.
+#
+# mlx_lm ships a parser for this family, and it anchors the closing tag to the
+# end of the string:  re.compile(r"<function=(.*?)</function>$", re.DOTALL).
+# qwen3-coder sometimes closes a Llama-shaped call with a Hermes-shaped
+# `</tool_call>`, so `</function>` is no longer last, the anchor fails, and the
+# whole call falls through as prose. Measured at temperature 0: the prompt
+# "Run the shell command: echo hi" parses 3/3, and "Use the bash tool to run:
+# echo hi" parses 0/3 - deterministic, and about the wording, not luck.
+#
+# The client never sees the text channel, so from opencode's side the model
+# simply did not call anything. evals/README.md already names this class and
+# says the remedy is a serving-layer fix; this is that fix.
+_TEXT_CALL_RE = re.compile(r"<function=([^>\s]+)\s*>(.*?)</function>", re.DOTALL)
+_TEXT_PARAM_RE = re.compile(r"<parameter=([^>\s]+)\s*>(.*?)</parameter>", re.DOTALL)
+
+
+def _coerce_argument(value, name, schema):
+    """Text is all the channel carries, so give the declared type back."""
+    text = value.strip()
+    spec = (schema or {}).get(name) or {}
+    kind = str(spec.get("type", "string")).lower()
+    if text.lower() == "null":
+        return None
+    try:
+        if kind.startswith(("int", "long")):
+            return int(text)
+        if kind.startswith(("num", "float")):
+            return float(text)
+        if kind.startswith("bool"):
+            return text.lower() in ("true", "1", "yes")
+        if kind in ("object", "array"):
+            return json.loads(text)
+    except (TypeError, ValueError):
+        return text
+    return text
+
+
+def text_tool_calls(content, tools):
+    """Tool calls hiding in a text reply, in OpenAI shape, or None.
+
+    Only attempted when the request declared tools and the name matches one of
+    them: a reply that merely discusses `<function=...>` is prose, and turning
+    prose into a call would be worse than missing one.
+    """
+    if not content or not tools or "<function=" not in content:
+        return None
+    schemas = {}
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
+        if isinstance(fn, dict) and isinstance(fn.get("name"), str):
+            schemas[fn["name"]] = (fn.get("parameters") or {}).get("properties") or {}
+    if not schemas:
+        return None
+    calls = []
+    for match in _TEXT_CALL_RE.finditer(content):
+        name = match.group(1).strip()
+        if name not in schemas:
+            continue        # not a tool this request offered
+        args = {}
+        for pname, pvalue in _TEXT_PARAM_RE.findall(match.group(2)):
+            args[pname.strip()] = _coerce_argument(pvalue, pname.strip(), schemas[name])
+        calls.append({
+            "id": "call_%s" % hashlib.sha1(
+                ("%s%s%d" % (name, json.dumps(args, sort_keys=True), len(calls))
+                 ).encode()).hexdigest()[:16],
+            "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args)},
+        })
+    return calls or None
+
+
+class _StreamRescue:
+    """Watches an SSE reply for a tool call that landed in the text channel.
+
+    Passes everything through untouched except `data: [DONE]`, which it holds
+    so a recovered call can be appended before the client stops reading. It
+    therefore costs a normal reply nothing: no buffering, no delay, and if
+    nothing needs repairing the held line is emitted exactly as it arrived.
+    """
+
+    def __init__(self, tools):
+        self.tools = tools
+        self.text = []
+        self.had_tool_calls = False
+        self.done_line = None
+        self.model = ""
+
+    def consume(self, data):
+        """(bytes to forward, bytes still incomplete)."""
+        out = bytearray()
+        while b"\n" in data:
+            line, data = data.split(b"\n", 1)
+            stripped = line.strip()
+            if stripped == b"data: [DONE]":
+                self.done_line = line + b"\n"
+                continue                      # held until finish()
+            self._inspect(stripped)
+            out += line + b"\n"
+        return bytes(out), data
+
+    def _inspect(self, line):
+        if not line.startswith(b"data:"):
+            return
+        payload = line[5:].strip()
+        if not payload:
+            return
+        try:
+            obj = json.loads(payload)
+        except ValueError:
+            return
+        if isinstance(obj.get("model"), str):
+            self.model = obj["model"]
+        for choice in obj.get("choices") or []:
+            delta = choice.get("delta")
+            if not isinstance(delta, dict):
+                continue
+            if delta.get("tool_calls"):
+                self.had_tool_calls = True
+            piece = delta.get("content")
+            if isinstance(piece, str):
+                self.text.append(piece)
+
+    def finish(self, leftover):
+        out = bytearray(leftover)
+        calls = None
+        if not self.had_tool_calls:
+            calls = text_tool_calls("".join(self.text), self.tools)
+        if calls:
+            chunk = {"object": "chat.completion.chunk", "model": self.model,
+                     "choices": [{"index": 0, "finish_reason": "tool_calls",
+                                  "delta": {"tool_calls": [
+                                      dict(c, index=i) for i, c in enumerate(calls)]}}]}
+            out += b"data: " + json.dumps(chunk).encode() + b"\n\n"
+            log("recovered %d tool call(s) from the text channel of a stream; "
+                "the backend's parser did not match them" % len(calls))
+        out += self.done_line or b"data: [DONE]\n\n"
+        return bytes(out)
+
+
 def downloaded_models():
     """Map alias -> {size_mb} for CHAT models with a completion marker.
 
@@ -1174,7 +1317,18 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         streaming = "event-stream" in ctype
         sm = metrics.StreamMetrics(start) if (measure and streaming) else None
-        buf = bytearray() if (measure and not streaming) else None
+        # Buffered whenever the reply might carry a tool call the backend's own
+        # parser dropped into the text channel, since repairing it means
+        # rewriting the body. Metrics want the buffer anyway.
+        rescue = bool(body.get("tools"))
+        buf = bytearray() if (measure or rescue) and not streaming else None
+        # Streaming is repaired without buffering the answer: the text flows
+        # through as it arrives and only `data: [DONE]` is held back, so a
+        # recovered call can be appended before the client stops reading.
+        # Buffering the whole stream would have worked too and would have cost
+        # every reply its incremental output to fix the few that need it.
+        seen = _StreamRescue(body.get("tools")) if (rescue and streaming) else None
+        pending = b""
         try:
             while True:
                 chunk = resp.read(1024)
@@ -1185,15 +1339,56 @@ class Handler(BaseHTTPRequestHandler):
                         sm.feed(chunk)
                     except Exception:
                         sm = None  # never let metrics break the proxy
-                elif buf is not None and len(buf) < 512 * 1024:
+                if buf is not None and len(buf) < 4 * 1024 * 1024:
                     buf.extend(chunk)
-                self.wfile.write(b"%X\r\n%s\r\n" % (len(chunk), chunk))
+                if seen is not None:
+                    pending += chunk
+                    out, pending = seen.consume(pending)
+                    chunk = out
+                    if not chunk:
+                        continue
+                if not (rescue and not streaming):
+                    self.wfile.write(b"%X\r\n%s\r\n" % (len(chunk), chunk))
+                    self.wfile.flush()
+            if rescue and not streaming:
+                out = self._rescue_tool_calls(bytes(buf), body.get("tools"))
+                self.wfile.write(b"%X\r\n%s\r\n" % (len(out), out))
                 self.wfile.flush()
+            elif seen is not None:
+                tail = seen.finish(pending)
+                if tail:
+                    self.wfile.write(b"%X\r\n%s\r\n" % (len(tail), tail))
+                    self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n")
         except Exception:
             pass
         if measure:
             self._record(alias, start, sm, bytes(buf) if buf is not None else None)
+
+    def _rescue_tool_calls(self, raw, tools):
+        """The response body, with a text-channel tool call promoted if there
+        is one. Returns the bytes unchanged on anything unexpected: a repair
+        that mangles a good reply is worse than one that misses a bad one.
+        """
+        try:
+            doc = json.loads(raw)
+            choice = doc["choices"][0]
+            message = choice["message"]
+            if message.get("tool_calls"):
+                return raw
+            calls = text_tool_calls(message.get("content"), tools)
+            if not calls:
+                return raw
+            message["tool_calls"] = calls
+            # The tags were the call, not prose; leaving them would show the
+            # user raw syntax AND feed them back as context next turn.
+            message["content"] = None
+            choice["finish_reason"] = "tool_calls"
+            log("recovered %d tool call(s) from the text channel; the backend's "
+                "parser did not match them" % len(calls))
+            return json.dumps(doc).encode()
+        except Exception:
+            return raw
 
     def _record(self, alias, start, sm, body_bytes):
         """Append one passive metrics sample derived from a completed request.
