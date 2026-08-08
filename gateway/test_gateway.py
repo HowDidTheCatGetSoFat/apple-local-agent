@@ -27,6 +27,12 @@ class TestDownloadedModels(unittest.TestCase):
     # Embedding models share the store but cannot chat. Serving one spawns
     # llama-server without --embeddings on a BERT, and this list feeds the
     # opencode registration: 'embed' shipped as a selectable chat model once.
+    def setUp(self):
+        # The loop memory is module-global and survives between tests, so one
+        # test's requests can push another over the limit and make it pass or
+        # fail for a reason unrelated to its name. Start every test from empty.
+        gw._reset_loop_memory()
+
     def _store(self, dirs):
         root = tempfile.mkdtemp(prefix="fxlla-dm-")
         for name, source in dirs.items():
@@ -214,10 +220,19 @@ class TestDownloadedModels(unittest.TestCase):
         self.assertIsNone(gw.looping_tool_calls(convo))
 
     def test_ordinary_repetition_is_left_alone(self):
-        """Running a test suite a few times while editing is a workflow."""
+        """Running a test suite a few times while editing is a workflow.
+
+        The memory is cleared between sizes on purpose: this checks the
+        CONVERSATION rule alone. Without the reset, asking n=1..7 in one loop is
+        seven requests all ending on the same exchange, which the gateway
+        memory rightly counts as seven attempts - correct behaviour, wrong
+        question. The memory has its own tests.
+        """
         for n in range(1, gw.LOOP_LIMIT):
+            gw._reset_loop_memory()
             self.assertIsNone(gw.looping_tool_calls(self._convo(n, "pytest")),
                               "%d repeats was called a loop" % n)
+        gw._reset_loop_memory()
 
     def test_a_run_that_was_broken_by_a_different_call_is_not_a_loop(self):
         """Only a run ENDING at the last exchange counts. A model that tried
@@ -327,6 +342,53 @@ class TestDownloadedModels(unittest.TestCase):
                 os.environ.pop("FXLLA_LOOP_LIMIT", None)
             else:
                 os.environ["FXLLA_LOOP_LIMIT"] = saved
+
+    def test_a_loop_survives_a_compaction_that_empties_the_history(self):
+        """opencode replaces the tool history with a summary when it compacts,
+        so a run restarts at zero and a loop of hours reads as its first try.
+        Not hypothetical: the 240-attempt session contained two compactions;
+        they landed outside the run by luck.
+        """
+        gw._reset_loop_memory()
+        self.addCleanup(gw._reset_loop_memory)
+        caught = None
+        for turn in range(1, gw.LOOP_LIMIT + 5):
+            # After turn 4 the client compacts: each request now carries only
+            # the newest exchange, exactly as opencode would send it.
+            msgs = (self._exchange(turn, "pytest", "same") if turn > 4
+                    else self._convo(turn, "pytest")["messages"])
+            if gw.looping_tool_calls({"messages": msgs}):
+                caught = turn
+                break
+        self.assertIsNotNone(caught, "a compaction hid the loop entirely")
+        self.assertLessEqual(caught, gw.LOOP_LIMIT,
+                             "the memory restarted along with the conversation")
+
+    def test_the_memory_does_not_invent_loops(self):
+        """Twenty separate requests whose result changes are twenty pieces of
+        progress, however identical the command."""
+        gw._reset_loop_memory()
+        self.addCleanup(gw._reset_loop_memory)
+        for i in range(20):
+            msgs = self._exchange(i, "curl localhost/build", "progress %d" % i)
+            self.assertIsNone(gw.looping_tool_calls({"messages": msgs}))
+
+    def test_the_memory_forgets_after_the_window(self):
+        """The thing worth bounding is time burned. A command reached again
+        tomorrow is not the failure this is about."""
+        gw._reset_loop_memory()
+        self.addCleanup(gw._reset_loop_memory)
+        sig = ("bash", "{}", "same")
+        for i in range(gw.LOOP_LIMIT + 3):
+            run = gw._remember_exchange(sig, now=i * (gw._LOOP_WINDOW_S + 1))
+            self.assertEqual(run, 1, "an expired attempt still counted")
+
+    def test_the_memory_is_bounded(self):
+        gw._reset_loop_memory()
+        self.addCleanup(gw._reset_loop_memory)
+        for i in range(gw._LOOP_MEMORY_MAX * 2):
+            gw._remember_exchange(("bash", str(i), "out"))
+        self.assertLessEqual(len(gw._LOOP_MEMORY), gw._LOOP_MEMORY_MAX)
 
     def test_the_check_can_be_turned_off(self):
         saved = gw.LOOP_LIMIT

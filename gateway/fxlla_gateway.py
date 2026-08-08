@@ -628,6 +628,48 @@ def _text_chars_repr(content):
     return json.dumps(content, sort_keys=True, default=str)
 
 
+# The conversation-based check above cannot see past a compaction: opencode
+# replaces the tool history with a summary, so the run restarts at zero and a
+# loop that has been going for hours reads as its first attempt. That is not
+# hypothetical - the 240-attempt session contained two compactions; they landed
+# outside the run by luck.
+#
+# So remember the newest exchange of each request HERE, where compaction cannot
+# reach. The window is wall-clock rather than a count, because the thing worth
+# bounding is time burned, and a loop that pauses for an hour between attempts
+# is not the failure this is about.
+_LOOP_MEMORY = []                 # [(signature, monotonic seconds)]
+_LOOP_MEMORY_LOCK = threading.Lock()
+_LOOP_MEMORY_MAX = 512
+_LOOP_WINDOW_S = 1800.0
+
+
+def _remember_exchange(signature, now=None):
+    """Record this request's newest exchange; return how many of the last ones
+    in the window carry the same signature.
+
+    Counted over a run at the tail rather than over the window as a whole, so
+    the same command reached again after doing other work starts a fresh run
+    instead of inheriting an old one.
+    """
+    stamp = time.monotonic() if now is None else now
+    with _LOOP_MEMORY_LOCK:
+        _LOOP_MEMORY.append((signature, stamp))
+        if len(_LOOP_MEMORY) > _LOOP_MEMORY_MAX:
+            del _LOOP_MEMORY[:len(_LOOP_MEMORY) - _LOOP_MEMORY_MAX]
+        run = 0
+        for sig, when in reversed(_LOOP_MEMORY):
+            if sig != signature or stamp - when > _LOOP_WINDOW_S:
+                break
+            run += 1
+        return run
+
+
+def _reset_loop_memory():
+    with _LOOP_MEMORY_LOCK:
+        del _LOOP_MEMORY[:]
+
+
 def looping_tool_calls(body):
     """A message naming the repetition, or None.
 
@@ -640,24 +682,33 @@ def looping_tool_calls(body):
     if not isinstance(messages, list):
         return None
     signatures = _exchange_signatures(messages)
-    if len(signatures) < LOOP_LIMIT:
+    if not signatures:
         return None
     last = signatures[-1]
-    run = 0
+
+    in_conversation = 0
     for sig in reversed(signatures):
         if sig != last:
             break
-        run += 1
+        in_conversation += 1
+
+    # Remembered here as well, so the count survives a compaction that empties
+    # the conversation of its history. Whichever run is longer decides.
+    remembered = _remember_exchange(last)
+    run = max(in_conversation, remembered)
     if run < LOOP_LIMIT:
         return None
+
     name, arguments, _outcome = last
     shown = arguments if len(arguments) <= 200 else arguments[:200] + "..."
+    where = ("this conversation has" if in_conversation >= remembered
+             else "this model has, across compactions,")
     return (
-        "this conversation has called '%s' %d times in a row with the same "
-        "arguments AND the same result, so the model is not learning anything "
-        "new and will keep going. Look at that call rather than retrying: %s "
+        "%s called '%s' %d times in a row with the same arguments AND the same "
+        "result, so the model is not learning anything new and will keep going. "
+        "Look at that call rather than retrying: %s "
         "(set FXLLA_LOOP_LIMIT=0 to disable this check)"
-        % (name, run, shown))
+        % (where, name, run, shown))
 
 
 def downloaded_models():

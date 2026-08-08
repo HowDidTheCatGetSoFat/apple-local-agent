@@ -64,7 +64,13 @@ proxied response. Embeddings and non-generative endpoints are not timed.
   with a CHANGING result is progress - polling a build, watching a file grow -
   and must never be mistaken for a loop. Only a run ending at the newest
   exchange counts, so a model that tried something else in between is left
-  alone. This fires around the eighth attempt rather than the 240th, and
+  alone. The run is also remembered HERE, across requests, because a client
+  that compacts replaces the tool history with a summary and the conversation
+  then shows a run of one - the 240-attempt session contained two compactions,
+  which landed outside the run by luck. The memory is bounded and expires after
+  30 minutes, since the thing worth bounding is time burned.
+
+  This fires around the eighth attempt rather than the 240th, and
   before the conversation has grown large enough to trip the size check below,
   which is why it is checked first: told about its size, someone starts a new
   session and loops again; told about the repetition, they look at the call.
