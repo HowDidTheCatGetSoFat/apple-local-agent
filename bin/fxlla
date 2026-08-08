@@ -1412,9 +1412,13 @@ print("  budget:", d.get("budget_mb"), "MB")
 # difference is the whole question when a client is showing a spinner.
 for b in r:
     if not b.get("inflight"): continue
-    pt = b.get("prompt_tokens")
-    why = " (%s tokens of context to read first)" % format(pt, ",") if pt else ""
-    print("  working:  %s, %ds so far%s" % (b["alias"], b.get("busy_s", 0), why))' 2>/dev/null || warn "  gateway not responding yet"
+    secs = b.get("busy_s", 0)
+    if b.get("phase") == "generating":
+        detail = "generating, %s tokens written" % format(b.get("output_tokens", 0), ",")
+    else:
+        pt = b.get("prompt_tokens")
+        detail = ("reading %s tokens of context" % format(pt, ",")) if pt else "reading the prompt"
+    print("  working:  %s, %ds so far - %s" % (b["alias"], secs, detail))' 2>/dev/null || warn "  gateway not responding yet"
     return 0
   fi
   if server_alive; then

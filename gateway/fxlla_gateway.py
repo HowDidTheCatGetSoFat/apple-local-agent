@@ -900,6 +900,9 @@ class Backend:
         # slow first turn and a hung one look identical from outside.
         self.started = 0.0
         self.prompt_tokens = None
+        # Output tokens seen so far on the in-flight request, so /health can
+        # say "generating, 1900 tokens" instead of leaving it as "reading".
+        self.produced = 0
 
 
 def engine_for(alias):
@@ -1079,8 +1082,29 @@ class Manager:
                     item["busy_s"] = int(now - b.started)
                     if b.prompt_tokens:
                         item["prompt_tokens"] = b.prompt_tokens
+                    # Reading the prompt and writing the answer are different
+                    # phases and cost differently, so say which one is running.
+                    # Once a token has come back the model is generating, and
+                    # reporting "context to read" then is what made a normal
+                    # long answer look like a stuck prefill.
+                    produced = getattr(b, "produced", 0)
+                    if produced > 0:
+                        item["phase"] = "generating"
+                        item["output_tokens"] = produced
+                    else:
+                        item["phase"] = "reading prompt"
                 out.append(item)
             return out
+
+    def progress(self, alias, produced):
+        """Update the live output-token count for the in-flight request.
+
+        Best-effort and lock-free on purpose: it runs per streamed chunk and a
+        stale read from status() is harmless - the number only informs a human
+        watching it climb."""
+        b = self.backends.get(alias)
+        if b is not None:
+            b.produced = produced
 
     def begin(self, alias, prompt_tokens=None):
         """Mark a request as in flight against this backend.
@@ -1098,6 +1122,7 @@ class Manager:
                 b.last_used = time.monotonic()
                 b.started = time.monotonic()
                 b.prompt_tokens = prompt_tokens
+                b.produced = 0
 
     def end(self, alias):
         """Release it, and restamp: idleness starts when the answer finishes,
@@ -1360,6 +1385,10 @@ class Handler(BaseHTTPRequestHandler):
                 if sm is not None:
                     try:
                         sm.feed(chunk)
+                        # Live output count so `fxlla status` can show progress
+                        # while the answer is still streaming. Cheap: the delta
+                        # count is already maintained by StreamMetrics.
+                        MANAGER.progress(alias, sm.deltas)
                     except Exception:
                         sm = None  # never let metrics break the proxy
                 if buf is not None and len(buf) < 4 * 1024 * 1024:

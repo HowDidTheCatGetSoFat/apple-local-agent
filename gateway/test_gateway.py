@@ -753,16 +753,47 @@ class TestInFlightIsVisible(unittest.TestCase):
         self.assertEqual(idle["inflight"], 0)
         self.assertNotIn("busy_s", idle, "an idle backend claimed to be busy")
 
+        backend.produced = 0
         mgr.begin(alias, prompt_tokens=181714)
         busy = [b for b in mgr.status() if b["alias"] == alias][0]
         self.assertEqual(busy["inflight"], 1)
         self.assertIn("busy_s", busy)
         self.assertEqual(busy["prompt_tokens"], 181714)
+        # Before any token comes back it is reading the prompt...
+        self.assertEqual(busy["phase"], "reading prompt")
+
+        # ...and once tokens flow it is generating, with a live count. This is
+        # the distinction whose absence made a normal long answer read as a
+        # stuck prefill - "reading 11 tokens of context" while it wrote pages.
+        mgr.progress(alias, 1078)
+        gen = [b for b in mgr.status() if b["alias"] == alias][0]
+        self.assertEqual(gen["phase"], "generating")
+        self.assertEqual(gen["output_tokens"], 1078)
 
         mgr.end(alias)
         done = [b for b in mgr.status() if b["alias"] == alias][0]
         self.assertEqual(done["inflight"], 0)
         self.assertNotIn("busy_s", done, "it still looked busy after answering")
+
+    def test_produced_count_resets_between_requests(self):
+        """A new turn must not inherit the last turn's token count."""
+        mgr = self._mgr()
+        alias = "probe-model-3"
+        backend = type("B", (), {})()
+        backend.alias, backend.port, backend.size_mb = alias, 9997, 100
+        backend.last_used = time.monotonic()
+        backend.inflight, backend.started, backend.prompt_tokens = 0, 0.0, None
+        backend.produced = 0
+        with mgr.lock:
+            mgr.backends[alias] = backend
+        self.addCleanup(lambda: mgr.backends.pop(alias, None))
+        mgr.begin(alias, prompt_tokens=10)
+        mgr.progress(alias, 500)
+        mgr.end(alias)
+        mgr.begin(alias, prompt_tokens=10)
+        fresh = [b for b in mgr.status() if b["alias"] == alias][0]
+        self.assertEqual(fresh["phase"], "reading prompt",
+                         "the new turn kept the old token count")
 
     def test_an_unknown_prompt_size_is_omitted_not_zero(self):
         """Zero tokens is a claim; no answer is not."""
@@ -772,6 +803,7 @@ class TestInFlightIsVisible(unittest.TestCase):
         backend.alias, backend.port, backend.size_mb = alias, 9998, 100
         backend.last_used = time.monotonic()
         backend.inflight, backend.started, backend.prompt_tokens = 0, 0.0, None
+        backend.produced = 0
         with mgr.lock:
             mgr.backends[alias] = backend
         self.addCleanup(lambda: mgr.backends.pop(alias, None))

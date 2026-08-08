@@ -41,6 +41,23 @@ proxied response. Embeddings and non-generative endpoints are not timed.
   usage chunk. RAM is the backend process RSS at the moment the request ends.
 - Cold start: the first request to an unloaded model pays the load time;
   resident hot models avoid it.
+- `/health` says what each backend is DOING, not only what it holds:
+  `inflight`, `busy_s`, `phase`, `prompt_tokens` and `output_tokens`. `fxlla
+  status` renders one of:
+
+  ```
+  working:  redteam-4bit, 25s so far - reading 181,714 tokens of context
+  working:  redteam-4bit, 90s so far - generating, 1,900 tokens written
+  ```
+
+  Reading the prompt and writing the answer are separate phases with separate
+  costs, and telling them apart is not cosmetic. A status that read "reading
+  181,714 tokens of context" while the model was in fact writing page after
+  page made a normal long answer look like a stuck prefill - and on a slow
+  model (22 tok/s here) look hung, which got working turns cancelled. The phase
+  flips to "generating" the moment the first token returns, and the count
+  climbs live from the same delta counter the metrics already keep.
+
 - A conversation larger than the model's window is refused with HTTP 400 and
   `type: context_overflow`, before the model is loaded. This exists because the
   alternative was measured and is worse than an error: a backend handed a
