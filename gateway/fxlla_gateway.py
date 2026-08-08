@@ -896,6 +896,10 @@ class Backend:
         # streaming - and the reaper killed it mid-answer. A count, not a
         # refreshed timestamp: it does not depend on anything ticking.
         self.inflight = 0
+        # What this backend is working on right now, for /health. Without it a
+        # slow first turn and a hung one look identical from outside.
+        self.started = 0.0
+        self.prompt_tokens = None
 
 
 def engine_for(alias):
@@ -1065,17 +1069,35 @@ class Manager:
 
     def status(self):
         with self.lock:
-            return [{"alias": b.alias, "port": b.port, "size_mb": b.size_mb,
-                     "idle_s": int(time.monotonic() - b.last_used)}
-                    for b in self.backends.values()]
+            now = time.monotonic()
+            out = []
+            for b in self.backends.values():
+                item = {"alias": b.alias, "port": b.port, "size_mb": b.size_mb,
+                        "idle_s": int(now - b.last_used),
+                        "inflight": b.inflight}
+                if b.inflight and b.started:
+                    item["busy_s"] = int(now - b.started)
+                    if b.prompt_tokens:
+                        item["prompt_tokens"] = b.prompt_tokens
+                out.append(item)
+            return out
 
-    def begin(self, alias):
-        """Mark a request as in flight against this backend."""
+    def begin(self, alias, prompt_tokens=None):
+        """Mark a request as in flight against this backend.
+
+        The prompt size and start time are kept so /health can say what the
+        gateway is DOING, not only what it is holding. A long first turn is
+        indistinguishable from a hang from the outside: a 169k-token
+        conversation spends about 80 seconds in prefill before a single token
+        appears, and nothing anywhere said so - it was cancelled three times in
+        a row for looking dead."""
         with self.lock:
             b = self.backends.get(alias)
             if b is not None:
                 b.inflight += 1
                 b.last_used = time.monotonic()
+                b.started = time.monotonic()
+                b.prompt_tokens = prompt_tokens
 
     def end(self, alias):
         """Release it, and restamp: idleness starts when the answer finishes,
@@ -1271,7 +1293,8 @@ class Handler(BaseHTTPRequestHandler):
         # Held for the whole request, not just the dispatch: the reaper reads
         # this, and a generation that outlives the keep-warm window was being
         # terminated while it streamed.
-        MANAGER.begin(alias)
+        chars = _prompt_chars(body) or 0
+        MANAGER.begin(alias, int(chars / _CHARS_PER_TOKEN) if chars else None)
         try:
             self._proxy(alias, port, model_field, body, reader)
         finally:

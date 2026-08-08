@@ -728,6 +728,59 @@ class TestRss(unittest.TestCase):
     def test_bogus_pid_is_zero(self):
         self.assertEqual(gw.rss_mb(-1), 0)
 
+class TestInFlightIsVisible(unittest.TestCase):
+    """"Working" and "hung" look identical from outside, and that is the whole
+    question when a client is showing a spinner. A 169k-token conversation
+    spends about 80 seconds in prefill before the first token; nothing reported
+    it, and three turns in a row were cancelled for looking dead."""
+
+    def _mgr(self):
+        m = gw.BackendManager() if hasattr(gw, "BackendManager") else gw.MANAGER
+        return m
+
+    def test_status_says_what_is_being_worked_on(self):
+        mgr = self._mgr()
+        alias = "probe-model"
+        backend = type("B", (), {})()
+        backend.alias, backend.port, backend.size_mb = alias, 9999, 100
+        backend.last_used = time.monotonic()
+        backend.inflight, backend.started, backend.prompt_tokens = 0, 0.0, None
+        with mgr.lock:
+            mgr.backends[alias] = backend
+        self.addCleanup(lambda: mgr.backends.pop(alias, None))
+
+        idle = [b for b in mgr.status() if b["alias"] == alias][0]
+        self.assertEqual(idle["inflight"], 0)
+        self.assertNotIn("busy_s", idle, "an idle backend claimed to be busy")
+
+        mgr.begin(alias, prompt_tokens=181714)
+        busy = [b for b in mgr.status() if b["alias"] == alias][0]
+        self.assertEqual(busy["inflight"], 1)
+        self.assertIn("busy_s", busy)
+        self.assertEqual(busy["prompt_tokens"], 181714)
+
+        mgr.end(alias)
+        done = [b for b in mgr.status() if b["alias"] == alias][0]
+        self.assertEqual(done["inflight"], 0)
+        self.assertNotIn("busy_s", done, "it still looked busy after answering")
+
+    def test_an_unknown_prompt_size_is_omitted_not_zero(self):
+        """Zero tokens is a claim; no answer is not."""
+        mgr = self._mgr()
+        alias = "probe-model-2"
+        backend = type("B", (), {})()
+        backend.alias, backend.port, backend.size_mb = alias, 9998, 100
+        backend.last_used = time.monotonic()
+        backend.inflight, backend.started, backend.prompt_tokens = 0, 0.0, None
+        with mgr.lock:
+            mgr.backends[alias] = backend
+        self.addCleanup(lambda: mgr.backends.pop(alias, None))
+        mgr.begin(alias, prompt_tokens=None)
+        busy = [b for b in mgr.status() if b["alias"] == alias][0]
+        self.assertNotIn("prompt_tokens", busy)
+        mgr.end(alias)
+
+
 class TestTextChannelToolCalls(unittest.TestCase):
     """A tool call the backend's own parser dropped into the text channel.
 
